@@ -31,7 +31,7 @@ displayName = "Lightspeed" #mandatory
 # A text field displayed in the mod UI
 #credits="Thanks for this example mod goes to Java" #optional
 # A text field displayed in the mod UI
-authors = "CCr4ft3r" #optional
+authors = "CCr4ft3r,kltyton" #optional
 # The description text for the mod (multi line!) (#mandatory)
 description = '''
 Buys you time by loading heavy modpacks significantly faster
@@ -53,6 +53,6 @@ side = "BOTH"
 modId = "minecraft"
 mandatory = true
 # This version range declares a minimum of the current minecraft version up to but not including the next major version
-versionRange = "[1.18.2,1.19)"
+versionRange = "(1.19.2,1.20.1]"
 ordering = "NONE"
 side = "BOTH"

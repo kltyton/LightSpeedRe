@@ -4,7 +4,7 @@ import com.ccr4ft3r.lightspeed.interfaces.ICache;
 import com.ccr4ft3r.lightspeed.util.CacheUtil;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
-import com.mojang.bridge.game.PackType;
+import net.minecraft.server.packs.PackType;
 
 import java.io.File;
 import java.util.List;

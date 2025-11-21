@@ -17,6 +17,7 @@ import java.util.function.Function;
 @Mixin(StateDefinition.class)
 public class StateDefinitonMixin implements ICache {
 
+    
     private Map<String, Property<?>> propsByName;
 
     @Inject(method = "<init>", at = @At("RETURN"))

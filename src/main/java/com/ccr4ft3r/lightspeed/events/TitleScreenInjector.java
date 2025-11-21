@@ -25,7 +25,7 @@ public class TitleScreenInjector {
 
     @SuppressWarnings({"InstantiationOfUtilityClass", "unchecked"})
     @SubscribeEvent(priority = EventPriority.LOWEST)
-    public static void onScreenInit(ScreenEvent.InitScreenEvent.Post event) {
+    public static void onScreenInit(ScreenEvent.Init event) {
         if (!(event.getScreen() instanceof TitleScreen) || launchComplete)
             return;
         launchComplete = true;
@@ -41,7 +41,6 @@ public class TitleScreenInjector {
             computeBranding.invoke(null);
 
             List<String> brandings = new ArrayList<>((List<String>) f.get(brandingControl));
-            LogUtils.getLogger().info("ERRORR: " + brandings);
             if (brandings.size() > 1) {
                 List<String> newBrandings = new ArrayList<>(brandings);
                 f.set(brandingControl, newBrandings);
