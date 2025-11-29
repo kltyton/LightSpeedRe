@@ -5,15 +5,12 @@ import com.ccr4ft3r.lightspeed.interfaces.IPackResources;
 import com.ccr4ft3r.lightspeed.interfaces.IPathResourcePack;
 import com.ccr4ft3r.lightspeed.util.CacheUtil;
 import com.google.common.collect.Maps;
-import net.minecraft.FileUtil;
-import net.minecraft.resources.ResourceLocation;
-import net.minecraft.server.packs.PackResources; // 注意: ResourceOutput 在这里
+// 注意: ResourceOutput 在这里
 import net.minecraft.server.packs.PackType;
 import net.minecraft.server.packs.resources.IoSupplier;
 import net.minecraftforge.forgespi.locating.IModFile;
 import net.minecraftforge.resource.PathPackResources;
 import org.apache.commons.io.FilenameUtils;
-import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.spongepowered.asm.mixin.*;
 import org.spongepowered.asm.mixin.injection.At;
@@ -22,13 +19,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.io.File;
-import java.io.IOException;
 import java.io.InputStream;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 import static com.ccr4ft3r.lightspeed.util.CacheUtil.*;
 
@@ -139,56 +132,6 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
         boolean exists = cir.getReturnValue() != null;
         lightspeed$cacheExists(cacheKey, exists);
     }
-
-    /**
-     * @author ccR4ft3r, kltyton
-     * @reason Implement caching for file walking [replacing 1.19.2 getResources(old)] (replacing 1.20.1 listResources)
-     */
-    @Overwrite
-    public void listResources(@NotNull PackType type, @NotNull String namespace, @NotNull String path, PackResources.@NotNull ResourceOutput resourceOutput) {
-        if (!GlobalCache.isEnabled || !GlobalCache.shouldCacheWalkedPaths) {
-            FileUtil.decomposePath(path).get()
-                    .ifLeft(parts -> net.minecraft.server.packs.PathPackResources.listPath(namespace, resolve(type.getDirectory(), namespace).toAbsolutePath(), parts, resourceOutput))
-                    .ifRight(dataResult -> LOGGER.error("Invalid path {}: {}", path, dataResult.message()));
-            return;
-        }
-
-        List<Path> paths = lightspeed$getFilePaths(type, namespace);
-
-        if (paths == null) {
-            try {
-                Path root = resolve(type.getDirectory(), namespace).toAbsolutePath();
-                Path inputPath = root.resolve(path.replace("/", root.getFileSystem().getSeparator())); // 简单处理 path
-
-                if (Files.exists(inputPath)) {
-                    try (Stream<Path> pathStream = Files.walk(inputPath)) {
-                        paths = pathStream
-                                .filter(p -> !p.toString().endsWith(".mcmeta")) // 过滤 mcmeta
-                                .filter(p -> !Files.isDirectory(p)) // 过滤文件夹
-                                .collect(Collectors.toList());
-                    }
-                } else {
-                    paths = Collections.emptyList();
-                }
-            } catch (IOException e) {
-                paths = Collections.emptyList();
-            }
-            lightspeed$cacheFilePaths(type, namespace, paths == null ? Collections.emptyList() : paths);
-        }
-
-        if (paths != null && !paths.isEmpty()) {
-            Path root = resolve(type.getDirectory(), namespace).toAbsolutePath();
-            paths.parallelStream().forEach(p -> {
-                try {
-                    String relativePath = root.relativize(p).toString().replace(File.separator, "/");
-                    ResourceLocation location = ResourceLocation.fromNamespaceAndPath(namespace, relativePath);
-                    resourceOutput.accept(location, IoSupplier.create(p));
-                } catch (Exception e) {
-                }
-            });
-        }
-    }
-
     @Override
     public void lightspeed$persistAndClearCache() {
         if (lightspeed$modFile != null) {
@@ -228,25 +171,6 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
         lightspeed$getExistenceByResource().put(resourceName, exists);
     }
 
-    
-    @Unique
-    public void lightspeed$cacheFilePaths(PackType packType, String resourceNamespace, List<Path> filePaths) {
-        lightspeed$getFilePathsMap(packType).putIfAbsent(resourceNamespace, filePaths);
-    }
-
-    
-    @Unique
-    public List<Path> lightspeed$getFilePaths(PackType packType, String resourceNamespace) {
-        return lightspeed$getFilePathsMap(packType).get(resourceNamespace);
-    }
-
-    
-    @Unique
-    private Map<String, List<Path>> lightspeed$getFilePathsMap(PackType packType) {
-        return lightspeed$filePathsByRootByPackType.get(packType);
-    }
-
-    
     @Unique
     public void lightspeed$cacheNamespaces(PackType packType, Set<String> namespaces) {
         lightspeed$namespacesByPackType.put(packType, namespaces);
