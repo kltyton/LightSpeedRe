@@ -4,8 +4,6 @@ import com.ccr4ft3r.lightspeed.cache.GlobalCache;
 import net.minecraftforge.fml.ModList;
 import net.minecraftforge.fml.common.Mod;
 
-import static com.ccr4ft3r.lightspeed.ModConstants.MULTIBLOCKED_ID;
-
 @Mod(ModConstants.MOD_ID)
 public class Main {
 
@@ -14,10 +12,13 @@ public class Main {
     }
 
     private void updateCacheFlags() {
+        if (ModList.get().isLoaded(ModConstants.CREATE_ID)) {
+            GlobalCache.shouldCacheWalkedPaths = false;
+        }
         if (ModList.get().isLoaded(ModConstants.SOPHISTICATED_STORAGE_ID) && ModList.get().isLoaded(ModConstants.JSON_THINGS_ID)) {
             GlobalCache.shouldCacheWalkedPaths = false;
         }
-        if (ModList.get().isLoaded(MULTIBLOCKED_ID)) {
+        if (ModList.get().isLoaded(ModConstants.MULTIBLOCKED_ID)) {
             GlobalCache.shouldCacheMaterials = false;
         }
     }

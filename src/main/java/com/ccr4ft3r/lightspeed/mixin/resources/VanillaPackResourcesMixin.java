@@ -10,6 +10,7 @@ import net.minecraft.server.packs.PackType;
 import net.minecraft.server.packs.VanillaPackResources;
 import net.minecraft.server.packs.resources.IoSupplier;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
@@ -25,11 +26,14 @@ import static com.ccr4ft3r.lightspeed.util.CacheUtil.HAS_RESOURCE_CACHE_DIR;
 @Mixin(VanillaPackResources.class)
 public abstract class VanillaPackResourcesMixin implements IPackResources {
     
-    private Map<String, Boolean> existencePerClientResource = Maps.newConcurrentMap();
+    @Unique
+    private Map<String, Boolean> lightspeed$existencePerClientResource = Maps.newConcurrentMap();
     
-    private Map<String, Boolean> existencePerServerResource = Maps.newConcurrentMap();
+    @Unique
+    private Map<String, Boolean> lightspeed$existencePerServerResource = Maps.newConcurrentMap();
     
-    private String versionId;
+    @Unique
+    private String lightspeed$versionId;
     @Inject(method = "<init>", at = @At("RETURN"))
     public void initReturnInjected(CallbackInfo ci) {
         if (!GlobalCache.isEnabled)
@@ -37,15 +41,15 @@ public abstract class VanillaPackResourcesMixin implements IPackResources {
 
         GlobalCache.add(this);
         try {
-            versionId = Minecraft.getInstance().getLaunchedVersion();
+            lightspeed$versionId = Minecraft.getInstance().getLaunchedVersion();
         } catch (Exception e) {
-            versionId = "unknown";
+            lightspeed$versionId = "unknown";
         }
 
-        existencePerClientResource = PERSISTED_EXISTENCES_BY_MOD.computeIfAbsent(
-                versionId + "-client", k -> Maps.newConcurrentMap());
-        existencePerServerResource = PERSISTED_EXISTENCES_BY_MOD.computeIfAbsent(
-                versionId + "-server", k -> Maps.newConcurrentMap());
+        lightspeed$existencePerClientResource = PERSISTED_EXISTENCES_BY_MOD.computeIfAbsent(
+                lightspeed$versionId + "-client", k -> Maps.newConcurrentMap());
+        lightspeed$existencePerServerResource = PERSISTED_EXISTENCES_BY_MOD.computeIfAbsent(
+                lightspeed$versionId + "-server", k -> Maps.newConcurrentMap());
     }
 
     @Inject(method = "getResource", at = @At("HEAD"), cancellable = true)
@@ -53,7 +57,7 @@ public abstract class VanillaPackResourcesMixin implements IPackResources {
         if (!GlobalCache.isEnabled)
             return;
 
-        Boolean exists = exists(packType, location.toString());
+        Boolean exists = lightspeed$exists(packType, location.toString());
 
         if (Boolean.FALSE.equals(exists)) {
             cir.setReturnValue(null);
@@ -66,31 +70,33 @@ public abstract class VanillaPackResourcesMixin implements IPackResources {
             return;
 
         boolean actuallyExists = cir.getReturnValue() != null;
-        cacheExists(packType, location.toString(), actuallyExists);
+        lightspeed$cacheExists(packType, location.toString(), actuallyExists);
     }
 
     
-    public Boolean exists(PackType packType, String resourceName) {
+    @Unique
+    public Boolean lightspeed$exists(PackType packType, String resourceName) {
         if (packType == PackType.CLIENT_RESOURCES)
-            return existencePerClientResource.get(resourceName);
-        return existencePerServerResource.get(resourceName);
+            return lightspeed$existencePerClientResource.get(resourceName);
+        return lightspeed$existencePerServerResource.get(resourceName);
     }
 
     
-    public void cacheExists(PackType packType, String resourceName, boolean exists) {
+    @Unique
+    public void lightspeed$cacheExists(PackType packType, String resourceName, boolean exists) {
         if (packType == PackType.CLIENT_RESOURCES)
-            existencePerClientResource.put(resourceName, exists);
+            lightspeed$existencePerClientResource.put(resourceName, exists);
         else
-            existencePerServerResource.put(resourceName, exists);
+            lightspeed$existencePerServerResource.put(resourceName, exists);
     }
 
     @Override
-    public void persistAndClearCache() {
-        if (versionId != null) {
-            CacheUtil.persist(existencePerClientResource, new File(HAS_RESOURCE_CACHE_DIR.getPath(), versionId + "-client.ser"));
-            CacheUtil.persist(existencePerServerResource, new File(HAS_RESOURCE_CACHE_DIR.getPath(), versionId + "-server.ser"));
+    public void lightspeed$persistAndClearCache() {
+        if (lightspeed$versionId != null) {
+            CacheUtil.persist(lightspeed$existencePerClientResource, new File(HAS_RESOURCE_CACHE_DIR.getPath(), lightspeed$versionId + "-client.ser"));
+            CacheUtil.persist(lightspeed$existencePerServerResource, new File(HAS_RESOURCE_CACHE_DIR.getPath(), lightspeed$versionId + "-server.ser"));
         }
-        existencePerClientResource.clear();
-        existencePerServerResource.clear();
+        lightspeed$existencePerClientResource.clear();
+        lightspeed$existencePerServerResource.clear();
     }
 }

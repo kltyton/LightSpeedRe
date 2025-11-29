@@ -8,6 +8,9 @@
     "misc.KeyValueConditionMixin",
     "misc.MaterialMixin",
     "misc.SelectorMixin",
+    "model.BlockModelMixin",
+    "model.MultiPartMixin",
+    "model.MultivariantMixin"
   ],
   "mixins": [
     "misc.ResourceLocationMixin",

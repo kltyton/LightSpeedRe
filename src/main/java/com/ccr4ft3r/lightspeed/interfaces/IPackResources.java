@@ -4,7 +4,7 @@ import java.util.Map;
 
 public interface IPackResources extends ICache {
 
-    Map<String, Boolean> getExistenceByResource();
+    Map<String, Boolean> lightspeed$getExistenceByResource();
 
-    void setExistenceByResource(Map<String, Boolean> existenceByResource);
+    void lightspeed$setExistenceByResource(Map<String, Boolean> existenceByResource);
 }

@@ -37,7 +37,7 @@ public class GlobalCache {
         isEnabled = false;
         CacheUtil.getCacheFiles(HAS_RESOURCE_CACHE_DIR).forEach(File::delete);
         CacheUtil.getCacheFiles(NAMESPACE_CACHE_DIR).forEach(File::delete);
-        CACHES.forEach(ICache::persistAndClearCache);
+        CACHES.forEach(ICache::lightspeed$persistAndClearCache);
         SPLITTED_STRINGS_BY_SEQUENCE.clear();
         CANONICAL_PATH_PER_FILE.clear();
         CACHES.clear();

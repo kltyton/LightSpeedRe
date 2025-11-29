@@ -5,6 +5,7 @@ import com.ccr4ft3r.lightspeed.util.CacheUtil;
 import net.minecraft.client.main.Main;
 import org.apache.commons.io.FilenameUtils;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
@@ -27,6 +28,7 @@ public class MinecraftMainMixin {
     }
 
     
+    @Unique
     @SuppressWarnings("ResultOfMethodCallIgnored")
     private static <K, V> void lightspeed$loadPersistedCaches(File dir, Map<String, Map<K, V>> targetMap) {
         dir.mkdirs();

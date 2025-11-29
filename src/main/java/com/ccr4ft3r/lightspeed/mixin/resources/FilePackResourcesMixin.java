@@ -10,6 +10,7 @@ import net.minecraft.server.packs.PackType;
 import net.minecraft.server.packs.resources.IoSupplier;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
@@ -27,7 +28,8 @@ public abstract class FilePackResourcesMixin implements IPackResources {
     @Shadow
     @Nullable
     protected abstract ZipFile getOrCreateZipFile();
-    private final Map<PackType, List<ZipEntry>> entriesByPackType = Maps.newConcurrentMap();
+    @Unique
+    private final Map<PackType, List<ZipEntry>> lightspeed$entriesByPackType = Maps.newConcurrentMap();
 
     @Inject(method = "<init>", at = @At("RETURN"))
     public void initReturnInjected(String name, File file, boolean builtin, CallbackInfo ci) {
@@ -50,11 +52,11 @@ public abstract class FilePackResourcesMixin implements IPackResources {
 
         List<ZipEntry> entries;
 
-        if ((entries = entriesByPackType.get(packType)) == null) {
+        if ((entries = lightspeed$entriesByPackType.get(packType)) == null) {
             entries = zip.stream()
                     .filter(e -> !e.isDirectory())
                     .collect(Collectors.toList());
-            entriesByPackType.put(packType, entries);
+            lightspeed$entriesByPackType.put(packType, entries);
         }
 
         entries.stream()
@@ -71,7 +73,7 @@ public abstract class FilePackResourcesMixin implements IPackResources {
     }
 
     @Override
-    public void persistAndClearCache() {
-        entriesByPackType.clear();
+    public void lightspeed$persistAndClearCache() {
+        lightspeed$entriesByPackType.clear();
     }
 }

@@ -6,4 +6,5 @@ public class ModConstants {
     public static final String JSON_THINGS_ID = "jsonthings";
     public static final String SOPHISTICATED_STORAGE_ID = "sophisticatedstorage";
     public static final String MULTIBLOCKED_ID = "multiblocked";
+    public static final String CREATE_ID = "create";
 }

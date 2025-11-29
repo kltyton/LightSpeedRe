@@ -18,7 +18,7 @@ public abstract class ResourcePackLoaderMixin {
         if (!GlobalCache.isEnabled)
             return;
         PathPackResources resourcePack = new PathPackResources(mf.getFile().getFileName(),true, mf.getFile().getFilePath());
-        ((IPathResourcePack) resourcePack).setModFile(mf.getFile());
+        ((IPathResourcePack) resourcePack).lightspeed$setModFile(mf.getFile());
         cir.setReturnValue(resourcePack);
     }
 }

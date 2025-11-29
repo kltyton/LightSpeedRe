@@ -10,6 +10,7 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.StateDefinition;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
@@ -21,7 +22,8 @@ import java.util.function.Predicate;
 @Mixin(Selector.class)
 public class SelectorMixin implements ICache {
 
-    private final Map<StateDefinition<Block, BlockState>, Predicate<BlockState>> predicatePerDefinition = new MapMaker().weakKeys().makeMap();
+    @Unique
+    private final Map<StateDefinition<Block, BlockState>, Predicate<BlockState>> lightspeed$predicatePerDefinition = new MapMaker().weakKeys().makeMap();
 
     @Inject(method = "<init>", at = @At("RETURN"))
     public void initReturnInjected(Condition p_112018_, MultiVariant p_112019_, CallbackInfo ci) {
@@ -33,7 +35,7 @@ public class SelectorMixin implements ICache {
     public void getPredicateHeadInjected(StateDefinition<Block, BlockState> p_112022_, CallbackInfoReturnable<Predicate<BlockState>> cir) {
         if (!GlobalCache.isEnabled)
             return;
-        Predicate<BlockState> predicate = predicatePerDefinition.get(p_112022_);
+        Predicate<BlockState> predicate = lightspeed$predicatePerDefinition.get(p_112022_);
         if (predicate != null)
             cir.setReturnValue(predicate);
     }
@@ -41,11 +43,11 @@ public class SelectorMixin implements ICache {
     @Inject(method = "getPredicate", at = @At("RETURN"))
     public void getPredicateReturnInjected(StateDefinition<Block, BlockState> p_112022_, CallbackInfoReturnable<Predicate<BlockState>> cir) {
         if (GlobalCache.isEnabled)
-            predicatePerDefinition.put(p_112022_, cir.getReturnValue());
+            lightspeed$predicatePerDefinition.put(p_112022_, cir.getReturnValue());
     }
 
     @Override
-    public void persistAndClearCache() {
-        predicatePerDefinition.clear();
+    public void lightspeed$persistAndClearCache() {
+        lightspeed$predicatePerDefinition.clear();
     }
 }
