@@ -92,6 +92,10 @@ public abstract class FallbackResourceManagerMixin {
         if (segment.isEmpty()) {
             return null;
         }
+        if (segment.size() < GlobalCache.parallelLookupMinPacks) {
+            return lightspeed$searchSafeSegmentSequential(segment, location);
+        }
+
         if (segment.size() == 1) {
             IndexedPack indexedPack = segment.get(0);
             IoSupplier<InputStream> supplier = indexedPack.pack().getResource(this.type, location);

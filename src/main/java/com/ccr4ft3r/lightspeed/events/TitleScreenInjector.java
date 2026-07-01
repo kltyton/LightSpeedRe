@@ -54,7 +54,7 @@ public class TitleScreenInjector {
             try {
                 GlobalCache.disablePersistAndClear();
             } finally {
-                GlobalCache.EXECUTOR.shutdown();
+                GlobalCache.shutdownExecutors();
             }
         });
     }

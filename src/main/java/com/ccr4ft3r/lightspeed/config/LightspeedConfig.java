@@ -21,6 +21,8 @@ public final class LightspeedConfig {
     public static final class Common {
         public final ForgeConfigSpec.BooleanValue asyncPreloadPacks;
         public final ForgeConfigSpec.BooleanValue parallelResourceLookup;
+        public final ForgeConfigSpec.IntValue parallelLookupMinPacks;
+        public final ForgeConfigSpec.BooleanValue cacheResourceExistence;
         public final ForgeConfigSpec.BooleanValue isolateModdedResourceReloadFailures;
         public final ForgeConfigSpec.ConfigValue<List<? extends String>> isolatedResourceReloadListenerPatterns;
 
@@ -32,6 +34,12 @@ public final class LightspeedConfig {
             parallelResourceLookup = builder
                     .comment("Query safe resource-pack segments concurrently while preserving vanilla priority and filter order.")
                     .define("parallelResourceLookup", true);
+            parallelLookupMinPacks = builder
+                    .comment("Minimum safe pack segment size before Lightspeed uses parallel resource lookup. Small segments are faster sequentially.")
+                    .defineInRange("parallelLookupMinPacks", 4, 2, 64);
+            cacheResourceExistence = builder
+                    .comment("Cache per-pack resource existence checks. The persisted cache is loaded lazily so it does not block startup IO.")
+                    .define("cacheResourceExistence", true);
             builder.pop();
 
             builder.push("compatibility");
