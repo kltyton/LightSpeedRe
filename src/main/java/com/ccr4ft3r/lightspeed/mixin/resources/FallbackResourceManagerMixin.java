@@ -1,9 +1,12 @@
 package com.ccr4ft3r.lightspeed.mixin.resources;
 
 import com.ccr4ft3r.lightspeed.cache.GlobalCache;
+import com.ccr4ft3r.lightspeed.compat.FusionPackCompat;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.packs.FilePackResources;
 import net.minecraft.server.packs.PackResources;
 import net.minecraft.server.packs.PackType;
+import net.minecraft.server.packs.PathPackResources;
 import net.minecraft.server.packs.resources.FallbackResourceManager;
 import net.minecraft.server.packs.resources.IoSupplier;
 import net.minecraft.server.packs.resources.Resource;
@@ -12,6 +15,7 @@ import org.slf4j.Logger;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.gen.Invoker;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -33,53 +37,116 @@ public abstract class FallbackResourceManagerMixin {
     @Invoker("createStackMetadataFinder")
     protected abstract IoSupplier<ResourceMetadata> lightspeed$createStackMetadataFinder(ResourceLocation location, int index);
 
+    @Invoker("createResource")
+    private static Resource lightspeed$createResource(PackResources pack, ResourceLocation location,
+                                                      IoSupplier<InputStream> resource,
+                                                      IoSupplier<ResourceMetadata> metadata) {
+        throw new AssertionError();
+    }
+
     @Inject(method = "getResource", at = @At("HEAD"), cancellable = true)
     private void getResourceHeadInjected(ResourceLocation location, CallbackInfoReturnable<Optional<Resource>> cir) {
         if (!GlobalCache.isEnabled || !GlobalCache.shouldParallelizeResourcePackLookup || this.fallbacks.size() <= 1) {
             return;
         }
 
-        List<CompletableFuture<IoSupplier<InputStream>>> futures = new ArrayList<>(this.fallbacks.size());
-        for (Object entry : this.fallbacks) {
-            FallbackResourceManagerPackEntryAccessor accessor = (FallbackResourceManagerPackEntryAccessor) entry;
-            PackResources packResources = accessor.lightspeed$resources();
-            futures.add(packResources == null ? null : CompletableFuture.supplyAsync(() -> packResources.getResource(this.type, location), GlobalCache.EXECUTOR));
-        }
-
+        List<IndexedPack> safeSegment = new ArrayList<>();
         for (int i = this.fallbacks.size() - 1; i >= 0; i--) {
-            Object entry = this.fallbacks.get(i);
-            FallbackResourceManagerPackEntryAccessor accessor = (FallbackResourceManagerPackEntryAccessor) entry;
-            PackResources packResources = accessor.lightspeed$resources();
+            FallbackResourceManagerPackEntryAccessor entry = (FallbackResourceManagerPackEntryAccessor) this.fallbacks.get(i);
+            PackResources packResources = entry.lightspeed$resources();
+
+            if (packResources != null && entry.lightspeed$filter() == null && lightspeed$isSafeForParallelLookup(packResources)) {
+                safeSegment.add(new IndexedPack(i, packResources));
+                continue;
+            }
+
+            Optional<Resource> resource = lightspeed$searchSafeSegment(safeSegment, location);
+            if (resource != null) {
+                cir.setReturnValue(resource);
+                return;
+            }
+            safeSegment.clear();
+
             if (packResources != null) {
-                IoSupplier<InputStream> supplier = lightspeed$getResourceFuture(futures.get(i), location);
+                IoSupplier<InputStream> supplier = packResources.getResource(this.type, location);
                 if (supplier != null) {
-                    cir.setReturnValue(Optional.of(new Resource(packResources, supplier, lightspeed$createStackMetadataFinder(location, i))));
+                    cir.setReturnValue(Optional.of(lightspeed$createResource(
+                            packResources, location, supplier, lightspeed$createStackMetadataFinder(location, i))));
                     return;
                 }
             }
 
-            if (accessor.lightspeed$isFiltered(location)) {
-                LOGGER.warn("Resource {} not found, but was filtered by pack {}", location, accessor.lightspeed$name());
+            if (entry.lightspeed$isFiltered(location)) {
+                LOGGER.warn("Resource {} not found, but was filtered by pack {}", location, entry.lightspeed$name());
                 cir.setReturnValue(Optional.empty());
                 return;
             }
         }
 
-        cir.setReturnValue(Optional.empty());
+        Optional<Resource> resource = lightspeed$searchSafeSegment(safeSegment, location);
+        cir.setReturnValue(resource == null ? Optional.empty() : resource);
     }
 
-    private IoSupplier<InputStream> lightspeed$getResourceFuture(CompletableFuture<IoSupplier<InputStream>> future, ResourceLocation location) {
-        if (future == null) {
+    @Unique
+    private Optional<Resource> lightspeed$searchSafeSegment(List<IndexedPack> segment, ResourceLocation location) {
+        if (segment.isEmpty()) {
             return null;
         }
+        if (segment.size() == 1) {
+            IndexedPack indexedPack = segment.get(0);
+            IoSupplier<InputStream> supplier = indexedPack.pack().getResource(this.type, location);
+            return supplier == null ? null : Optional.of(lightspeed$createResource(indexedPack.pack(), location,
+                    supplier, lightspeed$createStackMetadataFinder(location, indexedPack.index())));
+        }
+
+        List<CompletableFuture<IoSupplier<InputStream>>> futures = new ArrayList<>(segment.size());
         try {
-            return future.get();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return null;
-        } catch (ExecutionException e) {
-            LOGGER.warn("Lightspeed parallel resource lookup failed for {}", location, e);
-            return null;
+            for (IndexedPack indexedPack : segment) {
+                futures.add(CompletableFuture.supplyAsync(() -> indexedPack.pack().getResource(this.type, location), GlobalCache.EXECUTOR));
+            }
+        } catch (RuntimeException e) {
+            LOGGER.warn("Lightspeed parallel resource lookup rejected for {}; falling back to vanilla order", location, e);
+            return lightspeed$searchSafeSegmentSequential(segment, location);
         }
+
+        for (int i = 0; i < segment.size(); i++) {
+            IndexedPack indexedPack = segment.get(i);
+            try {
+                IoSupplier<InputStream> supplier = futures.get(i).get();
+                if (supplier != null) {
+                    return Optional.of(lightspeed$createResource(indexedPack.pack(), location,
+                            supplier, lightspeed$createStackMetadataFinder(location, indexedPack.index())));
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return lightspeed$searchSafeSegmentSequential(segment, location);
+            } catch (ExecutionException e) {
+                LOGGER.warn("Lightspeed parallel resource lookup failed for {} in {}", location, indexedPack.pack().packId(), e);
+            }
+        }
+        return null;
+    }
+
+    @Unique
+    private Optional<Resource> lightspeed$searchSafeSegmentSequential(List<IndexedPack> segment, ResourceLocation location) {
+        for (IndexedPack indexedPack : segment) {
+            IoSupplier<InputStream> supplier = indexedPack.pack().getResource(this.type, location);
+            if (supplier != null) {
+                return Optional.of(lightspeed$createResource(indexedPack.pack(), location,
+                        supplier, lightspeed$createStackMetadataFinder(location, indexedPack.index())));
+            }
+        }
+        return null;
+    }
+
+    @Unique
+    private static boolean lightspeed$isSafeForParallelLookup(PackResources packResources) {
+        Class<?> packClass = packResources.getClass();
+        return (packClass == PathPackResources.class || packClass == FilePackResources.class)
+                && !FusionPackCompat.hasOverrides(packResources);
+    }
+
+    @Unique
+    private record IndexedPack(int index, PackResources pack) {
     }
 }

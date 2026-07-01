@@ -1,13 +1,16 @@
 package com.ccr4ft3r.lightspeed.cache;
 
+import com.ccr4ft3r.lightspeed.compat.FusionPackCompat;
 import com.ccr4ft3r.lightspeed.interfaces.ICache;
 import com.ccr4ft3r.lightspeed.util.CacheUtil;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 import com.mojang.logging.LogUtils;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.packs.FilePackResources;
 import net.minecraft.server.packs.PackResources;
 import net.minecraft.server.packs.PackType;
+import net.minecraft.server.packs.PathPackResources;
 import net.minecraft.server.packs.resources.IoSupplier;
 import org.slf4j.Logger;
 
@@ -48,6 +51,7 @@ public class GlobalCache {
     private static final Set<ICache> CACHES = Sets.newConcurrentHashSet();
     public static final Map<String, Map<String, Boolean>> PERSISTED_EXISTENCES_BY_MOD = Maps.newConcurrentMap();
     public static final Map<String, Map<PackType, Set<String>>> PERSISTED_NAMESPACES_BY_MOD = Maps.newConcurrentMap();
+    public static final Map<String, Map<PackType, Map<String, List<String>>>> PERSISTED_RESOURCE_LISTS_BY_MOD = Maps.newConcurrentMap();
     public static final int WORKER_COUNT = getWorkerCount();
     public static final ExecutorService EXECUTOR = Executors.newFixedThreadPool(WORKER_COUNT, runnable -> {
         Thread thread = new Thread(runnable, "Lightspeed-" + THREAD_ID.incrementAndGet());
@@ -63,7 +67,8 @@ public class GlobalCache {
         if (PERSISTED_CACHE_LOAD_STARTED.compareAndSet(false, true)) {
             persistedCacheLoad = CompletableFuture.allOf(
                     loadPersistedCaches(HAS_RESOURCE_CACHE_DIR, PERSISTED_EXISTENCES_BY_MOD),
-                    loadPersistedCaches(NAMESPACE_CACHE_DIR, PERSISTED_NAMESPACES_BY_MOD)
+                    loadPersistedCaches(NAMESPACE_CACHE_DIR, PERSISTED_NAMESPACES_BY_MOD),
+                    loadPersistedCaches(RESOURCE_LIST_CACHE_DIR, PERSISTED_RESOURCE_LISTS_BY_MOD)
             ).exceptionally(throwable -> {
                 LOGGER.error("Lightspeed failed to load persisted caches", throwable);
                 return null;
@@ -99,8 +104,8 @@ public class GlobalCache {
         if (packs.isEmpty()) {
             return null;
         }
-        if (packs.size() == 1) {
-            return packs.get(0).getResource(type, location);
+        if (packs.size() == 1 || !shouldParallelizeResourcePackLookup || packs.stream().anyMatch(pack -> !isSafeForParallelLookup(pack))) {
+            return findFirstResourceSequential(packs, type, location);
         }
 
         List<CompletableFuture<IoSupplier<InputStream>>> futures = new ArrayList<>(packs.size());
@@ -136,6 +141,7 @@ public class GlobalCache {
         List<CompletableFuture<Void>> tasks = new ArrayList<>();
         CacheUtil.getCacheFiles(HAS_RESOURCE_CACHE_DIR).forEach(file -> tasks.add(deleteAsync(file)));
         CacheUtil.getCacheFiles(NAMESPACE_CACHE_DIR).forEach(file -> tasks.add(deleteAsync(file)));
+        CacheUtil.getCacheFiles(RESOURCE_LIST_CACHE_DIR).forEach(file -> tasks.add(deleteAsync(file)));
         CACHES.forEach(cache -> tasks.add(executeLogged(cache.getClass().getName(), cache::lightspeed$persistAndClearCache)));
 
         CompletableFuture.allOf(tasks.toArray(new CompletableFuture[0])).join();
@@ -144,6 +150,7 @@ public class GlobalCache {
         CACHES.clear();
         PERSISTED_EXISTENCES_BY_MOD.clear();
         PERSISTED_NAMESPACES_BY_MOD.clear();
+        PERSISTED_RESOURCE_LISTS_BY_MOD.clear();
     }
 
     private static int getWorkerCount() {
@@ -181,5 +188,11 @@ public class GlobalCache {
             }
         }
         return null;
+    }
+
+    private static boolean isSafeForParallelLookup(PackResources packResources) {
+        Class<?> packClass = packResources.getClass();
+        return (packClass == PathPackResources.class || packClass == FilePackResources.class)
+                && !FusionPackCompat.hasOverrides(packResources);
     }
 }

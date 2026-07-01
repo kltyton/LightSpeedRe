@@ -18,6 +18,7 @@ public class CacheUtil {
         SharedConstants.getCurrentVersion().getId()).toFile();
     public static final File HAS_RESOURCE_CACHE_DIR = new File(CACHE_DIR, "hasResource");
     public static final File NAMESPACE_CACHE_DIR = new File(CACHE_DIR, "namespaces");
+    public static final File RESOURCE_LIST_CACHE_DIR = new File(CACHE_DIR, "resourceLists");
 
     public static Stream<File> getCacheFiles(File dir) {
         if (!dir.isDirectory()) {

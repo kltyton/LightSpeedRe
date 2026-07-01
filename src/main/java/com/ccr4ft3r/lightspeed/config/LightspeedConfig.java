@@ -27,10 +27,10 @@ public final class LightspeedConfig {
         private Common(ModConfigSpec.Builder builder) {
             builder.push("startup");
             asyncPreloadPacks = builder
-                    .comment("Preload Forge path resource packs on Lightspeed worker threads during startup.")
+                    .comment("Preload NeoForge path resource pack indexes on Lightspeed worker threads during startup.")
                     .define("asyncPreloadPacks", true);
             parallelResourceLookup = builder
-                    .comment("Query candidate resource packs concurrently while preserving pack priority order for the selected result.")
+                    .comment("Query safe resource-pack segments concurrently while preserving vanilla priority and filter order.")
                     .define("parallelResourceLookup", true);
             builder.pop();
 

@@ -20,6 +20,14 @@ resource cache strategy, then adds bounded multi-worker execution for cache I/O.
 - `net.minecraft.server.packs.PathPackResources#listResources` caches walked
   file paths per pack type and namespace, replacing repeated full directory
   walks during resource discovery.
+- Resource-list indexes are persisted under
+  `<game directory>/lightspeed-cache/<minecraft version>/resourceLists/`.
+  Cold starts build those indexes on worker threads; warm starts load them from
+  disk before pack scanning begins.
+- `FallbackResourceManager#getResource` uses segmented parallel lookup only for
+  contiguous unfiltered vanilla `PathPackResources` / `FilePackResources`
+  entries. Unknown, dynamic, Fusion-overridden, or filtered packs keep vanilla
+  sequential lookup order.
 - Blockstate/model hot paths still use the original hash, material, predicate,
   dependency, and string-split caches.
 
@@ -35,10 +43,10 @@ of 2. Override it with:
 `config/lightspeed-common.toml` controls the risky startup optimizations:
 
 - `startup.asyncPreloadPacks=true`: background mod resource-pack scanning is
-  enabled by default.
+  enabled by default and builds resource-list indexes concurrently.
 - `startup.parallelResourceLookup=true`: concurrent candidate-pack lookup in
-  `FallbackResourceManager#getResource` is enabled by default while preserving
-  pack priority order for the returned result.
+  `FallbackResourceManager#getResource` is enabled only for safe unfiltered pack
+  segments while preserving vanilla priority and filter order.
 - `compatibility.isolateModdedResourceReloadFailures=true`: third-party client
   resource reload listener failures are logged and isolated so one broken mod
   listener does not fail the entire loading overlay.

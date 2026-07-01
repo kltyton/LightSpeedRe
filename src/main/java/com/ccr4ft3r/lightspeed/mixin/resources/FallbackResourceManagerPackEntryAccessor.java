@@ -5,6 +5,8 @@ import net.minecraft.server.packs.PackResources;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.gen.Invoker;
 
+import java.util.function.Predicate;
+
 @Mixin(targets = "net.minecraft.server.packs.resources.FallbackResourceManager$PackEntry")
 public interface FallbackResourceManagerPackEntryAccessor {
     @Invoker("name")
@@ -12,6 +14,9 @@ public interface FallbackResourceManagerPackEntryAccessor {
 
     @Invoker("resources")
     PackResources lightspeed$resources();
+
+    @Invoker("filter")
+    Predicate<ResourceLocation> lightspeed$filter();
 
     @Invoker("isFiltered")
     boolean lightspeed$isFiltered(ResourceLocation location);

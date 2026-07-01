@@ -13,10 +13,6 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.lang.reflect.Field;
-import java.util.Collections;
-import java.util.IdentityHashMap;
-import java.util.List;
-import java.util.Set;
 
 @Mixin(value = ResourcePackLoader.class, remap = false)
 public abstract class ResourcePackLoaderMixin {
@@ -44,38 +40,28 @@ public abstract class ResourcePackLoaderMixin {
     }
 
     private static void lightspeed$preparePackResources(PackResources resources, IModFileInfo modFileInfo) {
-        Set<PackResources> visited = Collections.newSetFromMap(new IdentityHashMap<>());
-        lightspeed$preparePackResources(resources, modFileInfo, visited);
+        PackResources primary = lightspeed$getPrimaryResources(resources);
+        if (!(primary instanceof IPathResourcePack lightspeedPack)) {
+            return;
+        }
+        lightspeedPack.lightspeed$setModFile(modFileInfo.getFile());
+        lightspeedPack.lightspeed$startAsyncPreload();
     }
 
-    private static void lightspeed$preparePackResources(PackResources resources, IModFileInfo modFileInfo, Set<PackResources> visited) {
-        if (resources == null || !visited.add(resources)) {
-            return;
-        }
-        if (resources instanceof IPathResourcePack lightspeedPack) {
-            lightspeedPack.lightspeed$setModFile(modFileInfo.getFile());
-            lightspeedPack.lightspeed$startAsyncPreload();
-            return;
-        }
+    private static PackResources lightspeed$getPrimaryResources(PackResources resources) {
         if (!(resources instanceof CompositePackResources)) {
-            return;
+            return resources;
         }
-        for (Field field : resources.getClass().getDeclaredFields()) {
-            try {
-                field.setAccessible(true);
-                Object value = field.get(resources);
-                if (value instanceof PackResources nested) {
-                    lightspeed$preparePackResources(nested, modFileInfo, visited);
-                } else if (value instanceof List<?> list) {
-                    for (Object item : list) {
-                        if (item instanceof PackResources nested) {
-                            lightspeed$preparePackResources(nested, modFileInfo, visited);
-                        }
-                    }
-                }
-            } catch (IllegalAccessException | RuntimeException ignored) {
-                // Composite internals are an optimization path; failing to inspect them should not break loading.
+        try {
+            Field field = CompositePackResources.class.getDeclaredField("primaryPackResources");
+            field.setAccessible(true);
+            Object value = field.get(resources);
+            if (value instanceof PackResources primary) {
+                return primary;
             }
+        } catch (NoSuchFieldException | IllegalAccessException | RuntimeException ignored) {
+            // If the composite layout changes, skip this optimization rather than touching overlay packs.
         }
+        return null;
     }
 }
