@@ -127,7 +127,7 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
 
         if (exists != null) {
             if (exists) {
-                cir.setReturnValue(lightspeed$openRootResource(paths.clone()));
+                cir.setReturnValue(lightspeed$openRootResource(Arrays.copyOf(paths, paths.length)));
             } else {
                 cir.setReturnValue(null);
             }
