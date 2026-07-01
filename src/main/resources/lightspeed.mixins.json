@@ -18,6 +18,8 @@
     "misc.StateDefinitonMixin",
     "resources.AbstractPackResourcesMixin",
     "resources.DelegatingResourcePackMixin",
+    "resources.FallbackResourceManagerMixin",
+    "resources.FallbackResourceManagerPackEntryAccessor",
     "resources.FilePackResourcesMixin",
     "resources.PathResourcePackMixin",
     "resources.SimpleReloadInstanceMixin",
