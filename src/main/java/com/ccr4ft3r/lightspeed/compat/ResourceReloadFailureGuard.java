@@ -56,6 +56,7 @@ public final class ResourceReloadFailureGuard {
 
     private static boolean isCoreClass(String className) {
         return className.startsWith("net.minecraft.")
+                || className.startsWith("net.neoforged.")
                 || className.startsWith("net.minecraftforge.")
                 || className.startsWith("com.mojang.")
                 || className.startsWith("java.")
@@ -63,7 +64,7 @@ public final class ResourceReloadFailureGuard {
     }
 
     private static boolean isFatal(Throwable throwable) {
-        return throwable instanceof VirtualMachineError || throwable instanceof ThreadDeath;
+        return throwable instanceof VirtualMachineError || throwable.getClass().getName().equals("java.lang.ThreadDeath");
     }
 
     private static Throwable unwrap(Throwable throwable) {

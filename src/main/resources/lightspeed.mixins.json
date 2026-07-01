@@ -1,8 +1,7 @@
 {
   "required": true,
   "package": "com.ccr4ft3r.lightspeed.mixin",
-  "compatibilityLevel": "JAVA_17",
-  "refmap": "lightspeed.refmap.json",
+  "compatibilityLevel": "JAVA_21",
   "client": [
     "MinecraftMainMixin",
     "misc.KeyValueConditionMixin",
@@ -17,9 +16,11 @@
     "misc.ResourcePackLoaderMixin",
     "misc.StateDefinitonMixin",
     "resources.AbstractPackResourcesMixin",
-    "resources.DelegatingResourcePackMixin",
+    "resources.FallbackResourceManagerMixin",
+    "resources.FallbackResourceManagerPackEntryAccessor",
     "resources.FilePackResourcesMixin",
     "resources.PathResourcePackMixin",
+    "resources.SharedZipFileAccessAccessor",
     "resources.SimpleReloadInstanceMixin",
     "resources.VanillaPackResourcesMixin"
   ],

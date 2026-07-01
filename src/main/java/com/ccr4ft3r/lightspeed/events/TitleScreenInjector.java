@@ -4,12 +4,13 @@ import com.ccr4ft3r.lightspeed.ModConstants;
 import com.ccr4ft3r.lightspeed.cache.GlobalCache;
 import com.mojang.logging.LogUtils;
 import net.minecraft.client.gui.screens.TitleScreen;
-import net.minecraftforge.api.distmarker.Dist;
-import net.minecraftforge.client.event.ScreenEvent;
-import net.minecraftforge.eventbus.api.EventPriority;
-import net.minecraftforge.eventbus.api.SubscribeEvent;
-import net.minecraftforge.fml.common.Mod;
-import net.minecraftforge.internal.BrandingControl;
+import net.neoforged.api.distmarker.Dist;
+import net.neoforged.bus.api.EventPriority;
+import net.neoforged.bus.api.SubscribeEvent;
+import net.neoforged.fml.common.EventBusSubscriber;
+import net.neoforged.fml.common.Mod;
+import net.neoforged.neoforge.client.event.ScreenEvent;
+import net.neoforged.neoforge.internal.BrandingControl;
 
 import java.lang.management.ManagementFactory;
 import java.lang.reflect.Field;
@@ -18,14 +19,14 @@ import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
 
-@Mod.EventBusSubscriber(modid = ModConstants.MOD_ID, value = Dist.CLIENT)
+@EventBusSubscriber(modid = ModConstants.MOD_ID, value = Dist.CLIENT)
 public class TitleScreenInjector {
 
     private static boolean launchComplete = false;
 
     @SuppressWarnings({"InstantiationOfUtilityClass", "unchecked"})
     @SubscribeEvent(priority = EventPriority.LOWEST)
-    public static void onScreenInit(ScreenEvent.Init event) {
+    public static void onScreenInit(ScreenEvent.Init.Post event) {
         if (!(event.getScreen() instanceof TitleScreen) || launchComplete)
             return;
         launchComplete = true;

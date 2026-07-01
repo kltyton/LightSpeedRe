@@ -1,6 +1,6 @@
 package com.ccr4ft3r.lightspeed.compat;
 
-import net.minecraftforge.fml.ModList;
+import net.neoforged.fml.ModList;
 
 import java.lang.reflect.Field;
 import java.util.ArrayList;

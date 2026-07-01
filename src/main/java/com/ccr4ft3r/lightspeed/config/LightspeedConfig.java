@@ -1,16 +1,16 @@
 package com.ccr4ft3r.lightspeed.config;
 
-import net.minecraftforge.common.ForgeConfigSpec;
+import net.neoforged.neoforge.common.ModConfigSpec;
 import org.apache.commons.lang3.tuple.Pair;
 
 import java.util.List;
 
 public final class LightspeedConfig {
-    public static final ForgeConfigSpec SPEC;
+    public static final ModConfigSpec SPEC;
     public static final Common COMMON;
 
     static {
-        Pair<Common, ForgeConfigSpec> pair = new ForgeConfigSpec.Builder().configure(Common::new);
+        Pair<Common, ModConfigSpec> pair = new ModConfigSpec.Builder().configure(Common::new);
         COMMON = pair.getLeft();
         SPEC = pair.getRight();
     }
@@ -19,12 +19,12 @@ public final class LightspeedConfig {
     }
 
     public static final class Common {
-        public final ForgeConfigSpec.BooleanValue asyncPreloadPacks;
-        public final ForgeConfigSpec.BooleanValue parallelResourceLookup;
-        public final ForgeConfigSpec.BooleanValue isolateModdedResourceReloadFailures;
-        public final ForgeConfigSpec.ConfigValue<List<? extends String>> isolatedResourceReloadListenerPatterns;
+        public final ModConfigSpec.BooleanValue asyncPreloadPacks;
+        public final ModConfigSpec.BooleanValue parallelResourceLookup;
+        public final ModConfigSpec.BooleanValue isolateModdedResourceReloadFailures;
+        public final ModConfigSpec.ConfigValue<List<? extends String>> isolatedResourceReloadListenerPatterns;
 
-        private Common(ForgeConfigSpec.Builder builder) {
+        private Common(ModConfigSpec.Builder builder) {
             builder.push("startup");
             asyncPreloadPacks = builder
                     .comment("Preload Forge path resource packs on Lightspeed worker threads during startup.")

@@ -2,23 +2,21 @@ package com.ccr4ft3r.lightspeed;
 
 import com.ccr4ft3r.lightspeed.cache.GlobalCache;
 import com.ccr4ft3r.lightspeed.config.LightspeedConfig;
-import net.minecraftforge.eventbus.api.IEventBus;
-import net.minecraftforge.fml.ModLoadingContext;
-import net.minecraftforge.fml.ModList;
-import net.minecraftforge.fml.common.Mod;
-import net.minecraftforge.fml.config.ModConfig;
-import net.minecraftforge.fml.event.config.ModConfigEvent;
-import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
+import net.neoforged.bus.api.IEventBus;
+import net.neoforged.fml.ModContainer;
+import net.neoforged.fml.ModList;
+import net.neoforged.fml.common.Mod;
+import net.neoforged.fml.config.ModConfig;
+import net.neoforged.fml.event.config.ModConfigEvent;
 
 import java.util.List;
 
 @Mod(ModConstants.MOD_ID)
 public class Main {
 
-    public Main() {
-        IEventBus modEventBus = FMLJavaModLoadingContext.get().getModEventBus();
+    public Main(IEventBus modEventBus, ModContainer modContainer) {
         modEventBus.addListener(this::onConfigEvent);
-        ModLoadingContext.get().registerConfig(ModConfig.Type.COMMON, LightspeedConfig.SPEC);
+        modContainer.registerConfig(ModConfig.Type.COMMON, LightspeedConfig.SPEC);
         updateCacheFlags();
     }
 

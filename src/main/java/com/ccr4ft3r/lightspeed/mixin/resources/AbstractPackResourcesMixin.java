@@ -4,6 +4,7 @@ import com.ccr4ft3r.lightspeed.cache.GlobalCache;
 import com.ccr4ft3r.lightspeed.interfaces.IPackResources;
 import com.google.common.collect.Maps;
 import net.minecraft.server.packs.AbstractPackResources;
+import net.minecraft.server.packs.PackLocationInfo;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -19,7 +20,7 @@ public abstract class AbstractPackResourcesMixin implements IPackResources {
     private Map<String, Boolean> lightspeed$existenceByResource = Maps.newConcurrentMap();
 
     @Inject(method = "<init>", at = @At("RETURN"))
-    public void initReturnInjected(String name, boolean isBuiltin, CallbackInfo ci) {
+    public void initReturnInjected(PackLocationInfo location, CallbackInfo ci) {
         if (GlobalCache.isEnabled)
             GlobalCache.add(this);
     }

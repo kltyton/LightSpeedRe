@@ -3,7 +3,7 @@ package com.ccr4ft3r.lightspeed.util;
 import com.google.common.collect.Maps;
 import com.mojang.logging.LogUtils;
 import net.minecraft.SharedConstants;
-import net.minecraftforge.fml.loading.FMLPaths;
+import net.neoforged.fml.loading.FMLPaths;
 
 import java.io.*;
 import java.nio.file.Paths;
