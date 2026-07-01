@@ -40,18 +40,19 @@ public abstract class VanillaPackResourcesMixin implements IPackResources {
             return;
 
         GlobalCache.add(this);
-        GlobalCache.awaitPersistedCachesLoaded();
         lightspeed$versionId = SharedConstants.getCurrentVersion().getId();
 
         lightspeed$existencePerClientResource = PERSISTED_EXISTENCES_BY_MOD.computeIfAbsent(
                 lightspeed$versionId + "-client", k -> Maps.newConcurrentMap());
         lightspeed$existencePerServerResource = PERSISTED_EXISTENCES_BY_MOD.computeIfAbsent(
                 lightspeed$versionId + "-server", k -> Maps.newConcurrentMap());
+        GlobalCache.loadPersistedCacheAsync(HAS_RESOURCE_CACHE_DIR, lightspeed$versionId + "-client", lightspeed$existencePerClientResource);
+        GlobalCache.loadPersistedCacheAsync(HAS_RESOURCE_CACHE_DIR, lightspeed$versionId + "-server", lightspeed$existencePerServerResource);
     }
 
     @Inject(method = "getResource", at = @At("HEAD"), cancellable = true)
     public void getResourceHeadInjected(PackType packType, ResourceLocation location, CallbackInfoReturnable<IoSupplier<InputStream>> cir) {
-        if (!GlobalCache.isEnabled)
+        if (!GlobalCache.isEnabled || !GlobalCache.shouldCacheResourceExistence)
             return;
 
         Boolean exists = lightspeed$exists(packType, location.toString());
@@ -63,7 +64,7 @@ public abstract class VanillaPackResourcesMixin implements IPackResources {
 
     @Inject(method = "getResource", at = @At("RETURN"))
     public void getResourceReturnInjected(PackType packType, ResourceLocation location, CallbackInfoReturnable<IoSupplier<InputStream>> cir) {
-        if (!GlobalCache.isEnabled)
+        if (!GlobalCache.isEnabled || !GlobalCache.shouldCacheResourceExistence)
             return;
 
         boolean actuallyExists = cir.getReturnValue() != null;
