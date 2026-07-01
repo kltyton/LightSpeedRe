@@ -20,6 +20,9 @@ public class CacheUtil {
     public static final File NAMESPACE_CACHE_DIR = new File(CACHE_DIR, "namespaces");
 
     public static Stream<File> getCacheFiles(File dir) {
+        if (!dir.isDirectory()) {
+            return Stream.empty();
+        }
         File[] caches = dir.listFiles((dir1, name) -> name.toLowerCase().endsWith(".ser"));
         if (caches == null)
             return Stream.empty();
@@ -28,13 +31,14 @@ public class CacheUtil {
     }
 
     public static void persist(Map<?, ?> toPersist, File file) {
-        try {
-            FileOutputStream fos = new FileOutputStream(file);
-            ObjectOutputStream oos = new ObjectOutputStream(new BufferedOutputStream(fos));
+        File parent = file.getParentFile();
+        if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
+            LogUtils.getLogger().warn("Cannot create cache directory: {}", parent);
+        }
+        try (FileOutputStream fos = new FileOutputStream(file);
+             ObjectOutputStream oos = new ObjectOutputStream(new BufferedOutputStream(fos))) {
             oos.writeObject(toPersist);
             oos.flush();
-            oos.close();
-            fos.close();
         } catch (Exception e) {
             LogUtils.getLogger().error("Cannot create cache file: {}", file, e);
         }
@@ -42,13 +46,13 @@ public class CacheUtil {
 
     @SuppressWarnings("unchecked")
     public static <K, V> Map<K, V> load(File file) {
-        try {
-            FileInputStream fis = new FileInputStream(file);
-            ObjectInputStream ois = new ObjectInputStream(new BufferedInputStream(fis));
-            ConcurrentHashMap<K, V> loaded = (ConcurrentHashMap<K, V>) ois.readObject();
-            ois.close();
-            fis.close();
-            return loaded;
+        try (FileInputStream fis = new FileInputStream(file);
+             ObjectInputStream ois = new ObjectInputStream(new BufferedInputStream(fis))) {
+            Object loaded = ois.readObject();
+            if (loaded instanceof Map<?, ?> map) {
+                return new ConcurrentHashMap<>((Map<K, V>) map);
+            }
+            LogUtils.getLogger().warn("Cache file did not contain a map: {}", file.getName());
         } catch (Exception e) {
             LogUtils.getLogger().error("Cannot load cache file: {}", file.getName(), e);
         }

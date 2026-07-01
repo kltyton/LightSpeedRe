@@ -5,4 +5,6 @@ import net.minecraftforge.forgespi.locating.IModFile;
 
 public interface IPathResourcePack extends PackResources, IPackResources {
     void lightspeed$setModFile(IModFile modFile);
+
+    void lightspeed$startAsyncPreload();
 }

@@ -14,7 +14,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.io.InputStream;
 import java.util.List;
-import java.util.Objects;
 
 @Mixin(DelegatingPackResources.class)
 public abstract class DelegatingResourcePackMixin {
@@ -23,14 +22,9 @@ public abstract class DelegatingResourcePackMixin {
 
     @Inject(method = "getResource(Lnet/minecraft/server/packs/PackType;Lnet/minecraft/resources/ResourceLocation;)Lnet/minecraft/server/packs/resources/IoSupplier;", at = @At(value = "HEAD"), cancellable = true)
     public void getResourceHeadInjected(PackType type, ResourceLocation location, CallbackInfoReturnable<IoSupplier<InputStream>> cir) {
-        if (!GlobalCache.isEnabled)
+        if (!GlobalCache.isEnabled || !GlobalCache.shouldParallelizeResourcePackLookup)
             return;
-        IoSupplier<InputStream> result = getCandidatePacks(type, location)
-                .parallelStream()
-                .map(pack -> pack.getResource(type, location))
-                .filter(Objects::nonNull)
-                .findFirst()
-                .orElse(null);
+        IoSupplier<InputStream> result = GlobalCache.findFirstResource(getCandidatePacks(type, location), type, location);
         cir.setReturnValue(result);
     }
 }

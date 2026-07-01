@@ -20,6 +20,7 @@
     "resources.DelegatingResourcePackMixin",
     "resources.FilePackResourcesMixin",
     "resources.PathResourcePackMixin",
+    "resources.SimpleReloadInstanceMixin",
     "resources.VanillaPackResourcesMixin"
   ],
   "minVersion": "0.8"

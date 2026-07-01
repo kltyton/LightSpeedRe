@@ -50,7 +50,12 @@ public class TitleScreenInjector {
                  InvocationTargetException e) {
             LogUtils.getLogger().error("Cannot add launch time to title screen", e);
         }
-        GlobalCache.EXECUTOR.execute(GlobalCache::disablePersistAndClear);
-        GlobalCache.EXECUTOR.shutdown();
+        GlobalCache.EXECUTOR.execute(() -> {
+            try {
+                GlobalCache.disablePersistAndClear();
+            } finally {
+                GlobalCache.EXECUTOR.shutdown();
+            }
+        });
     }
 }

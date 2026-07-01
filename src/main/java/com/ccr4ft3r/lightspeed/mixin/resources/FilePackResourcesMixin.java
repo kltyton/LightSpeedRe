@@ -1,6 +1,7 @@
 package com.ccr4ft3r.lightspeed.mixin.resources;
 
 import com.ccr4ft3r.lightspeed.cache.GlobalCache;
+import com.ccr4ft3r.lightspeed.compat.FusionPackCompat;
 import com.ccr4ft3r.lightspeed.interfaces.IPackResources;
 import com.google.common.collect.Maps;
 import net.minecraft.resources.ResourceLocation;
@@ -39,7 +40,7 @@ public abstract class FilePackResourcesMixin implements IPackResources {
 
     @Inject(method = "listResources", at = @At("HEAD"), cancellable = true)
     public void listResourcesHeadInjected(PackType packType, String namespace, String path, PackResources.ResourceOutput resourceOutput, CallbackInfo ci) {
-        if (!GlobalCache.isEnabled)
+        if (!GlobalCache.isEnabled || FusionPackCompat.hasOverrides(this))
             return;
 
         ZipFile zip = this.getOrCreateZipFile();

@@ -10,15 +10,17 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
-@Mixin(ResourcePackLoader.class)
+@Mixin(value = ResourcePackLoader.class, remap = false)
 public abstract class ResourcePackLoaderMixin {
 
-    @Inject(method = "createPackForMod", at = @At("HEAD"), remap = false, cancellable = true)
-    private static void createPackForModHeadInjected(IModFileInfo mf, CallbackInfoReturnable<PathPackResources> cir) {
+    @Inject(method = "createPackForMod", at = @At("RETURN"), remap = false)
+    private static void createPackForModReturnInjected(IModFileInfo mf, CallbackInfoReturnable<PathPackResources> cir) {
         if (!GlobalCache.isEnabled)
             return;
-        PathPackResources resourcePack = new PathPackResources(mf.getFile().getFileName(),true, mf.getFile().getFilePath());
-        ((IPathResourcePack) resourcePack).lightspeed$setModFile(mf.getFile());
-        cir.setReturnValue(resourcePack);
+        PathPackResources resourcePack = cir.getReturnValue();
+        if (!(resourcePack instanceof IPathResourcePack lightspeedPack))
+            return;
+        lightspeedPack.lightspeed$setModFile(mf.getFile());
+        lightspeedPack.lightspeed$startAsyncPreload();
     }
 }

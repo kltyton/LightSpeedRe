@@ -4,7 +4,7 @@ import com.ccr4ft3r.lightspeed.cache.GlobalCache;
 import com.ccr4ft3r.lightspeed.interfaces.IPackResources;
 import com.ccr4ft3r.lightspeed.util.CacheUtil;
 import com.google.common.collect.Maps;
-import net.minecraft.client.Minecraft;
+import net.minecraft.SharedConstants;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.packs.PackType;
 import net.minecraft.server.packs.VanillaPackResources;
@@ -40,11 +40,8 @@ public abstract class VanillaPackResourcesMixin implements IPackResources {
             return;
 
         GlobalCache.add(this);
-        try {
-            lightspeed$versionId = Minecraft.getInstance().getLaunchedVersion();
-        } catch (Exception e) {
-            lightspeed$versionId = "unknown";
-        }
+        GlobalCache.awaitPersistedCachesLoaded();
+        lightspeed$versionId = SharedConstants.getCurrentVersion().getId();
 
         lightspeed$existencePerClientResource = PERSISTED_EXISTENCES_BY_MOD.computeIfAbsent(
                 lightspeed$versionId + "-client", k -> Maps.newConcurrentMap());
