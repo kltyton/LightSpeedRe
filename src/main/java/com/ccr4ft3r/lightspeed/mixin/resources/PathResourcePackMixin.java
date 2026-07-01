@@ -17,7 +17,10 @@ import net.minecraft.server.packs.resources.IoSupplier;
 import net.neoforged.neoforgespi.locating.IModFile;
 import org.apache.commons.io.FilenameUtils;
 import org.slf4j.Logger;
-import org.spongepowered.asm.mixin.*;
+import org.spongepowered.asm.mixin.Final;
+import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
@@ -29,11 +32,18 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
-import java.util.*;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import static com.ccr4ft3r.lightspeed.util.CacheUtil.*;
+import static com.ccr4ft3r.lightspeed.util.CacheUtil.HAS_RESOURCE_CACHE_DIR;
+import static com.ccr4ft3r.lightspeed.util.CacheUtil.NAMESPACE_CACHE_DIR;
+import static com.ccr4ft3r.lightspeed.util.CacheUtil.RESOURCE_LIST_CACHE_DIR;
 
 @Mixin(value = PathPackResources.class)
 public abstract class PathResourcePackMixin implements IPathResourcePack, IPackResources {
@@ -41,88 +51,67 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
     @Shadow @Final private static Logger LOGGER;
     @Shadow @Final private Path root;
 
-    
     @Unique
     private Map<String, Path> lightspeed$resolvedPathByResource;
-    
     @Unique
     private Map<PackType, Set<String>> lightspeed$namespacesByPackType;
-    
-    @Unique
-    private Map<PackType, Map<String, List<Path>>> lightspeed$filePathsByRootByPackType;
-
     @Unique
     private Map<PackType, Map<String, List<String>>> lightspeed$relativeFilePathsByPackType;
-
-    
     @Unique
     private IModFile lightspeed$modFile;
-    
     @Unique
     private String lightspeed$id;
+
     @Inject(method = "<init>", at = @At("RETURN"))
     public void initReturnInjected(PackLocationInfo location, Path source, CallbackInfo ci) {
         if (GlobalCache.isEnabled) {
             lightspeed$resolvedPaths();
             lightspeed$namespaces();
-            lightspeed$filePathsByRoot();
             GlobalCache.add(this);
         }
     }
 
-    
-    @Unique
-    private static Map<PackType, Map<String, List<Path>>> lightspeed$initPathsMap() {
-        Map<PackType, Map<String, List<Path>>> map = Maps.newConcurrentMap();
-        for (PackType packType : PackType.values()) {
-            map.put(packType, Maps.newConcurrentMap());
-        }
-        return map;
-    }
-
     @Inject(method = "getNamespaces", at = @At("HEAD"), cancellable = true)
     public void getNamespacesHeadInjected(PackType type, CallbackInfoReturnable<Set<String>> cir) {
-        if (!GlobalCache.isEnabled || FusionPackCompat.hasOverrides(this))
+        if (!GlobalCache.isEnabled || FusionPackCompat.hasOverrides(this)) {
             return;
+        }
         Set<String> namespaces = lightspeed$getCachedNamespaces(type);
-        if (namespaces != null)
+        if (namespaces != null) {
             cir.setReturnValue(namespaces);
+        }
     }
 
     @Inject(method = "getNamespaces", at = @At("RETURN"))
     public void getNamespacesReturnInjected(PackType type, CallbackInfoReturnable<Set<String>> cir) {
-        if (!GlobalCache.isEnabled || FusionPackCompat.hasOverrides(this))
+        if (!GlobalCache.isEnabled || FusionPackCompat.hasOverrides(this)) {
             return;
-        if (GlobalCache.shouldCacheEmptyNamespaces || cir.getReturnValue() != null && !cir.getReturnValue().isEmpty())
+        }
+        if (GlobalCache.shouldCacheEmptyNamespaces || cir.getReturnValue() != null && !cir.getReturnValue().isEmpty()) {
             lightspeed$cacheNamespaces(type, cir.getReturnValue());
+        }
     }
 
     @Inject(method = "getRootResource", at = @At("HEAD"), cancellable = true)
     public void getRootResourceHeadInjected(String[] paths, CallbackInfoReturnable<IoSupplier<InputStream>> cir) {
-        if (!GlobalCache.isEnabled)
+        if (!GlobalCache.isEnabled) {
             return;
+        }
 
         String cacheKey = Arrays.toString(paths);
         Boolean exists = lightspeed$exists(cacheKey);
-
         if (exists != null) {
-            if (exists) {
-                Path path = this.lightspeed$resolve(paths);
-                cir.setReturnValue(IoSupplier.create(path));
-            } else {
-                cir.setReturnValue(null);
-            }
+            cir.setReturnValue(exists ? lightspeed$openRootResource(Arrays.copyOf(paths, paths.length)) : null);
         }
     }
 
     @Inject(method = "getRootResource", at = @At("RETURN"))
     public void getRootResourceReturnInjected(String[] paths, CallbackInfoReturnable<IoSupplier<InputStream>> cir) {
-        if (!GlobalCache.isEnabled)
+        if (!GlobalCache.isEnabled) {
             return;
+        }
 
-        String cacheKey = Arrays.toString(paths);
-        boolean exists = cir.getReturnValue() != null;
-        lightspeed$cacheExists(cacheKey, exists);
+        lightspeed$cacheExists(Arrays.toString(paths), cir.getReturnValue() != null);
     }
 
     @Inject(method = "listResources", at = @At("HEAD"), cancellable = true)
@@ -131,27 +120,41 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
             return;
         }
 
+        boolean[] fallbackToVanilla = {false};
         FileUtil.decomposePath(path).ifSuccess(parts -> {
-            Path root = lightspeed$resolve(type.getDirectory(), namespace).toAbsolutePath();
-            Path requestedRoot = FileUtil.resolvePath(root, parts);
-            List<Path> cachedPaths = lightspeed$getFilePaths(type, namespace, root);
-
-            for (Path candidate : cachedPaths) {
-                if (!candidate.startsWith(requestedRoot)) {
-                    continue;
+            try {
+                Path namespaceRoot = lightspeed$resolve(type.getDirectory(), namespace).toAbsolutePath();
+                Path requestedRoot = FileUtil.resolvePath(namespaceRoot, parts);
+                List<String> cachedPaths = lightspeed$getFilePaths(type, namespace, namespaceRoot);
+                if (cachedPaths == null) {
+                    fallbackToVanilla[0] = true;
+                    return;
                 }
 
-                String relativePath = root.relativize(candidate).toString().replace(candidate.getFileSystem().getSeparator(), "/");
-                ResourceLocation location = ResourceLocation.tryBuild(namespace, relativePath);
-                if (location == null) {
-                    Util.logAndPauseIfInIde(String.format(Locale.ROOT, "Invalid path in pack: %s:%s, ignoring", namespace, relativePath));
-                } else {
-                    resourceOutput.accept(location, IoSupplier.create(candidate));
+                for (String cachedPath : cachedPaths) {
+                    Path candidate = namespaceRoot.resolve(cachedPath);
+                    if (!candidate.startsWith(requestedRoot)) {
+                        continue;
+                    }
+
+                    String resourcePath = cachedPath.replace(candidate.getFileSystem().getSeparator(), "/");
+                    ResourceLocation location = ResourceLocation.tryBuild(namespace, resourcePath);
+                    if (location == null) {
+                        Util.logAndPauseIfInIde(String.format(Locale.ROOT, "Invalid path in pack: %s:%s, ignoring", namespace, resourcePath));
+                    } else {
+                        resourceOutput.accept(location, lightspeed$openResource(type, location));
+                    }
                 }
+            } catch (RuntimeException e) {
+                fallbackToVanilla[0] = true;
+                LOGGER.warn("Lightspeed path index lookup failed for {}:{}; falling back to vanilla resource enumeration",
+                        namespace, path, e);
             }
         }).ifError(dataResult -> LOGGER.error("Invalid path {}: {}", path, dataResult.message()));
 
-        ci.cancel();
+        if (!fallbackToVanilla[0]) {
+            ci.cancel();
+        }
     }
 
     @Override
@@ -164,7 +167,6 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
         lightspeed$getExistenceByResource().clear();
         lightspeed$resolvedPaths().clear();
         lightspeed$namespaces().clear();
-        lightspeed$filePathsByRoot().clear();
         lightspeed$relativeFilePaths().clear();
     }
 
@@ -175,11 +177,11 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
         this.lightspeed$id = modFile.getModFileInfo().moduleName() + modFile.getModFileInfo().versionString()
                 + "-" + FilenameUtils.getBaseName(modFile.getFilePath().toString()).replaceAll("[^a-zA-Z0-9.-]", "");
         lightspeed$setExistenceByResource(GlobalCache.PERSISTED_EXISTENCES_BY_MOD.computeIfAbsent(
-                lightspeed$id, i -> Maps.newConcurrentMap()));
+                lightspeed$id, ignored -> Maps.newConcurrentMap()));
         lightspeed$namespaces().putAll(GlobalCache.PERSISTED_NAMESPACES_BY_MOD.computeIfAbsent(
-                lightspeed$id, i -> Maps.newConcurrentMap()));
+                lightspeed$id, ignored -> Maps.newConcurrentMap()));
         lightspeed$relativeFilePaths().putAll(GlobalCache.PERSISTED_RESOURCE_LISTS_BY_MOD.computeIfAbsent(
-                lightspeed$id, i -> Maps.newConcurrentMap()));
+                lightspeed$id, ignored -> Maps.newConcurrentMap()));
     }
 
     @Override
@@ -198,64 +200,73 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
 
                 for (String namespace : namespaces) {
                     GlobalCache.executeLogged("preload " + lightspeed$id + " " + packType + " " + namespace, () -> {
-                        Path root = lightspeed$resolve(packType.getDirectory(), namespace).toAbsolutePath();
-                        lightspeed$getFilePaths(packType, namespace, root);
+                        Path namespaceRoot = lightspeed$resolve(packType.getDirectory(), namespace).toAbsolutePath();
+                        lightspeed$getFilePaths(packType, namespace, namespaceRoot);
                     });
                 }
             });
         }
     }
 
-    
     @Unique
     public Path lightspeed$getResolvedPath(String... paths) {
-        return lightspeed$resolvedPaths().get(Arrays.toString(paths));
+        String key = Arrays.toString(paths);
+        Path path = lightspeed$resolvedPaths().get(key);
+        if (path != null && !lightspeed$isUsablePath(path)) {
+            lightspeed$resolvedPaths().remove(key);
+            return null;
+        }
+        return path;
     }
 
     @Unique
     private Path lightspeed$resolve(String... paths) {
-        if (lightspeed$modFile != null) {
-            if (!GlobalCache.isEnabled) {
-                return lightspeed$modFile.findResource(paths);
-            }
-            return lightspeed$resolvedPaths().computeIfAbsent(Arrays.toString(paths), ignored -> lightspeed$modFile.findResource(paths));
-        }
         if (!GlobalCache.isEnabled) {
-            return FileUtil.resolvePath(this.root, List.of(paths));
+            return lightspeed$resolveUncached(paths);
         }
-        return lightspeed$resolvedPaths().computeIfAbsent(Arrays.toString(paths), ignored -> FileUtil.resolvePath(this.root, List.of(paths)));
+
+        String key = Arrays.toString(paths);
+        Path path = lightspeed$getResolvedPath(paths);
+        if (path == null) {
+            path = lightspeed$resolveUncached(paths);
+            if (lightspeed$isUsablePath(path)) {
+                lightspeed$resolvedPaths().put(key, path);
+            }
+        }
+        return path;
     }
 
-    
+    @Unique
+    private Path lightspeed$resolveUncached(String... paths) {
+        if (lightspeed$modFile != null) {
+            return lightspeed$modFile.findResource(paths);
+        }
+        return FileUtil.resolvePath(this.root, List.of(paths));
+    }
+
     @Unique
     public Boolean lightspeed$exists(String resourceName) {
         return lightspeed$getExistenceByResource().get(resourceName);
     }
 
-    
     @Unique
     public void lightspeed$cacheExists(String resourceName, boolean exists) {
         lightspeed$getExistenceByResource().put(resourceName, exists);
     }
 
     @Unique
-    public List<Path> lightspeed$getFilePaths(PackType packType, String resourceNamespace, Path root) {
-        return lightspeed$getFilePathsMap(packType).computeIfAbsent(resourceNamespace, ignored -> {
-            List<String> cachedRelativePaths = lightspeed$getRelativeFilePathsMap(packType).get(resourceNamespace);
-            if (cachedRelativePaths != null) {
-                return cachedRelativePaths.stream()
-                        .map(root::resolve)
-                        .collect(Collectors.toList());
-            }
-            List<Path> scannedPaths = lightspeed$scanFilePaths(root);
-            lightspeed$getRelativeFilePathsMap(packType).put(resourceNamespace, lightspeed$toRelativePaths(root, scannedPaths));
-            return scannedPaths;
-        });
-    }
+    public List<String> lightspeed$getFilePaths(PackType packType, String resourceNamespace, Path root) {
+        Map<String, List<String>> relativePaths = lightspeed$getRelativeFilePathsMap(packType);
+        List<String> cachedRelativePaths = relativePaths.get(resourceNamespace);
+        if (cachedRelativePaths != null) {
+            return cachedRelativePaths;
+        }
 
-    @Unique
-    private Map<String, List<Path>> lightspeed$getFilePathsMap(PackType packType) {
-        return lightspeed$filePathsByRoot().computeIfAbsent(packType, ignored -> Maps.newConcurrentMap());
+        List<String> scannedPaths = lightspeed$scanRelativeFilePaths(root);
+        if (scannedPaths != null) {
+            relativePaths.put(resourceNamespace, scannedPaths);
+        }
+        return scannedPaths;
     }
 
     @Unique
@@ -268,7 +279,6 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
         lightspeed$namespaces().put(packType, namespaces);
     }
 
-    
     @Unique
     public Set<String> lightspeed$getCachedNamespaces(PackType packType) {
         return lightspeed$namespaces().get(packType);
@@ -291,14 +301,6 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
     }
 
     @Unique
-    private Map<PackType, Map<String, List<Path>>> lightspeed$filePathsByRoot() {
-        if (lightspeed$filePathsByRootByPackType == null) {
-            lightspeed$filePathsByRootByPackType = lightspeed$initPathsMap();
-        }
-        return lightspeed$filePathsByRootByPackType;
-    }
-
-    @Unique
     private Map<PackType, Map<String, List<String>>> lightspeed$relativeFilePaths() {
         if (lightspeed$relativeFilePathsByPackType == null) {
             lightspeed$relativeFilePathsByPackType = Maps.newConcurrentMap();
@@ -310,14 +312,17 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
     }
 
     @Unique
-    private List<Path> lightspeed$scanFilePaths(Path root) {
+    private List<String> lightspeed$scanRelativeFilePaths(Path root) {
         try (Stream<Path> stream = Files.find(root, Integer.MAX_VALUE, (candidate, attributes) -> attributes.isRegularFile())) {
-            return stream.collect(Collectors.toList());
+            return lightspeed$toRelativePaths(root, stream.collect(Collectors.toList()));
         } catch (NoSuchFileException ignored) {
             return Collections.emptyList();
         } catch (IOException e) {
             LOGGER.error("Failed to list path {}", root, e);
-            return Collections.emptyList();
+            return null;
+        } catch (RuntimeException e) {
+            LOGGER.warn("Failed to list path {}; falling back to vanilla resource enumeration", root, e);
+            return null;
         }
     }
 
@@ -349,6 +354,41 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
                 return lightspeed$scanNamespaces(PackType.CLIENT_RESOURCES);
             }
             return Collections.emptySet();
+        }
+    }
+
+    @Unique
+    private IoSupplier<InputStream> lightspeed$openResource(PackType type, ResourceLocation location) {
+        return () -> {
+            Path path = lightspeed$resolve(lightspeed$getPathParts(type, location));
+            if (!Files.exists(path)) {
+                throw new NoSuchFileException(location.toString());
+            }
+            return Files.newInputStream(path);
+        };
+    }
+
+    @Unique
+    private IoSupplier<InputStream> lightspeed$openRootResource(String[] paths) {
+        return () -> Files.newInputStream(lightspeed$resolve(paths));
+    }
+
+    @Unique
+    private static String[] lightspeed$getPathParts(PackType type, ResourceLocation location) {
+        String[] resourceParts = location.getPath().split("/");
+        String[] paths = new String[resourceParts.length + 2];
+        paths[0] = type.getDirectory();
+        paths[1] = location.getNamespace();
+        System.arraycopy(resourceParts, 0, paths, 2, resourceParts.length);
+        return paths;
+    }
+
+    @Unique
+    private static boolean lightspeed$isUsablePath(Path path) {
+        try {
+            return path != null && path.getFileSystem().isOpen();
+        } catch (RuntimeException ignored) {
+            return false;
         }
     }
 }
