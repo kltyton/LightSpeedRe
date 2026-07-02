@@ -47,6 +47,7 @@ public class GlobalCache {
     public static volatile boolean shouldParallelizeResourcePackLookup = true;
     public static volatile int parallelLookupMinPacks = 4;
     public static volatile boolean shouldIsolateModdedResourceReloadFailures = true;
+    public static volatile boolean shouldUseConnectorCompatibilityMode = true;
     public static volatile List<String> isolatedResourceReloadListenerPatterns = List.of("*");
     public static final Map<CharSequence, List<String>> SPLITTED_STRINGS_BY_SEQUENCE = Maps.newConcurrentMap();
     public static final Map<String, String> CANONICAL_PATH_PER_FILE = Maps.newConcurrentMap();

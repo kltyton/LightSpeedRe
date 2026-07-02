@@ -25,6 +25,7 @@ public final class LightspeedConfig {
         public final ForgeConfigSpec.BooleanValue cacheResourceExistence;
         public final ForgeConfigSpec.BooleanValue isolateModdedResourceReloadFailures;
         public final ForgeConfigSpec.ConfigValue<List<? extends String>> isolatedResourceReloadListenerPatterns;
+        public final ForgeConfigSpec.BooleanValue connectorCompatibilityMode;
 
         private Common(ForgeConfigSpec.Builder builder) {
             builder.push("startup");
@@ -49,6 +50,9 @@ public final class LightspeedConfig {
             isolatedResourceReloadListenerPatterns = builder
                     .comment("Class-name prefixes that may be isolated when resource reload fails. Use * for all non-core mod listeners.")
                     .defineList("isolatedResourceReloadListenerPatterns", List.of("*"), value -> value instanceof String string && !string.isBlank());
+            connectorCompatibilityMode = builder
+                    .comment("When Sinytra Connector is installed, avoid startup/resource optimizations that change Fabric resource reload or renderer lookup timing.")
+                    .define("connectorCompatibilityMode", true);
             builder.pop();
         }
     }
