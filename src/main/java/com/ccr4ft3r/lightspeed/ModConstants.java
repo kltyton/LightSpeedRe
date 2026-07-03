@@ -7,5 +7,7 @@ public class ModConstants {
     public static final String SOPHISTICATED_STORAGE_ID = "sophisticatedstorage";
     public static final String MULTIBLOCKED_ID = "multiblocked";
     public static final String CREATE_ID = "create";
-    public static final String CONNECTOR_ID = "connectormod";
+    public static final String CONNECTOR_ID = "connector";
+    public static final String CONNECTOR_LEGACY_ID = "connectormod";
+    public static final String CONTINUITY_ID = "continuity";
 }

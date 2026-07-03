@@ -51,7 +51,7 @@ public class Main {
             GlobalCache.isolatedResourceReloadListenerPatterns = List.of("*");
         }
 
-        if (GlobalCache.shouldUseConnectorCompatibilityMode && ModList.get().isLoaded(ModConstants.CONNECTOR_ID)) {
+        if (GlobalCache.shouldUseConnectorCompatibilityMode && needsResourcePackCompatibilityMode()) {
             GlobalCache.shouldAsyncPreloadPacks = false;
             GlobalCache.shouldParallelizeResourcePackLookup = false;
             GlobalCache.shouldCacheWalkedPaths = false;
@@ -59,7 +59,7 @@ public class Main {
             GlobalCache.shouldCacheResourceExistence = false;
             GlobalCache.shouldIsolateModdedResourceReloadFailures = false;
             if (!loggedConnectorCompatibilityMode) {
-                LOGGER.warn("Lightspeed Sinytra Connector compatibility mode is active; resource-pack parallelism, path caches, and reload failure isolation are disabled");
+                LOGGER.warn("Lightspeed Connector/Continuity compatibility mode is active; resource-pack parallelism, path caches, and reload failure isolation are disabled");
                 loggedConnectorCompatibilityMode = true;
             }
         }
@@ -70,5 +70,11 @@ public class Main {
         if (ModList.get().isLoaded(ModConstants.MULTIBLOCKED_ID)) {
             GlobalCache.shouldCacheMaterials = false;
         }
+    }
+
+    private static boolean needsResourcePackCompatibilityMode() {
+        return ModList.get().isLoaded(ModConstants.CONNECTOR_ID)
+                || ModList.get().isLoaded(ModConstants.CONNECTOR_LEGACY_ID)
+                || ModList.get().isLoaded(ModConstants.CONTINUITY_ID);
     }
 }

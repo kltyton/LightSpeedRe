@@ -51,7 +51,7 @@ public final class LightspeedConfig {
                     .comment("Class-name prefixes that may be isolated when resource reload fails. Use * for all non-core mod listeners.")
                     .defineList("isolatedResourceReloadListenerPatterns", List.of("*"), value -> value instanceof String string && !string.isBlank());
             connectorCompatibilityMode = builder
-                    .comment("When Sinytra Connector is installed, avoid startup/resource optimizations that change Fabric resource reload or renderer lookup timing.")
+                    .comment("When Sinytra Connector or Continuity is installed, avoid startup/resource optimizations that change Fabric resource reload or renderer lookup timing.")
                     .define("connectorCompatibilityMode", true);
             builder.pop();
         }
