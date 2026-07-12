@@ -28,8 +28,17 @@ public final class ResourceReloadFailureGuard {
                 .toList();
     }
 
+    public static boolean shouldIsolate(Object owner) {
+        return GlobalCache.shouldIsolateModdedResourceReloadFailures
+                && owner != null
+                && shouldWrapClass(owner.getClass().getName());
+    }
+
     private static boolean shouldWrap(PreparableReloadListener listener) {
-        String className = listener.getClass().getName();
+        return shouldWrapClass(listener.getClass().getName());
+    }
+
+    private static boolean shouldWrapClass(String className) {
         return !isCoreClass(className) && matchesConfiguredPattern(className);
     }
 

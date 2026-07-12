@@ -9,7 +9,8 @@
     "misc.SelectorMixin",
     "model.BlockModelMixin",
     "model.MultiPartMixin",
-    "model.MultivariantMixin"
+    "model.MultivariantMixin",
+    "renderer.EntityRenderersMixin"
   ],
   "mixins": [
     "misc.ResourceLocationMixin",
