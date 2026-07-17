@@ -51,8 +51,8 @@ of 2. Override it with:
   resource reload listener failures are logged and isolated so one broken mod
   listener does not fail the entire loading overlay.
 - `compatibility.isolatedResourceReloadListenerPatterns=["*"]`: controls which
-  non-core listener class names may be isolated. `*` means any listener outside
-  Minecraft, NeoForge, Mojang, and JDK packages.
+  non-core listener or renderer class names may be isolated. `*` means any code
+  outside Minecraft, NeoForge, Mojang, LightSpeed, and framework packages.
 
 The old JVM properties are not required for these switches anymore.
 

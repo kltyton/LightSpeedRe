@@ -14,6 +14,7 @@ import net.minecraft.client.renderer.entity.EntityRenderers;
 import net.minecraft.client.renderer.entity.NoopRenderer;
 import net.minecraft.client.resources.PlayerSkin;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.EntityType;
 import org.slf4j.Logger;
 import org.spongepowered.asm.mixin.Mixin;
@@ -49,7 +50,9 @@ public abstract class EntityRenderersMixin {
             try {
                 action.accept(entityType, provider);
             } catch (RuntimeException failure) {
-                if (!ResourceReloadFailureGuard.shouldIsolate(provider)) {
+                ResourceLocation rendererId = BuiltInRegistries.ENTITY_TYPE.getKey(entityType);
+                String rendererNamespace = rendererId == null ? null : rendererId.getNamespace();
+                if (!ResourceReloadFailureGuard.shouldIsolateRendererFailure(rendererNamespace, provider, failure)) {
                     throw failure;
                 }
                 try {
@@ -58,7 +61,7 @@ public abstract class EntityRenderersMixin {
                     failure.addSuppressed(fallbackFailure);
                     throw failure;
                 }
-                lightspeed$logFallback(BuiltInRegistries.ENTITY_TYPE.getKey(entityType).toString(), provider, failure);
+                lightspeed$logFallback(rendererId == null ? entityType.toString() : rendererId.toString(), provider, failure);
             }
         };
         original.call(providers, guardedAction);
@@ -83,7 +86,7 @@ public abstract class EntityRenderersMixin {
             try {
                 action.accept(model, provider);
             } catch (RuntimeException failure) {
-                if (!ResourceReloadFailureGuard.shouldIsolate(provider)) {
+                if (!ResourceReloadFailureGuard.shouldIsolateRendererFailure("minecraft", provider, failure)) {
                     throw failure;
                 }
                 try {

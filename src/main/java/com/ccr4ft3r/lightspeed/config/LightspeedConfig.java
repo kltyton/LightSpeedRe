@@ -48,7 +48,7 @@ public final class LightspeedConfig {
                     .comment("Complete failed third-party client resource reload listeners instead of letting one mod crash the whole loading overlay.")
                     .define("isolateModdedResourceReloadFailures", true);
             isolatedResourceReloadListenerPatterns = builder
-                    .comment("Class-name prefixes that may be isolated when resource reload fails. Use * for all non-core mod listeners.")
+                    .comment("Class-name prefixes whose third-party reload listener or renderer failures may be isolated. Use * for all non-core mod code.")
                     .defineList("isolatedResourceReloadListenerPatterns", List.of("*"), value -> value instanceof String string && !string.isBlank());
             connectorCompatibilityMode = builder
                     .comment("When Sinytra Connector or Continuity is installed, avoid startup/resource optimizations that change Fabric resource reload or renderer lookup timing.")
