@@ -11,6 +11,7 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
+import java.util.HashMap;
 import java.util.Map;
 import java.util.function.Function;
 
@@ -31,7 +32,7 @@ public class StateDefinitonMixin implements ICache {
     @Inject(method = "<init>", at = @At("RETURN"))
     private void initHeadInjected(Function p_61052_, Object p_61053_, StateDefinition.Factory p_61054_, Map p_61055_, CallbackInfo ci) {
         if (GlobalCache.isEnabled)
-            lightspeed$propsByName = p_61055_;
+            lightspeed$propsByName = new HashMap<>(p_61055_);
     }
 
     @Inject(method = "getProperty", at = @At("HEAD"), cancellable = true)

@@ -7,7 +7,11 @@ import net.minecraft.server.packs.resources.ResourceManager;
 import net.minecraft.util.profiling.ProfilerFiller;
 import org.slf4j.Logger;
 
+import java.util.ArrayDeque;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
@@ -28,8 +32,32 @@ public final class ResourceReloadFailureGuard {
                 .toList();
     }
 
+    public static boolean shouldIsolate(Object owner) {
+        return GlobalCache.shouldIsolateModdedResourceReloadFailures
+                && owner != null
+                && shouldWrapClass(owner.getClass().getName());
+    }
+
+    public static boolean shouldIsolateRendererFailure(String rendererNamespace, Object owner, Throwable throwable) {
+        if (!GlobalCache.shouldIsolateModdedResourceReloadFailures || throwable == null || containsFatal(throwable)) {
+            return false;
+        }
+        if (owner != null && shouldWrapClass(owner.getClass().getName())) {
+            return true;
+        }
+        if (rendererNamespace != null
+                && !"minecraft".equals(rendererNamespace)
+                && GlobalCache.isolatedResourceReloadListenerPatterns.contains("*")) {
+            return true;
+        }
+        return hasConfiguredNonCoreStackFrame(throwable);
+    }
+
     private static boolean shouldWrap(PreparableReloadListener listener) {
-        String className = listener.getClass().getName();
+        return shouldWrapClass(listener.getClass().getName());
+    }
+
+    private static boolean shouldWrapClass(String className) {
         return !isCoreClass(className) && matchesConfiguredPattern(className);
     }
 
@@ -56,14 +84,75 @@ public final class ResourceReloadFailureGuard {
 
     private static boolean isCoreClass(String className) {
         return className.startsWith("net.minecraft.")
+                || className.startsWith("net.neoforged.")
                 || className.startsWith("net.minecraftforge.")
                 || className.startsWith("com.mojang.")
+                || className.startsWith("com.ccr4ft3r.lightspeed.")
+                || className.startsWith("com.google.common.")
+                || className.startsWith("com.llamalad7.mixinextras.")
+                || className.startsWith("org.apache.commons.")
+                || className.startsWith("org.apache.logging.")
+                || className.startsWith("org.objectweb.asm.")
+                || className.startsWith("org.slf4j.")
+                || className.startsWith("org.spongepowered.asm.")
                 || className.startsWith("java.")
-                || className.startsWith("javax.");
+                || className.startsWith("javax.")
+                || className.startsWith("jdk.")
+                || className.startsWith("sun.");
     }
 
     private static boolean isFatal(Throwable throwable) {
-        return throwable instanceof VirtualMachineError || throwable instanceof ThreadDeath;
+        return throwable instanceof VirtualMachineError || throwable.getClass().getName().equals("java.lang.ThreadDeath");
+    }
+
+    private static boolean containsFatal(Throwable throwable) {
+        Set<Throwable> visited = Collections.newSetFromMap(new IdentityHashMap<>());
+        ArrayDeque<Throwable> pending = new ArrayDeque<>();
+        pending.add(throwable);
+        while (!pending.isEmpty()) {
+            Throwable current = pending.removeFirst();
+            if (!visited.add(current)) {
+                continue;
+            }
+            if (isFatal(current)) {
+                return true;
+            }
+            if (current.getCause() != null) {
+                pending.addLast(current.getCause());
+            }
+            Collections.addAll(pending, current.getSuppressed());
+        }
+        return false;
+    }
+
+    private static boolean hasConfiguredNonCoreStackFrame(Throwable throwable) {
+        Set<Throwable> visited = Collections.newSetFromMap(new IdentityHashMap<>());
+        ArrayDeque<Throwable> pending = new ArrayDeque<>();
+        pending.add(throwable);
+        while (!pending.isEmpty()) {
+            Throwable current = pending.removeFirst();
+            if (!visited.add(current)) {
+                continue;
+            }
+            for (StackTraceElement frame : current.getStackTrace()) {
+                if (isLightspeedBoundary(frame)) {
+                    break;
+                }
+                if (shouldWrapClass(frame.getClassName())) {
+                    return true;
+                }
+            }
+            if (current.getCause() != null) {
+                pending.addLast(current.getCause());
+            }
+            Collections.addAll(pending, current.getSuppressed());
+        }
+        return false;
+    }
+
+    private static boolean isLightspeedBoundary(StackTraceElement frame) {
+        return frame.getClassName().startsWith("com.ccr4ft3r.lightspeed.")
+                || frame.getMethodName().contains("lightspeed$");
     }
 
     private static Throwable unwrap(Throwable throwable) {

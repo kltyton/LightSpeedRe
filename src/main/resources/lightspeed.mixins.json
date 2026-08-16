@@ -10,7 +10,9 @@
     "misc.SelectorMixin",
     "model.BlockModelMixin",
     "model.MultiPartMixin",
-    "model.MultivariantMixin"
+    "model.MultivariantMixin",
+    "renderer.EntityRenderersMixin",
+    "renderer.ForgeHooksClientMixin"
   ],
   "mixins": [
     "misc.ResourceLocationMixin",
