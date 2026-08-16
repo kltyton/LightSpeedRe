@@ -10,6 +10,7 @@
     "model.BlockModelMixin",
     "model.MultiPartMixin",
     "model.MultivariantMixin",
+    "renderer.ClientHooksMixin",
     "renderer.EntityRenderersMixin"
   ],
   "mixins": [
