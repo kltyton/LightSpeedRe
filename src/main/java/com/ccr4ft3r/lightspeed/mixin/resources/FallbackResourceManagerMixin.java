@@ -2,6 +2,7 @@ package com.ccr4ft3r.lightspeed.mixin.resources;
 
 import com.ccr4ft3r.lightspeed.cache.GlobalCache;
 import com.ccr4ft3r.lightspeed.compat.FusionPackCompat;
+import com.ccr4ft3r.lightspeed.interfaces.IPathResourcePack;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.packs.FilePackResources;
 import net.minecraft.server.packs.PackResources;
@@ -92,6 +93,10 @@ public abstract class FallbackResourceManagerMixin {
         if (segment.isEmpty()) {
             return null;
         }
+        Optional<Optional<Resource>> indexedSearch = lightspeed$searchIndexedSegment(segment, location);
+        if (indexedSearch.isPresent()) {
+            return indexedSearch.get().isPresent() ? indexedSearch.get() : null;
+        }
         if (segment.size() < GlobalCache.parallelLookupMinPacks) {
             return lightspeed$searchSafeSegmentSequential(segment, location);
         }
@@ -132,6 +137,29 @@ public abstract class FallbackResourceManagerMixin {
     }
 
     @Unique
+    private Optional<Optional<Resource>> lightspeed$searchIndexedSegment(List<IndexedPack> segment, ResourceLocation location) {
+        for (IndexedPack indexedPack : segment) {
+            if (!(indexedPack.pack() instanceof IPathResourcePack indexedPackResources)) {
+                return Optional.empty();
+            }
+            Boolean present = indexedPackResources.lightspeed$hasIndexedResource(this.type, location);
+            if (present == null) {
+                return Optional.empty();
+            }
+            if (present) {
+                IoSupplier<InputStream> supplier = indexedPack.pack().getResource(this.type, location);
+                if (supplier == null) {
+                    return Optional.empty();
+                }
+                return Optional.of(Optional.of(lightspeed$createResource(
+                        indexedPack.pack(), location, supplier,
+                        lightspeed$createStackMetadataFinder(location, indexedPack.index()))));
+            }
+        }
+        return Optional.of(Optional.empty());
+    }
+
+    @Unique
     private Optional<Resource> lightspeed$searchSafeSegmentSequential(List<IndexedPack> segment, ResourceLocation location) {
         for (IndexedPack indexedPack : segment) {
             IoSupplier<InputStream> supplier = indexedPack.pack().getResource(this.type, location);
@@ -153,4 +181,5 @@ public abstract class FallbackResourceManagerMixin {
     @Unique
     private record IndexedPack(int index, PackResources pack) {
     }
+
 }

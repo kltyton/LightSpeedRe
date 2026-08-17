@@ -37,6 +37,7 @@ public class Main {
 
         try {
             GlobalCache.shouldAsyncPreloadPacks = LightspeedConfig.COMMON.asyncPreloadPacks.get();
+            GlobalCache.shouldUseDedicatedResourceReloadExecutor = LightspeedConfig.COMMON.dedicatedResourceReloadExecutor.get();
             GlobalCache.shouldParallelizeResourcePackLookup = LightspeedConfig.COMMON.parallelResourceLookup.get();
             GlobalCache.parallelLookupMinPacks = LightspeedConfig.COMMON.parallelLookupMinPacks.get();
             GlobalCache.shouldCacheResourceExistence = LightspeedConfig.COMMON.cacheResourceExistence.get();
@@ -53,6 +54,7 @@ public class Main {
 
         if (GlobalCache.shouldUseConnectorCompatibilityMode && needsResourcePackCompatibilityMode()) {
             GlobalCache.shouldAsyncPreloadPacks = false;
+            GlobalCache.shouldUseDedicatedResourceReloadExecutor = false;
             GlobalCache.shouldParallelizeResourcePackLookup = false;
             GlobalCache.shouldCacheWalkedPaths = false;
             GlobalCache.shouldCacheEmptyNamespaces = false;

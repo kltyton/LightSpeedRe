@@ -20,6 +20,7 @@ public final class LightspeedConfig {
 
     public static final class Common {
         public final ModConfigSpec.BooleanValue asyncPreloadPacks;
+        public final ModConfigSpec.BooleanValue dedicatedResourceReloadExecutor;
         public final ModConfigSpec.BooleanValue parallelResourceLookup;
         public final ModConfigSpec.IntValue parallelLookupMinPacks;
         public final ModConfigSpec.BooleanValue cacheResourceExistence;
@@ -32,6 +33,9 @@ public final class LightspeedConfig {
             asyncPreloadPacks = builder
                     .comment("Preload NeoForge path resource pack indexes on Lightspeed worker threads during startup.")
                     .define("asyncPreloadPacks", true);
+            dedicatedResourceReloadExecutor = builder
+                    .comment("Use a dedicated work-stealing pool for resource reload preparation instead of competing for the shared Minecraft worker pool.")
+                    .define("dedicatedResourceReloadExecutor", true);
             parallelResourceLookup = builder
                     .comment("Query safe resource-pack segments concurrently while preserving vanilla priority and filter order.")
                     .define("parallelResourceLookup", true);
