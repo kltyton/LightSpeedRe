@@ -5,6 +5,7 @@
   "refmap": "lightspeed.refmap.json",
   "client": [
     "MinecraftMainMixin",
+    "resources.MinecraftReloadExecutorMixin",
     "misc.KeyValueConditionMixin",
     "misc.MaterialMixin",
     "misc.SelectorMixin",

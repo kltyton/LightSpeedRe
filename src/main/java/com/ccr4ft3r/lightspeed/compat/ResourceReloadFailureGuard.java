@@ -10,12 +10,11 @@ import org.slf4j.Logger;
 import java.util.ArrayDeque;
 import java.util.Collections;
 import java.util.IdentityHashMap;
-import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Executor;
+import java.util.function.Supplier;
 
 public final class ResourceReloadFailureGuard {
     private static final Logger LOGGER = LogUtils.getLogger();
@@ -23,13 +22,29 @@ public final class ResourceReloadFailureGuard {
     private ResourceReloadFailureGuard() {
     }
 
-    public static List<PreparableReloadListener> wrap(List<PreparableReloadListener> listeners) {
-        if (!GlobalCache.shouldIsolateModdedResourceReloadFailures) {
-            return listeners;
+    public static <T> CompletableFuture<T> guard(
+            PreparableReloadListener listener,
+            Supplier<CompletableFuture<T>> reload) {
+        CompletableFuture<T> future;
+        try {
+            future = reload.get();
+        } catch (RuntimeException | LinkageError throwable) {
+            return handleFailure(listener, throwable);
         }
-        return listeners.stream()
-                .map(listener -> shouldWrap(listener) ? new GuardedReloadListener(listener) : listener)
-                .toList();
+        if (!shouldWrap(listener)) {
+            return future;
+        }
+        return future.handle((result, throwable) -> {
+            if (throwable == null) {
+                return result;
+            }
+            Throwable cause = unwrap(throwable);
+            if (shouldIsolate(listener, cause)) {
+                logIsolated(listener, cause);
+                return null;
+            }
+            throw new CompletionException(cause);
+        });
     }
 
     public static boolean shouldIsolate(Object owner) {
@@ -64,7 +79,8 @@ public final class ResourceReloadFailureGuard {
     private static boolean shouldIsolate(PreparableReloadListener listener, Throwable throwable) {
         return GlobalCache.shouldIsolateModdedResourceReloadFailures
                 && !isFatal(throwable)
-                && shouldWrap(listener);
+                && shouldWrap(listener)
+                && isOwnedBy(listener, throwable);
     }
 
     private static boolean matchesConfiguredPattern(String className) {
@@ -150,6 +166,33 @@ public final class ResourceReloadFailureGuard {
         return false;
     }
 
+    private static boolean isOwnedBy(PreparableReloadListener listener, Throwable throwable) {
+        String ownerClass = listener.getClass().getName();
+        String ownerPackage = listener.getClass().getPackageName();
+        Set<Throwable> visited = Collections.newSetFromMap(new IdentityHashMap<>());
+        ArrayDeque<Throwable> pending = new ArrayDeque<>();
+        pending.add(throwable);
+        while (!pending.isEmpty()) {
+            Throwable current = pending.removeFirst();
+            if (!visited.add(current)) {
+                continue;
+            }
+            for (StackTraceElement frame : current.getStackTrace()) {
+                String frameClass = frame.getClassName();
+                if (frameClass.equals(ownerClass)
+                        || frameClass.startsWith(ownerClass + "$")
+                        || (!ownerPackage.isEmpty() && frameClass.startsWith(ownerPackage + "."))) {
+                    return true;
+                }
+            }
+            if (current.getCause() != null) {
+                pending.addLast(current.getCause());
+            }
+            Collections.addAll(pending, current.getSuppressed());
+        }
+        return false;
+    }
+
     private static boolean isLightspeedBoundary(StackTraceElement frame) {
         return frame.getClassName().startsWith("com.ccr4ft3r.lightspeed.")
                 || frame.getMethodName().contains("lightspeed$");
@@ -163,47 +206,19 @@ public final class ResourceReloadFailureGuard {
         return current;
     }
 
-    private record GuardedReloadListener(PreparableReloadListener delegate) implements PreparableReloadListener {
-        @Override
-        public CompletableFuture<Void> reload(PreparationBarrier barrier, ResourceManager resourceManager,
-                                              ProfilerFiller preparationsProfiler, ProfilerFiller reloadProfiler,
-                                              Executor backgroundExecutor, Executor gameExecutor) {
-            CompletableFuture<Void> future;
-            try {
-                future = delegate.reload(barrier, resourceManager, preparationsProfiler, reloadProfiler, backgroundExecutor, gameExecutor);
-            } catch (Throwable throwable) {
-                return handleFailure(throwable);
-            }
-            return future.handle((ignored, throwable) -> {
-                if (throwable == null) {
-                    return null;
-                }
-                Throwable cause = unwrap(throwable);
-                if (shouldIsolate(delegate, cause)) {
-                    logIsolated(cause);
-                    return null;
-                }
-                throw new CompletionException(cause);
-            });
+    private static <T> CompletableFuture<T> handleFailure(
+            PreparableReloadListener listener,
+            Throwable throwable) {
+        Throwable cause = unwrap(throwable);
+        if (shouldIsolate(listener, cause)) {
+            logIsolated(listener, cause);
+            return CompletableFuture.completedFuture(null);
         }
+        return CompletableFuture.failedFuture(cause);
+    }
 
-        @Override
-        public String getName() {
-            return delegate.getName();
-        }
-
-        private CompletableFuture<Void> handleFailure(Throwable throwable) {
-            Throwable cause = unwrap(throwable);
-            if (shouldIsolate(delegate, cause)) {
-                logIsolated(cause);
-                return CompletableFuture.completedFuture(null);
-            }
-            return CompletableFuture.failedFuture(cause);
-        }
-
-        private void logIsolated(Throwable throwable) {
-            LOGGER.error("Lightspeed isolated resource reload failure in {} ({})",
-                    delegate.getName(), delegate.getClass().getName(), throwable);
-        }
+    private static void logIsolated(PreparableReloadListener listener, Throwable throwable) {
+        LOGGER.error("Lightspeed isolated resource reload failure in {} ({})",
+                listener.getName(), listener.getClass().getName(), throwable);
     }
 }

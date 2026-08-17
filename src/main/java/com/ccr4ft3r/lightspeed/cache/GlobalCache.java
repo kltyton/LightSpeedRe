@@ -21,13 +21,17 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.ForkJoinWorkerThread;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 
 import static com.ccr4ft3r.lightspeed.util.CacheUtil.*;
 
@@ -35,6 +39,7 @@ public class GlobalCache {
 
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final AtomicInteger THREAD_ID = new AtomicInteger();
+    private static final AtomicInteger RELOAD_THREAD_ID = new AtomicInteger();
     private static final AtomicBoolean PERSISTED_CACHE_LOAD_STARTED = new AtomicBoolean(false);
     private static volatile CompletableFuture<Void> persistedCacheLoad = CompletableFuture.completedFuture(null);
 
@@ -45,6 +50,7 @@ public class GlobalCache {
     public static volatile boolean shouldCacheMaterials = true;
     public static volatile boolean shouldAsyncPreloadPacks = true;
     public static volatile boolean shouldParallelizeResourcePackLookup = true;
+    public static volatile boolean shouldUseDedicatedResourceReloadExecutor = true;
     public static volatile int parallelLookupMinPacks = 4;
     public static volatile boolean shouldIsolateModdedResourceReloadFailures = true;
     public static volatile boolean shouldUseConnectorCompatibilityMode = true;
@@ -63,6 +69,11 @@ public class GlobalCache {
             runnable -> newDaemonThread(runnable, "Lightspeed-", THREAD_ID, Math.max(Thread.MIN_PRIORITY, Thread.NORM_PRIORITY - 1)));
     public static final ExecutorService CACHE_EXECUTOR = Executors.newFixedThreadPool(CACHE_WORKER_COUNT,
             runnable -> newDaemonThread(runnable, "Lightspeed-Cache-", CACHE_THREAD_ID, Thread.MIN_PRIORITY));
+    private static final ExecutorService RESOURCE_RELOAD_EXECUTOR = new ForkJoinPool(
+            getReloadWorkerCount(),
+            GlobalCache::newReloadWorker,
+            (thread, throwable) -> LOGGER.error("Lightspeed resource reload worker failed: {}", thread.getName(), throwable),
+            true);
 
     public static void add(ICache cache) {
         CACHES.add(cache);
@@ -125,6 +136,26 @@ public class GlobalCache {
                 LOGGER.error("Lightspeed cache task failed: {}", taskName, e);
             }
         }, CACHE_EXECUTOR);
+        return trackBackgroundTask(future);
+    }
+
+    public static <T> CompletableFuture<T> supplyCacheAfterPersistedLoad(String taskName, Supplier<T> task) {
+        CompletableFuture<T> future = loadPersistedCachesAsync().thenApplyAsync(ignored -> {
+            try {
+                return isEnabled ? task.get() : null;
+            } catch (Exception e) {
+                LOGGER.error("Lightspeed cache task failed: {}", taskName, e);
+                return null;
+            }
+        }, CACHE_EXECUTOR);
+        return trackBackgroundTask(future);
+    }
+
+    public static ExecutorService resourceReloadExecutor(ExecutorService fallback) {
+        return shouldUseDedicatedResourceReloadExecutor ? RESOURCE_RELOAD_EXECUTOR : fallback;
+    }
+
+    private static <T> CompletableFuture<T> trackBackgroundTask(CompletableFuture<T> future) {
         BACKGROUND_CACHE_TASKS.add(future);
         future.whenComplete((ignored, throwable) -> BACKGROUND_CACHE_TASKS.remove(future));
         return future;
@@ -195,8 +226,27 @@ public class GlobalCache {
     }
 
     private static int getCacheWorkerCount() {
-        int configured = Integer.getInteger("lightspeed.cacheWorkers", 1);
-        return Math.max(1, Math.min(configured, 4));
+        int configured = Integer.getInteger("lightspeed.cacheWorkers", 0);
+        if (configured > 0) {
+            return Math.max(1, Math.min(configured, 8));
+        }
+        return Math.max(2, Math.min(Runtime.getRuntime().availableProcessors() / 4, 8));
+    }
+
+    private static int getReloadWorkerCount() {
+        int configured = Integer.getInteger("lightspeed.reloadWorkers", 0);
+        if (configured > 0) {
+            return Math.max(2, Math.min(configured, 32));
+        }
+        return Math.max(2, Math.min(Runtime.getRuntime().availableProcessors() - 2, 32));
+    }
+
+    private static ForkJoinWorkerThread newReloadWorker(ForkJoinPool pool) {
+        ForkJoinWorkerThread thread = new ForkJoinWorkerThread(pool) {
+        };
+        thread.setContextClassLoader(GlobalCache.class.getClassLoader());
+        thread.setName("Lightspeed-Reload-" + RELOAD_THREAD_ID.incrementAndGet());
+        return thread;
     }
 
     private static Thread newDaemonThread(Runnable runnable, String namePrefix, AtomicInteger id, int priority) {
@@ -236,19 +286,16 @@ public class GlobalCache {
     }
 
     private static void awaitBackgroundCacheTasks() {
-        CompletableFuture<?>[] tasks = BACKGROUND_CACHE_TASKS.toArray(new CompletableFuture[0]);
-        if (tasks.length == 0) {
-            return;
-        }
-        try {
-            CompletableFuture.allOf(tasks).get(10, TimeUnit.SECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            LOGGER.warn("Lightspeed cache task wait interrupted; persisting completed cache state", e);
-        } catch (ExecutionException e) {
-            LOGGER.warn("Lightspeed cache task failed before persist", e);
-        } catch (TimeoutException e) {
-            LOGGER.warn("Lightspeed cache tasks did not finish before title screen; persisting completed cache state");
+        while (true) {
+            CompletableFuture<?>[] tasks = BACKGROUND_CACHE_TASKS.toArray(new CompletableFuture[0]);
+            if (tasks.length == 0) {
+                return;
+            }
+            try {
+                CompletableFuture.allOf(tasks).join();
+            } catch (CompletionException e) {
+                LOGGER.warn("Lightspeed cache task failed before persist", e.getCause());
+            }
         }
     }
 
