@@ -91,3 +91,56 @@ Against the preceding per-class cache snapshot, two JProfiler samples measured:
 - ordinary title time remained 47-48 seconds, while profiled runs varied from 54 to 62 seconds.
 
 This approaches Fabric's metadata-first discovery behavior for unchanged Mods without replacing Forge's module, transformation, entrypoint, or language-loader contracts. It proves removal of the targeted scan phase, not a statistically significant whole-start speedup. The remaining maximum cost is still JVM class definition.
+
+## Generalized class-loading attribution and GitHub implementation survey
+
+A follow-up used the exact final production snapshot and a separate Java 17 JFR launch to distinguish a loader-general optimization from an ATM9-only class list. The JFR launch enabled every `ClassLoad` and `ClassDefine` stack, so its 60.434-second title time includes observer overhead and is not a replacement for the normal 47-48-second timing evidence.
+
+At the title timestamp, `jdk.ClassLoadingStatistics.loadedClassCount` was 170,231. The process remained open after the title and ended at 170,302, so only 71 additional classes appeared after the measured boundary. The final class-loader statistics reported 156,810 classes under `cpw.mods.modlauncher.TransformingClassLoader`; the exact percentage is approximate because hidden/generated classes have separate accounting, but the result clearly places the dominant population in Forge's GAME loader rather than in the bootstrap or application loader.
+
+The exact-final JProfiler snapshot measured 217.156 seconds of runnable CPU. `ModuleClassLoader.readerToClass` accounted for 51.450 seconds, of which 46.085 seconds (`89%`) crossed into `ClassLoader.defineClass`. Its caller distribution was broad:
+
+- ordinary `ClassLoader.loadClass` accounted for `87%` of `readerToClass` CPU;
+- reflective `Class.forName` accounted for `7.1%`, including Forge EventBus wrapper creation;
+- the filtered backtrace still contained at least 588 caller branches below the display cutoff;
+- one visible static-initializer example was `RechiseledCreate.<init> -> rechiseled.create.Blocks.<clinit> -> Create.AllBlocks.<clinit>`, but it represented only about `1%` of the class-definition hotspot.
+
+The whole-start call tree showed the reusable framework boundary more clearly: ForkJoin workers used `73%` of runnable CPU, `ModContainer` transition handling used `53%`, `FMLModContainer.constructMod` used `45.6%`, and reflective Mod construction used `43.2%`. Client sprite/resource initialization was a separate `7.1%` branch. CristelLib and Mekanism constructors were visible examples in this ATM9 run, but hard-coding either one would not generalize.
+
+### GitHub approaches that actually touch the class-definition boundary
+
+| Approach | What the source implements | Forge 1.20.1 applicability |
+|---|---|---|
+| Eclipse OpenJ9 shared classes | `SharedClassTokenHelper` lets a custom loader look up VM-managed shared bytes, call `defineClass`, then store the defined class under a loader-owned token. | The only surveyed VM feature explicitly designed for custom loaders. It still needs a ModLauncher-specific token and side-effect protocol. OpenJ9's default BCI mode does not store classes modified by Java/JVMTI agents; final transformed-byte reuse therefore remains unproven for this loader. |
+| LunNova CachingClassLoader | Replaces legacy LaunchWrapper and persists transformed class bytes between Forge 1.10.2 server starts. | A direct historical Minecraft precedent, but its README requires manual invalidation when transformer-affecting configuration changes. The modern ATM9 experiment produced 926 different outputs for identical input keys and has additional ModLauncher plugin/audit side effects, so this implementation model is unsafe here. |
+| Quarkus RunnerClassLoader | Prebuilds package/resource maps and explicit generated/transformed bytecode sets, then still calls JVM `defineClass`. | General evidence for eliminating lookup misses and reducing the number of classes forced through the loader. Lightspeed already adopted the resource-index half; Quarkus does not remove HotSpot class definition. |
+| SecureJarHandler parallel loading | `ModuleClassLoader` calls `ClassLoader.registerAsParallelCapable()` and locks by class name. | Already present. Adding more class-loading threads cannot unlock a missing JVM feature and previously increased ATM9 startup time. |
+| OpenJDK CRaC | Restores a checkpointed process whose classes are already defined. | It bypasses repeated definition, but the current implementation is Linux/CRIU-based and Minecraft would need explicit GLFW/OpenGL/OpenAL, watcher, file and network recovery. It is a different product mode, not a normal Windows Mod. |
+| HotSpot AOT/CDS and GraalVM | HotSpot JEP 483 excludes user-defined-loader classes and arbitrary class-rewriting agents; GraalVM runtime class loading is an experimental open-world mode. | Neither is a drop-in path for dynamic `ModuleClassLoader + ModLauncher + Mixin` classes. |
+
+Sources:
+
+- OpenJ9 custom-loader helper and test implementation: https://github.com/eclipse-openj9/openj9/blob/38bcdf07ccd668f29bcf439b4a5b7eab473de3f5/jcl/src/openj9.sharedclasses/share/classes/com/ibm/oti/shared/SharedClassTokenHelper.java and https://github.com/eclipse-openj9/openj9/blob/38bcdf07ccd668f29bcf439b4a5b7eab473de3f5/test/functional/cmdLineTests/shareClassTests/utils/src/CustomCLs/CustomTokenClassLoader.java
+- OpenJ9 bytecode-instrumentation behavior: https://github.com/eclipse-openj9/openj9-docs/blob/e49e5962c5d9792ae0af36c88f63dd06b6d827f1/docs/xxshareclassesenablebci.md
+- Legacy Minecraft transformed-class cache: https://github.com/LunNova/CachingClassLoader/blob/53c02d1a9edbec7c6cbdcce7ad01c8c243dc2996/README.md
+- SecureJarHandler parallel class loader: https://github.com/McModLauncher/securejarhandler/blob/ab1d9f4cf60cc66b6ff648795238fd71e5448b91/src/main/java/cpw/mods/cl/ModuleClassLoader.java
+- Quarkus runner class loader: https://github.com/quarkusio/quarkus/blob/478e5fe6c974b9cefce07598e79db6359a1ab7d0/independent-projects/bootstrap/runner/src/main/java/io/quarkus/bootstrap/runner/RunnerClassLoader.java
+- CRaC prerequisites: https://github.com/openjdk/crac/blob/5c5e92d05e9db8f00cf06f96247b5da2289dfca4/README.md
+- HotSpot class-loading AOT boundary: https://openjdk.org/jeps/483
+
+### General and pack-specific boundaries
+
+The following parts are general across Forge packs that use the same loader contract:
+
+1. Count first-time classes by loader, module/JAR source and startup phase.
+2. Attribute `readerToClass` and `defineClass` to the first caller outside ClassLoader/ModLauncher internals.
+3. Rank framework triggers such as Mod construction, EventBus wrapper generation, registration dispatch and client resource reload.
+4. Apply any cache or lazy policy at a verified module/JAR contract boundary, never by a hard-coded class-name list.
+
+The following parts are pack-specific and must be re-profiled:
+
+1. Which Mod constructors and static initializers dominate.
+2. Which classes may be delayed without changing registration order, event subscription, side effects or reflective discovery.
+3. The actual reduction in title time after a class or module is made lazy.
+
+Therefore the method and the loader-level measurement surface are general, while the final lazy-initialization allowlist is not. The next safe implementation should be an opt-in, bounded attribution mode in the bootstrap layer that records counts by module/JAR and initiating framework phase with negligible overhead. It should first be run on at least two materially different Forge packs before any common lazy policy is enabled by default.
