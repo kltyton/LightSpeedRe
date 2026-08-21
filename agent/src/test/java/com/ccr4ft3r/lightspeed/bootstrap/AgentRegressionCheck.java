@@ -1,6 +1,7 @@
 package com.ccr4ft3r.lightspeed.bootstrap;
 
 import com.ccr4ft3r.lightspeed.bootstrap.runtime.BootstrapHooks;
+import com.ccr4ft3r.lightspeed.bootstrap.runtime.index.ResourceMembershipIndex;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.LauncherTransformer;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassVisitor;
@@ -94,12 +95,15 @@ public final class AgentRegressionCheck {
             Path archive = jar(directory.resolve("resources.jar"), Map.of(
                     "present.txt", new byte[]{1},
                     "nested/also-present.txt", new byte[]{2}), false);
+            long qualificationChecks = ResourceMembershipIndex.qualificationChecks();
             try (FileSystem zip = FileSystems.newFileSystem(archive)) {
                 Path root = zip.getPath("/");
                 require(BootstrapHooks.mightContain(root, archive, "present.txt"), "present resource was rejected");
                 require(BootstrapHooks.mightContain(root, archive, "nested/also-present.txt"), "nested resource was rejected");
                 require(!BootstrapHooks.mightContain(root, archive, "missing.txt"), "missing resource was not rejected");
             }
+            require(ResourceMembershipIndex.qualificationChecks() == qualificationChecks + 1,
+                    "physical JAR qualification repeated for one indexed root");
 
             Path multiRelease = jar(directory.resolve("multi-release.jar"),
                     Map.of("META-INF/versions/17/only-versioned.txt", new byte[]{1}), true);
