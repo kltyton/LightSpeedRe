@@ -14,6 +14,11 @@ resource cache strategy, then adds bounded multi-worker execution for cache I/O.
 
 ## Optimization Paths
 
+- The optional bootstrap Agent is documented in
+  [`bootstrap-agent.md`](bootstrap-agent.md). It runs before the normal Mod
+  lifecycle and targets FML/SecureJarHandler startup work; the Mod remains
+  independently usable without it.
+
 - Persistent resource-existence and namespace caches are loaded early from
   `<game directory>/lightspeed-cache/<minecraft version>/`.
 - Cache loading, cache deletion, and cache persistence use a fixed worker pool.

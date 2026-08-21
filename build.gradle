@@ -13,6 +13,13 @@ base {
     archivesName = mod_id
 }
 
+def bootstrapAgentEnabled = providers.gradleProperty('lightspeed.bootstrapAgent')
+        .map { value -> value.toBoolean() }
+        .getOrElse(false)
+def bootstrapAgentPath = project(':agent').layout.buildDirectory
+        .file("libs/lightspeed-bootstrap-agent-${project.version}.jar")
+        .get().asFile.absolutePath
+
 java {
     toolchain.languageVersion = JavaLanguageVersion.of(21)
 }
@@ -34,6 +41,9 @@ neoForge {
         configureEach {
             systemProperty 'forge.logging.markers', 'REGISTRIES'
             logLevel = org.slf4j.event.Level.DEBUG
+            if (bootstrapAgentEnabled) {
+                jvmArgument "-javaagent:${bootstrapAgentPath}"
+            }
         }
 
         client {
@@ -95,6 +105,16 @@ neoForge.ideSyncTask generateModMetadata
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
+}
+
+tasks.named('build').configure {
+    dependsOn ':agent:build'
+}
+
+if (bootstrapAgentEnabled) {
+    tasks.matching { task -> task.name.startsWith('run') }.configureEach {
+        dependsOn ':agent:shadowJar'
+    }
 }
 
 tasks.named('jar', Jar).configure {
