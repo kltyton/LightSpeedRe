@@ -45,11 +45,23 @@ An unknown class fingerprint is logged and left unchanged. A partial transform i
 
 Before FML constructs a complete `SecureJar`/`JarContents`, the Agent checks the physical ZIP central directory for the exact startup-service files. Explicit or versioned `module-info.class`, multi-release JARs, directories, unreadable archives, and unsupported files all fall back to the original loader path. This fast path can reject only a JAR that cannot provide a recognized startup service.
 
-### Immutable-JAR resource negative index
+### Shared immutable-JAR resource index
 
-For each SecureJar UnionFS root, the Agent builds one Bloom membership index from the filtered root view. Definite misses skip `Files.exists` and `UnionFileSystem.testFilter`; possible hits always execute the original lookup. Mutable directories, multi-release overlays, unsupported file systems, and index failures fall back to the original path.
+When SecureJar creates an immutable UnionFS root, the Agent records all physical JAR roots and the active path filter. It reads each ZIP central directory once, publishes one exact sorted entry table plus a Bloom front filter, and shares that table with the ordinary Mod through a fail-open bootstrap bridge.
 
-Index construction is `O(E)` once per JAR root, where `E` is the visible entry count. Queries are `O(1)` with four bit probes. The bitset targets 16 bits per entry, with a 1 Ki-bit minimum and 128 Mi-bit maximum; saturation increases false positives but cannot hide an existing resource.
+Definite misses skip `Files.exists` and `UnionFileSystem.testFilter`. `PathPackResources.listResources` uses binary prefix ranges instead of walking UnionFS or creating a `Path` per cached entry. Mutable directories, multi-release overlays, unsupported file systems, and index failures retain the original path.
+
+Index construction is `O(E log E)` once per JAR root, where `E` is the visible entry count. Exact membership is `O(log E)` after four Bloom probes, and prefix listing is `O(log E + K)` for `K` returned resources. With the Agent active, the Mod does not eagerly load or rebuild its legacy serialized resource-list caches.
+
+### EventBus declaration cache
+
+Forge EventBus 6.0.5 repeatedly resolves inherited public listener methods with `Class.getDeclaredMethod` while registering objects. The Agent replaces only that private lookup helper with a `ClassValue`-scoped concurrent cache. Present and absent results are both retained, while annotation checks, listener ordering, factory generation, and registration remain in Forge's original code.
+
+### Resource-byte startup image
+
+For standard immutable Mod JAR packs, successful resource opens are captured after the original UnionFS path has proved the resource exists. At the title screen, newly observed bytes are atomically merged into `lightspeed-cache/bootstrap/resource-image-v1.bin`. Later launches validate the complete Mod-JAR metadata fingerprint and load the image asynchronously while Forge constructs mods.
+
+Image hits return an in-memory stream before UnionFS or ZIP access. Dynamic/subpath packs, directory roots, multi-release roots, stale fingerprints, failed reads, entries larger than 32 MiB, and data beyond the default 512 MiB image budget keep the original path. The budget can be changed with `-Dlightspeed.resourceImageMiB=<64..1024>`. Deleting the image is a complete rollback.
 
 ## Diagnostics and rollback
 
@@ -59,6 +71,7 @@ Expected early log lines include:
 [Lightspeed Agent] active: ...
 [Lightspeed Agent] patched net/minecraftforge/fml/loading/ModDirTransformerDiscoverer ...
 [Lightspeed Agent] patched cpw/mods/jarhandling/impl/Jar ...
+[Lightspeed Agent] patched net/minecraftforge/eventbus/EventBus ...
 ```
 
 At JVM shutdown, a summary reports SERVICE candidates/rejections, resource queries/rejections, indexed roots/entries, and fail-open failures. If a supported target logs `unsupported fingerprint`, remove `-javaagent` until that loader build is explicitly validated.
@@ -68,4 +81,4 @@ Rollback is only:
 1. Remove the `-javaagent:...` JVM argument.
 2. Start the same instance again.
 
-No cache migration, production version JSON edit, or save change is involved.
+No production version JSON edit or save change is involved. The optional resource image can be deleted independently.

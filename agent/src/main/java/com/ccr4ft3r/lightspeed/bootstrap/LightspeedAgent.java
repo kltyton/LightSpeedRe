@@ -13,7 +13,8 @@ public final class LightspeedAgent {
     private static final Set<String> TARGET_CLASSES = Set.of(
             "net.minecraftforge.fml.loading.ModDirTransformerDiscoverer",
             "net.neoforged.fml.loading.ModDirTransformerDiscoverer",
-            "cpw.mods.jarhandling.impl.Jar");
+            "cpw.mods.jarhandling.impl.Jar",
+            "net.minecraftforge.eventbus.EventBus");
     private static JarFile bootstrapJar;
 
     private LightspeedAgent() {
@@ -37,6 +38,7 @@ public final class LightspeedAgent {
                     .getConstructor(Consumer.class)
                     .newInstance((Consumer<String>) LightspeedAgent::log);
             hooks.getMethod("installSummaryHook").invoke(null);
+            hooks.getMethod("startResourceImageLoad").invoke(null);
             instrumentation.addTransformer(transformer, false);
             for (Class<?> loadedClass : instrumentation.getAllLoadedClasses()) {
                 if (TARGET_CLASSES.contains(loadedClass.getName())) {

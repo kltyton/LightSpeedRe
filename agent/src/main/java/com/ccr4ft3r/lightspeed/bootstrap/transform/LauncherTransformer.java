@@ -1,6 +1,7 @@
 package com.ccr4ft3r.lightspeed.bootstrap.transform;
 
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.ResourceLookupPatch;
+import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.EventBusPatch;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.ServiceDiscoveryPatch;
 
 import java.lang.instrument.ClassFileTransformer;
@@ -17,6 +18,7 @@ public final class LauncherTransformer implements ClassFileTransformer {
     private static final String FORGE_DISCOVERY = "net/minecraftforge/fml/loading/ModDirTransformerDiscoverer";
     private static final String NEOFORGE_DISCOVERY = "net/neoforged/fml/loading/ModDirTransformerDiscoverer";
     private static final String SECURE_JAR = "cpw/mods/jarhandling/impl/Jar";
+    private static final String EVENT_BUS = "net/minecraftforge/eventbus/EventBus";
     private static final Map<String, List<Target>> TARGETS = Map.of(
             FORGE_DISCOVERY, List.of(
                     target("fe801f95d52cff0afda4a64768a77a6567fcb8a55cbeed1efee491e2098142f3", ServiceDiscoveryPatch::forge),
@@ -24,8 +26,10 @@ public final class LauncherTransformer implements ClassFileTransformer {
             NEOFORGE_DISCOVERY, List.of(
                     target("7a94a5ce380ea983a337d5a8e3ea3eb84e88b584fc172c6ab314948967c9083c", ServiceDiscoveryPatch::neoForge)),
             SECURE_JAR, List.of(
-                    target("bba6a4ee9327d364967a3cfec4707d695d5962cb42a20a4b212a26434a5b9055", ResourceLookupPatch::apply),
-                    target("ce036690cdf020cafb15d4a3a84a009c6bb50cea8073ea82ada379e5778d0838", ResourceLookupPatch::apply)));
+                    target("bba6a4ee9327d364967a3cfec4707d695d5962cb42a20a4b212a26434a5b9055", ResourceLookupPatch::applyWithRegistration),
+                    target("ce036690cdf020cafb15d4a3a84a009c6bb50cea8073ea82ada379e5778d0838", ResourceLookupPatch::apply)),
+            EVENT_BUS, List.of(
+                    target("85c5db423fac7eb69107993923aa8a1967d21916fd5c9b32d36332700e31e3d0", EventBusPatch::apply)));
 
     private final Consumer<String> logger;
 
@@ -64,6 +68,10 @@ public final class LauncherTransformer implements ClassFileTransformer {
                 return null;
             }
             byte[] transformed = target.patch().apply(classfileBuffer);
+            if (SECURE_JAR.equals(className)
+                    && "bba6a4ee9327d364967a3cfec4707d695d5962cb42a20a4b212a26434a5b9055".equals(fingerprint)) {
+                System.setProperty("lightspeed.bootstrapAgent.resourceIndex", "true");
+            }
             logger.accept("patched " + className + " sha256=" + fingerprint);
             return transformed;
         } catch (RuntimeException | LinkageError exception) {

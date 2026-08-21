@@ -1,6 +1,7 @@
 package com.ccr4ft3r.lightspeed.mixin;
 
 import com.ccr4ft3r.lightspeed.cache.GlobalCache;
+import com.ccr4ft3r.lightspeed.compat.bootstrap.BootstrapAgentBridge;
 import net.minecraft.client.main.Main;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -12,6 +13,8 @@ public class MinecraftMainMixin {
 
     @Inject(method = "main", at = @At(value = "INVOKE", target = "Lnet/minecraft/SharedConstants;tryDetectVersion()V", shift = At.Shift.AFTER))
     private static void mainTryDetecVersionInjected(String[] args, CallbackInfo ci) {
-        GlobalCache.loadPersistedCachesAsync();
+        if (!BootstrapAgentBridge.isAvailable()) {
+            GlobalCache.loadPersistedCachesAsync();
+        }
     }
 }

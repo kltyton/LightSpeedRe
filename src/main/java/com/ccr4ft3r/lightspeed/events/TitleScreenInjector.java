@@ -2,6 +2,7 @@ package com.ccr4ft3r.lightspeed.events;
 
 import com.ccr4ft3r.lightspeed.ModConstants;
 import com.ccr4ft3r.lightspeed.cache.GlobalCache;
+import com.ccr4ft3r.lightspeed.compat.bootstrap.BootstrapAgentBridge;
 import com.mojang.logging.LogUtils;
 import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraftforge.api.distmarker.Dist;
@@ -50,6 +51,7 @@ public class TitleScreenInjector {
                  InvocationTargetException e) {
             LogUtils.getLogger().error("Cannot add launch time to title screen", e);
         }
+        BootstrapAgentBridge.persistResourceImage();
         GlobalCache.EXECUTOR.execute(() -> {
             try {
                 GlobalCache.disablePersistAndClear();

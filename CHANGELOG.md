@@ -6,12 +6,18 @@
 
 - 新增可选的 `lightspeed-bootstrap-agent` 双产物，通过 JVM `premain` 在 Forge 启动扫描前工作；普通 Mod JAR 仍可独立使用。
 - 为 FML SERVICE 层发现加入 ZIP 中央目录快速否定路径，并为 SecureJarHandler 不可变 JAR 根目录加入 Bloom 资源负索引。
+- 将物理 JAR 的精确资源清单共享给普通 Mod，使用排序前缀查询替代重复 UnionFS 遍历、逐项 `Path.resolve` 和分散的资源列表缓存。
+- 在Agent阶段缓存Forge EventBus的声明方法反射结果，避免大量对象监听器重复执行`Class.getDeclaredMethod`。
+- 新增有界资源字节启动镜像：首轮记录实际成功打开的标准Mod JAR资源，后续启动在整包指纹匹配时绕过UnionFS和ZIP读取。
 - 所有 ASM 补丁按目标类 SHA-256 严格匹配；未知版本、目录、多版本 JAR 和读取失败均保持原版路径并输出可诊断日志。
 
 ### English
 
 - Added the optional `lightspeed-bootstrap-agent` artifact, loaded through JVM `premain` before Forge startup discovery; the ordinary mod JAR remains independently usable.
 - Added a ZIP-central-directory fast-negative path for FML SERVICE discovery and Bloom negative resource indexes for immutable SecureJarHandler JAR roots.
+- Shared exact physical-JAR resource entries with the ordinary mod, replacing repeated UnionFS walks, per-entry `Path.resolve`, and fragmented resource-list caches with sorted prefix queries.
+- Cached Forge EventBus declared-method reflection results in the Agent, avoiding repeated `Class.getDeclaredMethod` calls while object listeners are registered.
+- Added a bounded resource-byte startup image: the first run records successfully opened standard-Mod JAR resources, and later matching launches bypass UnionFS and ZIP reads.
 - All ASM patches require an exact target-class SHA-256; unknown versions, directories, multi-release JARs, and read failures keep the original path with diagnostic logging.
 
 ## 1.20.1-1.2.3

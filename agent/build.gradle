@@ -22,6 +22,7 @@ configurations {
     neoForgeTarget { transitive = false }
     secureJar2Target { transitive = false }
     secureJar3Target { transitive = false }
+    eventBusTarget { transitive = false }
 }
 
 dependencies {
@@ -34,6 +35,7 @@ dependencies {
     neoForgeTarget 'net.neoforged.fancymodloader:loader:4.0.42'
     secureJar2Target 'cpw.mods:securejarhandler:2.1.10'
     secureJar3Target 'cpw.mods:securejarhandler:3.0.8'
+    eventBusTarget 'net.minecraftforge:eventbus:6.0.5'
 }
 
 tasks.named('jar', Jar).configure {
@@ -75,6 +77,7 @@ tasks.register('verifyAgent', JavaExec) {
     systemProperty 'lightspeed.target.neoforge', configurations.neoForgeTarget.singleFile
     systemProperty 'lightspeed.target.securejar2', configurations.secureJar2Target.singleFile
     systemProperty 'lightspeed.target.securejar3', configurations.secureJar3Target.singleFile
+    systemProperty 'lightspeed.target.eventbus', configurations.eventBusTarget.singleFile
     systemProperty 'lightspeed.agent.jar', tasks.named('shadowJar').get().archiveFile.get().asFile
 }
 

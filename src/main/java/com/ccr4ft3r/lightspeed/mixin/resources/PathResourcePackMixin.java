@@ -1,6 +1,7 @@
 package com.ccr4ft3r.lightspeed.mixin.resources;
 
 import com.ccr4ft3r.lightspeed.cache.GlobalCache;
+import com.ccr4ft3r.lightspeed.compat.bootstrap.BootstrapAgentBridge;
 import com.ccr4ft3r.lightspeed.compat.FusionPackCompat;
 import com.ccr4ft3r.lightspeed.interfaces.IPackResources;
 import com.ccr4ft3r.lightspeed.interfaces.IPathResourcePack;
@@ -23,6 +24,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.io.File;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -30,6 +32,7 @@ import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -40,6 +43,8 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
 
     @Shadow @Final private static Logger LOGGER;
     @Shadow protected abstract Path resolve(String... paths);
+    @Unique
+    private static final Map<String, Boolean> LIGHTSPEED$SAFE_LISTING_PATHS = new ConcurrentHashMap<>();
 
     
     @Unique
@@ -56,6 +61,8 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
     private Map<String, CompletableFuture<List<String>>> lightspeed$resourceListScans;
     @Unique
     private volatile boolean lightspeed$existenceCacheLoadRequested;
+    @Unique
+    private volatile boolean lightspeed$bootstrapIndexUsed;
 
     
     @Unique
@@ -111,6 +118,14 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
     public void getNamespacesHeadInjected(PackType type, CallbackInfoReturnable<Set<String>> cir) {
         if (!GlobalCache.isEnabled || FusionPackCompat.hasOverrides(this))
             return;
+        if (lightspeed$modFile != null) {
+            String[] indexed = BootstrapAgentBridge.resourceNamespaces(resolve(type.getDirectory()), type.getDirectory());
+            if (indexed != null) {
+                lightspeed$bootstrapIndexUsed = true;
+                cir.setReturnValue(Set.of(indexed));
+                return;
+            }
+        }
         Set<String> namespaces = lightspeed$getCachedNamespaces(type);
         if (namespaces != null)
             cir.setReturnValue(namespaces);
@@ -156,6 +171,16 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
         if (!GlobalCache.isEnabled || !GlobalCache.shouldCacheWalkedPaths || FusionPackCompat.hasOverrides(this)) {
             return;
         }
+        if (lightspeed$modFile != null) {
+            Path root = resolve(type.getDirectory(), location.getNamespace());
+            int bootstrapIndexed = BootstrapAgentBridge.containsResource(root,
+                    type.getDirectory() + '/' + location.getNamespace() + '/' + location.getPath());
+            if (bootstrapIndexed != BootstrapAgentBridge.UNKNOWN) {
+                lightspeed$bootstrapIndexUsed = true;
+                cir.setReturnValue(bootstrapIndexed == 1 ? lightspeed$openResource(type, location) : null);
+                return;
+            }
+        }
         Boolean indexed = lightspeed$hasIndexedResource(type, location);
         if (indexed != null) {
             cir.setReturnValue(indexed ? lightspeed$openResource(type, location) : null);
@@ -166,6 +191,26 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
     public void listResourcesHeadInjected(PackType type, String namespace, String path, PackResources.ResourceOutput resourceOutput, CallbackInfo ci) {
         if (!GlobalCache.isEnabled || !GlobalCache.shouldCacheWalkedPaths || FusionPackCompat.hasOverrides(this)) {
             return;
+        }
+
+        if (lightspeed$modFile != null && lightspeed$isSafeListingPath(path)) {
+            Path root = resolve(type.getDirectory(), namespace).toAbsolutePath();
+            String[] indexed = BootstrapAgentBridge.resourceEntries(
+                    root, type.getDirectory() + '/' + namespace, path);
+            if (indexed != null) {
+                lightspeed$bootstrapIndexUsed = true;
+                for (String resourcePath : indexed) {
+                    ResourceLocation location = ResourceLocation.tryBuild(namespace, resourcePath);
+                    if (location == null) {
+                        Util.logAndPauseIfInIde(String.format(Locale.ROOT,
+                                "Invalid path in pack: %s:%s, ignoring", namespace, resourcePath));
+                    } else {
+                        resourceOutput.accept(location, lightspeed$openResource(type, location));
+                    }
+                }
+                ci.cancel();
+                return;
+            }
         }
 
         boolean[] fallbackToVanilla = {false};
@@ -216,7 +261,9 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
                 CacheUtil.persist(lightspeed$getExistenceByResource(), new File(HAS_RESOURCE_CACHE_DIR.getPath(), lightspeed$id + ".ser"));
             }
             CacheUtil.persist(lightspeed$namespaces(), new File(NAMESPACE_CACHE_DIR.getPath(), lightspeed$id + ".ser"));
-            CacheUtil.persist(lightspeed$relativeFilePaths(), new File(RESOURCE_LIST_CACHE_DIR.getPath(), lightspeed$id + ".ser"));
+            if (!lightspeed$bootstrapIndexUsed) {
+                CacheUtil.persist(lightspeed$relativeFilePaths(), new File(RESOURCE_LIST_CACHE_DIR.getPath(), lightspeed$id + ".ser"));
+            }
         }
         lightspeed$getExistenceByResource().clear();
         lightspeed$resolvedPaths().clear();
@@ -242,6 +289,9 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
     @Override
     public void lightspeed$startAsyncPreload() {
         if (!GlobalCache.isEnabled || !GlobalCache.shouldAsyncPreloadPacks) {
+            return;
+        }
+        if (BootstrapAgentBridge.isAvailable()) {
             return;
         }
 
@@ -360,6 +410,39 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
     }
 
     @Unique
+    private static boolean lightspeed$isSafeListingPath(String path) {
+        if (path == null) {
+            return false;
+        }
+        return LIGHTSPEED$SAFE_LISTING_PATHS.computeIfAbsent(path, PathResourcePackMixin::lightspeed$checkSafeListingPath);
+    }
+
+    @Unique
+    private static boolean lightspeed$checkSafeListingPath(String path) {
+        int length = path.length();
+        if (length == 0) {
+            return true;
+        }
+        if (!ResourceLocation.isValidPath(path) || path.charAt(0) == '/' || path.charAt(length - 1) == '/') {
+            return false;
+        }
+        int segmentStart = 0;
+        for (int index = 0; index <= length; index++) {
+            if (index != length && path.charAt(index) != '/') {
+                continue;
+            }
+            int segmentLength = index - segmentStart;
+            if (segmentLength == 0
+                    || segmentLength == 1 && path.charAt(segmentStart) == '.'
+                    || segmentLength == 2 && path.charAt(segmentStart) == '.' && path.charAt(segmentStart + 1) == '.') {
+                return false;
+            }
+            segmentStart = index + 1;
+        }
+        return true;
+    }
+
+    @Unique
     private void lightspeed$requestExistenceCacheLoad() {
         if (!GlobalCache.isEnabled || !GlobalCache.shouldCacheResourceExistence || lightspeed$id == null || lightspeed$existenceCacheLoadRequested) {
             return;
@@ -460,7 +543,21 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
     @Unique
     private IoSupplier<InputStream> lightspeed$openResource(PackType type, ResourceLocation location) {
         PackType effectiveType = lightspeed$effectiveType(type, location);
-        return () -> Files.newInputStream(resolve(lightspeed$getPathParts(effectiveType, location)));
+        String[] parts = lightspeed$getPathParts(effectiveType, location);
+        Path path = resolve(parts);
+        if (lightspeed$modFile == null || !BootstrapAgentBridge.isAvailable()) {
+            return () -> Files.newInputStream(path);
+        }
+        String name = String.join("/", parts);
+        byte[] cached = BootstrapAgentBridge.resourceBytes(path, name);
+        if (cached != null) {
+            return () -> new ByteArrayInputStream(cached);
+        }
+        return () -> {
+            byte[] bytes = Files.readAllBytes(path);
+            BootstrapAgentBridge.recordResourceBytes(path, name, bytes);
+            return new ByteArrayInputStream(bytes);
+        };
     }
 
     @Unique

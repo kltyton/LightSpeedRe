@@ -1,6 +1,8 @@
 package com.ccr4ft3r.lightspeed.bootstrap;
 
 import com.ccr4ft3r.lightspeed.bootstrap.runtime.BootstrapHooks;
+import com.ccr4ft3r.lightspeed.bootstrap.runtime.event.EventMethodCache;
+import com.ccr4ft3r.lightspeed.bootstrap.runtime.image.StartupResourceImage;
 import com.ccr4ft3r.lightspeed.bootstrap.runtime.index.ResourceMembershipIndex;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.LauncherTransformer;
 import org.objectweb.asm.ClassReader;
@@ -11,7 +13,7 @@ import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.util.CheckClassAdapter;
 
 import java.io.IOException;
-import java.net.URI;
+import java.lang.reflect.Method;
 import java.nio.file.FileSystem;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
@@ -21,6 +23,7 @@ import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.jar.Attributes;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
@@ -38,6 +41,8 @@ public final class AgentRegressionCheck {
         rejectsUnknownClassFingerprint();
         servicePrefilterIsFailOpen();
         resourceIndexHasNoFalseNegatives();
+        resourceImagePersistsRecordedBytes();
+        eventMethodCachePreservesReflectionSemantics();
         packagedAgentIsIsolated();
     }
 
@@ -50,10 +55,14 @@ public final class AgentRegressionCheck {
             byte[] transformed = transformer.transform(null, null, target.className(), null, null, original);
             require(transformed != null, "supported target was not transformed: " + target.className());
             require(!MessageDigest.isEqual(original, transformed), "transform returned unchanged bytes: " + target.className());
-            require(hasHookCall(transformed, target.hookName()), "transformed class lacks hook " + target.hookName());
+            for (String hookName : target.hookNames()) {
+                require(hasHookCall(transformed, hookName), "transformed class lacks hook " + hookName);
+            }
             new ClassReader(transformed).accept(new CheckClassAdapter(new ClassWriter(0), true), 0);
         }
         require(messages.stream().noneMatch(message -> message.contains("failed")), "supported transform logged failure");
+        require(Boolean.getBoolean("lightspeed.bootstrapAgent.resourceIndex"),
+                "Forge resource index capability was not published");
     }
 
     private static void rejectsUnknownClassFingerprint() throws Exception {
@@ -94,13 +103,17 @@ public final class AgentRegressionCheck {
         try {
             Path archive = jar(directory.resolve("resources.jar"), Map.of(
                     "present.txt", new byte[]{1},
-                    "nested/also-present.txt", new byte[]{2}), false);
+                    "nested/also-present.txt", new byte[]{2},
+                    "nested-other/not-a-child.txt", new byte[]{3}), false);
             long qualificationChecks = ResourceMembershipIndex.qualificationChecks();
             try (FileSystem zip = FileSystems.newFileSystem(archive)) {
                 Path root = zip.getPath("/");
                 require(BootstrapHooks.mightContain(root, archive, "present.txt"), "present resource was rejected");
                 require(BootstrapHooks.mightContain(root, archive, "nested/also-present.txt"), "nested resource was rejected");
                 require(!BootstrapHooks.mightContain(root, archive, "missing.txt"), "missing resource was not rejected");
+                require(List.of(BootstrapHooks.resourceEntries(root, "", "nested"))
+                                .equals(List.of("nested/also-present.txt")),
+                        "prefix resource listing crossed a path-segment boundary");
             }
             require(ResourceMembershipIndex.qualificationChecks() == qualificationChecks + 1,
                     "physical JAR qualification repeated for one indexed root");
@@ -112,6 +125,26 @@ public final class AgentRegressionCheck {
                         "multi-release index did not fail open");
             }
             require(BootstrapHooks.mightContain(directory, directory, "anything"), "mutable directory did not fail open");
+
+            Path first = jar(directory.resolve("first.jar"), Map.of(
+                    "assets/first/one.txt", new byte[]{1},
+                    "assets/first/hidden.txt", new byte[]{2}), false);
+            Path second = jar(directory.resolve("second.jar"),
+                    Map.of("assets/second/two.txt", new byte[]{3}), false);
+            try (FileSystem zip = FileSystems.newFileSystem(first)) {
+                Path root = zip.getPath("/");
+                BootstrapHooks.registerResourceRoot(root, first,
+                        (name, base) -> !name.endsWith("hidden.txt"), new Path[]{first, second});
+                require(BootstrapHooks.mightContain(root, first, "assets/first/one.txt"),
+                        "first union resource was rejected");
+                require(BootstrapHooks.mightContain(root, first, "assets/second/two.txt"),
+                        "second union resource was rejected");
+                require(!BootstrapHooks.mightContain(root, first, "assets/first/hidden.txt"),
+                        "filtered union resource was retained");
+                require(Set.of(BootstrapHooks.resourceNamespaces(root, "assets"))
+                                .equals(Set.of("first", "second")),
+                        "namespace index did not preserve all physical roots");
+            }
         } finally {
             deleteTree(directory);
         }
@@ -133,6 +166,41 @@ public final class AgentRegressionCheck {
         }
     }
 
+    private static void eventMethodCachePreservesReflectionSemantics() throws Exception {
+        Method inherited = EventMethodParent.class.getMethod("handle", String.class);
+        long hits = EventMethodCache.hits();
+        require(EventMethodCache.declaredMethod(EventMethodParent.class, inherited).orElseThrow().equals(inherited),
+                "declared event method lookup changed the reflected method");
+        require(EventMethodCache.declaredMethod(EventMethodParent.class, inherited).orElseThrow().equals(inherited),
+                "cached event method lookup changed the reflected method");
+        require(EventMethodCache.hits() == hits + 1, "event method cache did not record the repeated lookup");
+        require(EventMethodCache.declaredMethod(String.class, inherited).isEmpty(),
+                "missing declared event method did not remain empty");
+    }
+
+    private static void resourceImagePersistsRecordedBytes() throws IOException {
+        Path directory = Files.createTempDirectory("lightspeed-agent-image-");
+        String previous = System.getProperty("lightspeed.bootstrapCacheDir");
+        try {
+            System.setProperty("lightspeed.bootstrapCacheDir", directory.toString());
+            byte[] expected = new byte[]{1, 2, 3, 4};
+            StartupResourceImage.record("test.jar\0assets/test/value.bin", expected);
+            require(MessageDigest.isEqual(expected,
+                            StartupResourceImage.get("test.jar\0assets/test/value.bin")),
+                    "recorded resource image bytes were not readable");
+            StartupResourceImage.persist();
+            require(Files.size(directory.resolve("resource-image-v1.bin")) > expected.length,
+                    "resource image was not persisted");
+        } finally {
+            if (previous == null) {
+                System.clearProperty("lightspeed.bootstrapCacheDir");
+            } else {
+                System.setProperty("lightspeed.bootstrapCacheDir", previous);
+            }
+            deleteTree(directory);
+        }
+    }
+
     private static List<Target> targets() {
         return List.of(
                 target("lightspeed.target.forge.production", "net/minecraftforge/fml/loading/ModDirTransformerDiscoverer",
@@ -142,14 +210,18 @@ public final class AgentRegressionCheck {
                 target("lightspeed.target.neoforge", "net/neoforged/fml/loading/ModDirTransformerDiscoverer",
                         "7a94a5ce380ea983a337d5a8e3ea3eb84e88b584fc172c6ab314948967c9083c", "mayProvideTransformerService"),
                 target("lightspeed.target.securejar2", "cpw/mods/jarhandling/impl/Jar",
-                        "bba6a4ee9327d364967a3cfec4707d695d5962cb42a20a4b212a26434a5b9055", "mightContain"),
+                        "bba6a4ee9327d364967a3cfec4707d695d5962cb42a20a4b212a26434a5b9055",
+                        "registerResourceRoot", "mightContain"),
                 target("lightspeed.target.securejar3", "cpw/mods/jarhandling/impl/Jar",
-                        "ce036690cdf020cafb15d4a3a84a009c6bb50cea8073ea82ada379e5778d0838", "mightContain")
+                        "ce036690cdf020cafb15d4a3a84a009c6bb50cea8073ea82ada379e5778d0838", "mightContain"),
+                target("lightspeed.target.eventbus", "net/minecraftforge/eventbus/EventBus",
+                        "85c5db423fac7eb69107993923aa8a1967d21916fd5c9b32d36332700e31e3d0",
+                        "declaredEventMethod")
         );
     }
 
-    private static Target target(String property, String className, String sha256, String hookName) {
-        return new Target(Path.of(requireProperty(property)), className + ".class", className, sha256, hookName);
+    private static Target target(String property, String className, String sha256, String... hookNames) {
+        return new Target(Path.of(requireProperty(property)), className + ".class", className, sha256, List.of(hookNames));
     }
 
     private static String requireProperty(String name) {
@@ -223,6 +295,11 @@ public final class AgentRegressionCheck {
         }
     }
 
-    private record Target(Path jar, String entry, String className, String sha256, String hookName) {
+    private record Target(Path jar, String entry, String className, String sha256, List<String> hookNames) {
+    }
+
+    public static class EventMethodParent {
+        public void handle(String value) {
+        }
     }
 }
