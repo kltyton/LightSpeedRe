@@ -69,7 +69,11 @@ The Agent patches SecureJarHandler's `ModuleClassLoader.getClassBytes` and recor
 
 ### Forge scan-metadata image
 
-Forge 47.4 scans class files with ASM to construct `ModFileScanData`. The Agent stores a neutral, bounded representation of each class/annotation record and reconstructs the same ForgeSPI record types on a cache hit. Language-loader visitors still run after the core scan. The image defaults to 128 MiB (`-Dlightspeed.scanImageMiB=<16..512>`); set `-Dlightspeed.scanMetadataCache=false` to disable it. Unsupported values, stale fingerprints, module-access failures, and corrupt entries fall back to Forge's original scanner.
+Forge 47.4 walks every visible class, verifies it, and parses it with ASM to construct `ModFileScanData`. The Agent stores one neutral aggregate of all core class/annotation records per Mod. On a hit it restores the same ForgeSPI record types before `ModFile.scanFile`, skipping that Mod's complete `Files.find`, class verification and ASM pass. Current `IModFileInfo` and language-loader visitors still execute every launch.
+
+Each Mod key combines its physical path with a SHA-256 digest of the visible ZIP central-directory names, CRCs, sizes, compression sizes and methods. The scan image uses a Loader/Java environment fingerprint rather than a whole-Mod-set fingerprint: changing one Mod misses and rebuilds only that aggregate, while unchanged Mod keys remain valid. Signed archives, directory/multi-release roots, incomplete class counts, unsupported values, stale environments, corrupt entries and module-access failures retain Forge's original scanner. Unsigned hits restore Forge's original `UNVERIFIED`/`INVALID` security status; signed archives are never short-circuited.
+
+The aggregate image is `scan-image-v2.bin` and defaults to 128 MiB (`-Dlightspeed.scanImageMiB=<16..512>`). Set `-Dlightspeed.scanMetadataCache=false` to disable it. At persistence, entries for removed or replaced Mods are compacted out.
 
 ### Rejected transformed-bytecode cache
 
@@ -95,4 +99,4 @@ Rollback is only:
 1. Remove the `-javaagent:...` JVM argument.
 2. Start the same instance again.
 
-No production version JSON edit or save change is involved. The optional `resource-image-v2.bin`, `class-image-v1.bin`, and `scan-image-v1.bin` files can be deleted independently.
+No production version JSON edit or save change is involved. The optional `resource-image-v3.bin`, `class-image-v2.bin`, and `scan-image-v2.bin` files can be deleted independently.

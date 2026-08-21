@@ -15,6 +15,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
+import java.util.function.Predicate;
 
 final class StartupByteImage {
     private static final int MAGIC = 0x4c534249;
@@ -92,16 +93,31 @@ final class StartupByteImage {
     }
 
     void persist() {
-        if (recorded.isEmpty()) {
-            return;
-        }
+        persist(ignored -> true);
+    }
+
+    void persist(Predicate<String> retain) {
         Map<String, byte[]> entries = new HashMap<>();
+        Map<String, byte[]> existing;
         try {
-            entries.putAll(loadFuture().join());
+            existing = loadFuture().join();
         } catch (RuntimeException exception) {
             failures.increment();
+            existing = Map.of();
         }
-        entries.putAll(recorded);
+        existing.forEach((key, value) -> {
+            if (retain.test(key)) {
+                entries.put(key, value);
+            }
+        });
+        recorded.forEach((key, value) -> {
+            if (retain.test(key)) {
+                entries.put(key, value);
+            }
+        });
+        if (recorded.isEmpty() && entries.size() == existing.size()) {
+            return;
+        }
         Path temporary = file.resolveSibling(file.getFileName() + ".tmp");
         try {
             Files.createDirectories(file.getParent());

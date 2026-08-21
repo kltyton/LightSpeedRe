@@ -21,20 +21,23 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class ScanMetadataCache {
     private static final int MAGIC = 0x4c53534d;
-    private static final int VERSION = 1;
+    private static final int VERSION = 2;
     private static final int MAX_COLLECTION_SIZE = 100_000;
     private static final boolean ENABLED =
             Boolean.parseBoolean(System.getProperty("lightspeed.scanMetadataCache", "true"));
     private static final LongAdder HITS = new LongAdder();
     private static final LongAdder MISSES = new LongAdder();
     private static final LongAdder RECORDED = new LongAdder();
+    private static final LongAdder INCOMPLETE = new LongAdder();
     private static final LongAdder FAILURES = new LongAdder();
     private static final AtomicBoolean FAILURE_LOGGED = new AtomicBoolean();
+    private static final Set<String> ACTIVE_KEYS = ConcurrentHashMap.newKeySet();
     private static final ClassValue<Access> ACCESS = new ClassValue<>() {
         @Override
         protected Access computeValue(Class<?> type) {
@@ -45,8 +48,50 @@ public final class ScanMetadataCache {
             }
         }
     };
+    private static final ClassValue<ModAccess> MOD_ACCESS = new ClassValue<>() {
+        @Override
+        protected ModAccess computeValue(Class<?> type) {
+            try {
+                return new ModAccess(type);
+            } catch (ReflectiveOperationException exception) {
+                throw new IllegalStateException("unsupported Forge ModFile model", exception);
+            }
+        }
+    };
 
     private ScanMetadataCache() {
+    }
+
+    public static boolean replay(Object modFile, Object scanData) {
+        if (!ENABLED || modFile == null || scanData == null) {
+            return false;
+        }
+        try {
+            ModAccess modAccess = MOD_ACCESS.get(modFile.getClass());
+            if (modAccess.hasSecurityData(modFile)) {
+                return false;
+            }
+            Path root = modAccess.rootPath(modFile);
+            String key = ResourceMembershipIndex.persistentPathKey(root);
+            if (key == null) {
+                MISSES.increment();
+                return false;
+            }
+            ACTIVE_KEYS.add(key);
+            byte[] encoded = StartupResourceImage.scanMetadata(key);
+            if (encoded == null) {
+                MISSES.increment();
+                return false;
+            }
+            modAccess.restoreUnsignedStatus(modFile, cachedClassCount(encoded));
+            ACCESS.get(scanData.getClass()).decodeInto(scanData, encoded);
+            HITS.increment();
+            return true;
+        } catch (ReflectiveOperationException | IOException | RuntimeException | LinkageError exception) {
+            FAILURES.increment();
+            logFailure("replay aggregate Mod scan", exception);
+            return false;
+        }
     }
 
     public static boolean replay(Path path, Object scanData) {
@@ -58,6 +103,7 @@ public final class ScanMetadataCache {
             MISSES.increment();
             return false;
         }
+        ACTIVE_KEYS.add(key);
         byte[] encoded = StartupResourceImage.scanMetadata(key);
         if (encoded == null) {
             MISSES.increment();
@@ -74,6 +120,29 @@ public final class ScanMetadataCache {
         }
     }
 
+    public static void record(Object modFile, Object scanData) {
+        if (!ENABLED || modFile == null || scanData == null) {
+            return;
+        }
+        try {
+            ModAccess modAccess = MOD_ACCESS.get(modFile.getClass());
+            if (modAccess.hasSecurityData(modFile)) {
+                return;
+            }
+            Path root = modAccess.rootPath(modFile);
+            int expected = ResourceMembershipIndex.classEntryCount(root);
+            int actual = ACCESS.get(scanData.getClass()).classCount(scanData);
+            if (expected == ResourceMembershipIndex.UNKNOWN || actual != expected) {
+                INCOMPLETE.increment();
+                return;
+            }
+            record(root, scanData);
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError exception) {
+            FAILURES.increment();
+            logFailure("record aggregate Mod scan", exception);
+        }
+    }
+
     public static void record(Path path, Object scanData) {
         if (!ENABLED) {
             return;
@@ -82,8 +151,9 @@ public final class ScanMetadataCache {
         if (key == null || scanData == null) {
             return;
         }
+        ACTIVE_KEYS.add(key);
         try {
-            byte[] encoded = ACCESS.get(scanData.getClass()).encodeClass(path, scanData);
+            byte[] encoded = ACCESS.get(scanData.getClass()).encode(scanData);
             if (encoded != null) {
                 StartupResourceImage.recordScanMetadata(key, encoded);
                 RECORDED.increment();
@@ -108,6 +178,75 @@ public final class ScanMetadataCache {
 
     public static long failures() {
         return FAILURES.sum();
+    }
+
+    public static long incomplete() {
+        return INCOMPLETE.sum();
+    }
+
+    public static Set<String> activeKeys() {
+        return Set.copyOf(ACTIVE_KEYS);
+    }
+
+    private static int cachedClassCount(byte[] encoded) throws IOException {
+        try (DataInputStream input = new DataInputStream(new ByteArrayInputStream(encoded))) {
+            if (input.readInt() != MAGIC || input.readInt() != VERSION) {
+                throw new IOException("unsupported scan metadata cache");
+            }
+            return readCount(input);
+        }
+    }
+
+    private static final class ModAccess {
+        private final Method findResource;
+        private final Method getSecureJar;
+        private final Method setSecurityStatus;
+        private final Method hasSecurityData;
+        private final Object unverified;
+        private final Object invalid;
+
+        private ModAccess(Class<?> modFileType) throws ReflectiveOperationException {
+            RuntimeModuleAccess.openToAgent(modFileType);
+            this.findResource = modFileType.getMethod("findResource", String[].class);
+            this.getSecureJar = modFileType.getMethod("getSecureJar");
+            Class<?> secureJarType = getSecureJar.getReturnType();
+            this.hasSecurityData = secureJarType.getMethod("hasSecurityData");
+            this.setSecurityStatus = statusSetter(modFileType);
+            Class<?> statusType = setSecurityStatus.getParameterTypes()[0];
+            this.unverified = enumConstant(statusType, "UNVERIFIED");
+            this.invalid = enumConstant(statusType, "INVALID");
+        }
+
+        private Path rootPath(Object modFile) throws ReflectiveOperationException {
+            return (Path) findResource.invoke(modFile, (Object) new String[]{""});
+        }
+
+        private boolean hasSecurityData(Object modFile) throws ReflectiveOperationException {
+            Object secureJar = getSecureJar.invoke(modFile);
+            return (Boolean) hasSecurityData.invoke(secureJar);
+        }
+
+        private void restoreUnsignedStatus(Object modFile, int classCount) throws ReflectiveOperationException {
+            setSecurityStatus.invoke(modFile, classCount == 0 ? invalid : unverified);
+        }
+
+        private static Object enumConstant(Class<?> type, String name) {
+            for (Object constant : type.getEnumConstants()) {
+                if (((Enum<?>) constant).name().equals(name)) {
+                    return constant;
+                }
+            }
+            throw new IllegalStateException("missing SecureJar status " + name);
+        }
+
+        private static Method statusSetter(Class<?> modFileType) throws NoSuchMethodException {
+            for (Method method : modFileType.getMethods()) {
+                if (method.getName().equals("setSecurityStatus") && method.getParameterCount() == 1) {
+                    return method;
+                }
+            }
+            throw new NoSuchMethodException(modFileType.getName() + ".setSecurityStatus");
+        }
     }
 
     private static final class Access {
@@ -184,52 +323,37 @@ public final class ScanMetadataCache {
             this.enumValue = enumHolder.getMethod("getValue");
         }
 
-        private byte[] encodeClass(Path path, Object scanData) throws ReflectiveOperationException, IOException {
-            Set<?> classes = (Set<?>) getClasses.invoke(scanData);
-            Object selected = null;
-            String descriptor = null;
-            String normalizedPath = ResourceMembershipIndex.normalize(path.toString());
-            for (Object candidate : classes) {
-                String candidateDescriptor = descriptor(classType.invoke(candidate));
-                String classPath = candidateDescriptor.substring(1, candidateDescriptor.length() - 1) + ".class";
-                if (normalizedPath.endsWith(classPath)) {
-                    if (selected != null) {
-                        return null;
-                    }
-                    selected = candidate;
-                    descriptor = candidateDescriptor;
-                }
-            }
-            if (selected == null) {
-                return null;
-            }
+        private int classCount(Object scanData) throws ReflectiveOperationException {
+            return ((Set<?>) getClasses.invoke(scanData)).size();
+        }
 
+        private byte[] encode(Object scanData) throws ReflectiveOperationException, IOException {
+            Set<?> classes = (Set<?>) getClasses.invoke(scanData);
             ByteArrayOutputStream bytes = new ByteArrayOutputStream();
             try (DataOutputStream output = new DataOutputStream(bytes)) {
                 output.writeInt(MAGIC);
                 output.writeInt(VERSION);
-                writeString(output, descriptor);
-                writeNullableString(output, descriptor(parentType.invoke(selected)));
-                List<String> interfaceDescriptors = new ArrayList<>();
-                for (Object type : (Set<?>) interfaces.invoke(selected)) {
-                    interfaceDescriptors.add(descriptor(type));
-                }
-                interfaceDescriptors.sort(Comparator.naturalOrder());
-                output.writeInt(interfaceDescriptors.size());
-                for (String value : interfaceDescriptors) {
-                    writeString(output, value);
-                }
-
-                List<Object> annotations = new ArrayList<>();
-                for (Object annotation : (Set<?>) getAnnotations.invoke(scanData)) {
-                    if (descriptor.equals(descriptor(annotationClass.invoke(annotation)))) {
-                        annotations.add(annotation);
+                output.writeInt(classes.size());
+                for (Object classData : classes) {
+                    writeString(output, descriptor(classType.invoke(classData)));
+                    writeNullableString(output, descriptor(parentType.invoke(classData)));
+                    List<String> interfaceDescriptors = new ArrayList<>();
+                    for (Object type : (Set<?>) interfaces.invoke(classData)) {
+                        interfaceDescriptors.add(descriptor(type));
+                    }
+                    interfaceDescriptors.sort(Comparator.naturalOrder());
+                    output.writeInt(interfaceDescriptors.size());
+                    for (String value : interfaceDescriptors) {
+                        writeString(output, value);
                     }
                 }
+
+                Set<?> annotations = (Set<?>) getAnnotations.invoke(scanData);
                 output.writeInt(annotations.size());
                 for (Object annotation : annotations) {
                     writeString(output, descriptor(annotationType.invoke(annotation)));
                     writeString(output, ((ElementType) targetType.invoke(annotation)).name());
+                    writeString(output, descriptor(annotationClass.invoke(annotation)));
                     writeNullableString(output, (String) memberName.invoke(annotation));
                     writeMap(output, (Map<?, ?>) annotationValues.invoke(annotation));
                 }
@@ -243,21 +367,25 @@ public final class ScanMetadataCache {
                 if (input.readInt() != MAGIC || input.readInt() != VERSION) {
                     throw new IOException("unsupported scan metadata cache");
                 }
-                Object clazz = type(readString(input));
-                Object parent = type(readNullableString(input));
-                int interfaceCount = readCount(input);
-                Set<Object> interfaceTypes = new LinkedHashSet<>();
-                for (int index = 0; index < interfaceCount; index++) {
-                    interfaceTypes.add(type(readString(input)));
+                Set<Object> classes = (Set<Object>) getClasses.invoke(scanData);
+                int classCount = readCount(input);
+                for (int classIndex = 0; classIndex < classCount; classIndex++) {
+                    Object clazz = type(readString(input));
+                    Object parent = type(readNullableString(input));
+                    int interfaceCount = readCount(input);
+                    Set<Object> interfaceTypes = new LinkedHashSet<>();
+                    for (int index = 0; index < interfaceCount; index++) {
+                        interfaceTypes.add(type(readString(input)));
+                    }
+                    classes.add(classDataConstructor.newInstance(clazz, parent, Set.copyOf(interfaceTypes)));
                 }
-                ((Set<Object>) getClasses.invoke(scanData)).add(
-                        classDataConstructor.newInstance(clazz, parent, Set.copyOf(interfaceTypes)));
 
                 int annotationCount = readCount(input);
                 Set<Object> annotations = (Set<Object>) getAnnotations.invoke(scanData);
                 for (int index = 0; index < annotationCount; index++) {
                     Object annotation = type(readString(input));
                     ElementType target = ElementType.valueOf(readString(input));
+                    Object clazz = type(readString(input));
                     String member = readNullableString(input);
                     Map<String, Object> values = readMap(input);
                     annotations.add(annotationDataConstructor.newInstance(annotation, target, clazz, member, values));

@@ -4,21 +4,29 @@ import java.io.IOException;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 import java.util.BitSet;
+import java.util.HexFormat;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.function.BiPredicate;
 import java.util.jar.JarFile;
 
 final class JarResourceIndex {
-    private static final JarResourceIndex UNSUPPORTED = new JarResourceIndex(null, null);
+    private static final JarResourceIndex UNSUPPORTED = new JarResourceIndex(null, null, null, -1);
     private final String[] entries;
     private final Bloom bloom;
+    private final String sourceIdentity;
+    private final int classEntries;
 
-    private JarResourceIndex(String[] entries, Bloom bloom) {
+    private JarResourceIndex(String[] entries, Bloom bloom, String sourceIdentity, int classEntries) {
         this.entries = entries;
         this.bloom = bloom;
+        this.sourceIdentity = sourceIdentity;
+        this.classEntries = classEntries;
     }
 
     static JarResourceIndex build(ResourceMembershipIndex.RootRegistration registration) {
@@ -26,13 +34,27 @@ final class JarResourceIndex {
             return UNSUPPORTED;
         }
         TreeSet<String> names = new TreeSet<>();
+        MessageDigest digest = sha256();
         for (Path path : registration.paths()) {
-            if (!isPhysicalJar(path) || !addJarEntries(path, registration.filter(), names)) {
+            if (!isPhysicalJar(path)) {
+                return UNSUPPORTED;
+            }
+            Path normalized = path.toAbsolutePath().normalize();
+            update(digest, normalized.toString());
+            try {
+                update(digest, Files.size(normalized) + "\t" + Files.getLastModifiedTime(normalized).toMillis());
+            } catch (IOException exception) {
+                return UNSUPPORTED;
+            }
+            if (!addJarEntries(path, registration.filter(), names, digest)) {
                 return UNSUPPORTED;
             }
         }
         String[] entries = names.toArray(String[]::new);
-        return new JarResourceIndex(entries, Bloom.create(entries));
+        String identity = registration.paths()[0].toAbsolutePath().normalize() + "\t"
+                + HexFormat.of().formatHex(digest.digest());
+        int classEntries = (int) Arrays.stream(entries).filter(name -> name.endsWith(".class")).count();
+        return new JarResourceIndex(entries, Bloom.create(entries), identity, classEntries);
     }
 
     static JarResourceIndex unsupported() {
@@ -45,6 +67,14 @@ final class JarResourceIndex {
 
     int size() {
         return entries == null ? 0 : entries.length;
+    }
+
+    String sourceIdentity() {
+        return sourceIdentity;
+    }
+
+    int classEntryCount() {
+        return classEntries;
     }
 
     boolean contains(String name) {
@@ -68,7 +98,8 @@ final class JarResourceIndex {
         return new JarResourceView(relative, Bloom.create(relative), imageSource, rootPrefix);
     }
 
-    private static boolean addJarEntries(Path path, BiPredicate<String, String> filter, Set<String> names) {
+    private static boolean addJarEntries(Path path, BiPredicate<String, String> filter, Set<String> names,
+                                         MessageDigest digest) {
         try (JarFile jar = new JarFile(path.toFile(), false)) {
             if (jar.isMultiRelease()) {
                 return false;
@@ -78,12 +109,28 @@ final class JarResourceIndex {
                 String name = ResourceMembershipIndex.normalize(entry.getName());
                 if (filter == null || filter.test(name, base)) {
                     names.add(name);
+                    update(digest, name);
+                    update(digest, entry.getCrc() + "\t" + entry.getSize() + "\t"
+                            + entry.getCompressedSize() + "\t" + entry.getMethod());
                 }
             });
             return true;
         } catch (IOException | RuntimeException exception) {
             return false;
         }
+    }
+
+    private static MessageDigest sha256() {
+        try {
+            return MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 is unavailable", exception);
+        }
+    }
+
+    private static void update(MessageDigest digest, String value) {
+        digest.update(value.getBytes(StandardCharsets.UTF_8));
+        digest.update((byte) 0);
     }
 
     private static boolean isPhysicalJar(Path path) {

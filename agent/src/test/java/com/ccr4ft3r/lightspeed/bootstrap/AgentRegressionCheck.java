@@ -218,12 +218,19 @@ public final class AgentRegressionCheck {
         try {
             System.setProperty("lightspeed.bootstrapCacheDir", directory.toString());
             byte[] expected = new byte[]{1, 2, 3, 4};
-            StartupResourceImage.recordResource("test.jar\0assets/test/value.bin", expected);
-            require(MessageDigest.isEqual(expected,
-                            StartupResourceImage.resource("test.jar\0assets/test/value.bin")),
-                    "recorded resource image bytes were not readable");
+            Path archive = jar(directory.resolve("resource-image.jar"),
+                    Map.of("assets/test/value.bin", expected), false);
+            try (FileSystem zip = FileSystems.newFileSystem(archive)) {
+                Path root = zip.getPath("/");
+                BootstrapHooks.mightContain(root, archive, "assets/test/value.bin");
+                String rootKey = ResourceMembershipIndex.persistentPathKey(root);
+                String key = rootKey.substring(0, rootKey.indexOf('\0')) + "\0assets/test/value.bin";
+                StartupResourceImage.recordResource(key, expected);
+                require(MessageDigest.isEqual(expected, StartupResourceImage.resource(key)),
+                        "recorded resource image bytes were not readable");
+            }
             StartupResourceImage.persist();
-            require(Files.size(directory.resolve("resource-image-v2.bin")) > expected.length,
+            require(Files.size(directory.resolve("resource-image-v3.bin")) > expected.length,
                     "resource image was not persisted");
         } finally {
             if (previous == null) {
@@ -238,33 +245,65 @@ public final class AgentRegressionCheck {
     private static void scanMetadataRoundTripsWithoutClassIo() throws IOException {
         Path directory = Files.createTempDirectory("lightspeed-agent-scan-");
         try {
-            Path archive = jar(directory.resolve("scan.jar"),
-                    Map.of("nested/Test.class", new byte[]{1}), false);
+            Path archive = jar(directory.resolve("scan.jar"), Map.of(
+                    "nested/Test.class", new byte[]{1},
+                    "nested/Second.class", new byte[]{2}), false);
+            String unchangedKey;
             try (FileSystem zip = FileSystems.newFileSystem(archive)) {
                 Path root = zip.getPath("/");
                 BootstrapHooks.mightContain(root, archive, "nested/Test.class");
-                Path classPath = root.resolve("nested/Test.class");
                 Type classType = Type.getObjectType("nested/Test");
+                Type secondType = Type.getObjectType("nested/Second");
                 ModFileScanData source = new ModFileScanData();
                 source.getClasses().add(new ModFileScanData.ClassData(
                         classType, Type.getType(Object.class), Set.of(Type.getType(Runnable.class))));
+                source.getClasses().add(new ModFileScanData.ClassData(
+                        secondType, Type.getType(Object.class), Set.of()));
                 source.getAnnotations().add(new ModFileScanData.AnnotationData(
                         Type.getType(Deprecated.class), ElementType.TYPE, classType, null,
                         Map.of("name", "cached", "kind", new ModAnnotation.EnumHolder("Lsample/Kind;", "VALUE"),
                                 "nested", Map.of("type", Type.getType(String.class)),
                                 "values", List.of(1, true, "three"))));
+                source.getAnnotations().add(new ModFileScanData.AnnotationData(
+                        Type.getType(SuppressWarnings.class), ElementType.TYPE, secondType, null,
+                        Map.of("value", List.of("unused"))));
 
-                ScanMetadataCache.record(classPath, source);
+                unchangedKey = ResourceMembershipIndex.persistentPathKey(root);
+                ScanMetadataCache.record(root, source);
                 ModFileScanData restored = new ModFileScanData();
-                require(ScanMetadataCache.replay(classPath, restored), "scan metadata did not replay");
+                require(ScanMetadataCache.replay(root, restored), "aggregate scan metadata did not replay");
                 require(restored.getClasses().equals(source.getClasses()), "scan class data changed during replay");
-                require(restored.getAnnotations().size() == 1, "scan annotations were not restored");
-                ModFileScanData.AnnotationData annotation = restored.getAnnotations().iterator().next();
+                require(restored.getAnnotations().size() == 2, "aggregate scan annotations were not restored");
+                ModFileScanData.AnnotationData annotation = restored.getAnnotations().stream()
+                        .filter(value -> value.annotationType().equals(Type.getType(Deprecated.class)))
+                        .findFirst().orElseThrow();
                 require(annotation.annotationType().equals(Type.getType(Deprecated.class)),
                         "scan annotation type changed during replay");
                 ModAnnotation.EnumHolder enumValue = (ModAnnotation.EnumHolder) annotation.annotationData().get("kind");
                 require(enumValue.getDesc().equals("Lsample/Kind;") && enumValue.getValue().equals("VALUE"),
                         "scan enum annotation value changed during replay");
+            }
+
+            try (FileSystem zip = FileSystems.newFileSystem(archive)) {
+                Path root = zip.getPath("/");
+                BootstrapHooks.mightContain(root, archive, "nested/Test.class");
+                require(unchangedKey.equals(ResourceMembershipIndex.persistentPathKey(root)),
+                        "unchanged Mod did not retain its scan key");
+                require(ScanMetadataCache.replay(root, new ModFileScanData()),
+                        "unchanged Mod did not retain its aggregate scan cache");
+            }
+
+            jar(archive, Map.of(
+                    "nested/Test.class", new byte[]{1},
+                    "nested/Second.class", new byte[]{2},
+                    "nested/Changed.class", new byte[]{3}), false);
+            try (FileSystem zip = FileSystems.newFileSystem(archive)) {
+                Path root = zip.getPath("/");
+                BootstrapHooks.mightContain(root, archive, "nested/Changed.class");
+                require(!unchangedKey.equals(ResourceMembershipIndex.persistentPathKey(root)),
+                        "changed Mod retained a stale scan key");
+                require(!ScanMetadataCache.replay(root, new ModFileScanData()),
+                        "changed Mod replayed stale aggregate scan metadata");
             }
         } finally {
             deleteTree(directory);

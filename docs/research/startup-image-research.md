@@ -45,6 +45,8 @@ Lightspeed caches immutable resource bytes, bounded raw pre-transform class byte
 - Dynamic packs, resource packs without an `IModFile`, directory roots, multi-release roots, oversized resources, stale images, and any read/write failure use the original path.
 - The image has fixed per-entry and total-size limits. Removing it is a complete rollback.
 
-The production images are independently bounded at 512 MiB for resources, 64 MiB for raw classes, and 128 MiB for scan metadata. Splitting them prevents class bytes from evicting the resource workload. A combined 447 MB prototype was rejected after 52-54 second warm starts; the split logical-root design reached 47 seconds on capture and 46 seconds warm.
+The production images are independently bounded at 512 MiB for resources, 64 MiB for raw classes, and 128 MiB for scan metadata. Splitting them prevents class bytes from evicting the resource workload. A combined 447 MB prototype was rejected after 52-54 second warm starts; the split logical-root design reached 47 seconds on capture and 46-47 seconds warm.
+
+The scan image was subsequently promoted from per-class records to one aggregate per Mod. An ATM9 cold run recorded 409 of 431 scan objects; 22 unsupported/incomplete cases retained Forge. The warm run restored all 409 aggregates. Adding a harmless entry to only the Lightspeed Mod changed the result to 408 hits, 23 misses, and exactly one rebuild; restoring the original JAR produced the same one-Mod rebuild in reverse. This demonstrates incremental invalidation without discarding unchanged Mod caches.
 
 The transformed-byte experiment remained read-only with respect to loader behavior: it executed all transformers and compared output. The second run observed 49,092 identical outputs and 926 mismatches for identical input keys. Together with ModLauncher's audit/plugin side effects, this rejects transformed-byte short-circuit caching as a generic optimization.

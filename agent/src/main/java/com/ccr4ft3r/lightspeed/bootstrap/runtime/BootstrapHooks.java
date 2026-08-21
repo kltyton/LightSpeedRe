@@ -84,12 +84,12 @@ public final class BootstrapHooks {
         StartupResourceImage.recordRawClass(reference, name, bytes);
     }
 
-    public static boolean replayScanMetadata(Path path, Object scanData) {
-        return ScanMetadataCache.replay(path, scanData);
+    public static boolean replayScanMetadata(Object modFile, Object scanData) {
+        return ScanMetadataCache.replay(modFile, scanData);
     }
 
-    public static void recordScanMetadata(Path path, Object scanData) {
-        ScanMetadataCache.record(path, scanData);
+    public static void recordScanMetadata(Object modFile, Object scanData) {
+        ScanMetadataCache.record(modFile, scanData);
     }
 
     public static void persistResourceImage() {
@@ -116,6 +116,7 @@ public final class BootstrapHooks {
                 + " scanHits=" + ScanMetadataCache.hits()
                 + " scanMisses=" + ScanMetadataCache.misses()
                 + " scanRecorded=" + ScanMetadataCache.recorded()
+                + " scanIncomplete=" + ScanMetadataCache.incomplete()
                 + " failures=" + (TransformerServiceScanner.failures()
                 + ResourceMembershipIndex.failures()
                 + StartupResourceImage.failures()

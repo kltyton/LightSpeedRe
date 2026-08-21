@@ -76,9 +76,7 @@ public final class ResourceMembershipIndex {
             if (!index.isExact()) {
                 return UNKNOWN;
             }
-            String imageSource = registration.paths().length == 1
-                    ? registration.paths()[0].toAbsolutePath().normalize().toString()
-                    : null;
+            String imageSource = registration.paths().length == 1 ? index.sourceIdentity() : null;
             return publish(index.view(prefix, imageSource));
         });
     }
@@ -115,15 +113,32 @@ public final class ResourceMembershipIndex {
 
     public static String persistentPathKey(Path path) {
         RootRegistration registration = registration(path);
-        if (registration == null || registration.paths().length != 1) {
+        if (registration == null) {
             return null;
         }
         String relative = relativePrefix(registration, path);
-        if (relative == null || !index(registration).isExact()) {
+        JarResourceIndex index = index(registration);
+        if (relative == null || !index.isExact()) {
             return null;
         }
-        Path source = registration.paths()[0];
-        return source.toAbsolutePath().normalize() + "\0" + relative;
+        return index.sourceIdentity() + "\0" + relative;
+    }
+
+    public static Set<String> activeSourceIdentities() {
+        return ROOTS.values().stream()
+                .map(ResourceMembershipIndex::index)
+                .filter(JarResourceIndex::isExact)
+                .map(JarResourceIndex::sourceIdentity)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+    }
+
+    public static int classEntryCount(Path path) {
+        RootRegistration registration = registration(path);
+        if (registration == null) {
+            return UNKNOWN;
+        }
+        JarResourceIndex index = index(registration);
+        return index.isExact() ? index.classEntryCount() : UNKNOWN;
     }
 
     private static RootRegistration registration(Path path) {

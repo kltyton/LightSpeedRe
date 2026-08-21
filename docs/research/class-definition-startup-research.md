@@ -77,3 +77,17 @@ Sources:
 4. For a separate Linux-only product, evaluate a CRaC checkpoint immediately before native client initialization or with explicit native-resource recovery. This is the plausible route to sub-30-second restore times, but it is not a Windows Forge Mod feature.
 
 Do not retry transformed-byte short-circuit caching without a loader protocol that records and replays every transformer/plugin side effect. The ATM9 experiment already produced 926 output mismatches for identical input keys.
+
+## Implemented follow-up: Fabric-like explicit scan aggregates
+
+The recommended launch-plan direction was partially implemented at Forge's core scan boundary. The first launch still performs Forge's complete class verification and ASM scan, then stores one exact neutral `ModFileScanData` aggregate per Mod. Later launches restore unchanged unsigned Mod aggregates before `ModFile.scanFile`; current Mod metadata and language-loader callbacks still execute. Per-Mod ZIP central-directory identities allow changed-Mod-only rebuilds.
+
+Against the preceding per-class cache snapshot, two JProfiler samples measured:
+
+- `AbstractJarFileModProvider.scanFile`: `-89%` to `-90%` runnable CPU;
+- `Jar.verifyPath`: `-88%` in both comparisons;
+- one sample reduced `UnionFileSystem.byteChannel` by `38.9%` and `ModuleClassLoader.readerToClass` by `6.8%`;
+- whole-start runnable CPU ranged from `-1.13%` to `+1.37%` because unrelated ModuleLayer, UnionFS, native-image and scheduling costs moved in the opposite direction;
+- ordinary title time remained 47-48 seconds, while profiled runs varied from 54 to 62 seconds.
+
+This approaches Fabric's metadata-first discovery behavior for unchanged Mods without replacing Forge's module, transformation, entrypoint, or language-loader contracts. It proves removal of the targeted scan phase, not a statistically significant whole-start speedup. The remaining maximum cost is still JVM class definition.
