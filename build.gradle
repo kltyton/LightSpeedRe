@@ -28,6 +28,13 @@ base {
     archivesName = mod_id
 }
 
+def bootstrapAgentEnabled = providers.gradleProperty('lightspeed.bootstrapAgent')
+        .map { value -> value.toBoolean() }
+        .getOrElse(false)
+def bootstrapAgentPath = project(':agent').layout.buildDirectory
+        .file("libs/lightspeed-bootstrap-agent-${project.version}.jar")
+        .get().asFile.absolutePath
+
 minecraft {
     // The mappings can be changed at any time and must be in the following format.
     // Channel:   Version:
@@ -54,6 +61,10 @@ minecraft {
 
             property 'forge.logging.markers', 'REGISTRIES'
             property 'forge.logging.console.level', 'debug'
+
+            if (bootstrapAgentEnabled) {
+                jvmArgs "-javaagent:${bootstrapAgentPath}"
+            }
 
             mods {
                 "${mod_id}" {
@@ -188,4 +199,14 @@ tasks.named('jarJar').configure {
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8' // Use the UTF-8 charset for Java compilation
+}
+
+tasks.named('build').configure {
+    dependsOn ':agent:build'
+}
+
+if (bootstrapAgentEnabled) {
+    tasks.matching { task -> task.name.startsWith('run') }.configureEach {
+        dependsOn ':agent:shadowJar'
+    }
 }

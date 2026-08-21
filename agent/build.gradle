@@ -1,0 +1,99 @@
+plugins {
+    id 'java'
+    id 'com.gradleup.shadow' version '8.3.10'
+}
+
+group = rootProject.group
+version = rootProject.version
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(17)
+}
+
+repositories {
+    mavenCentral()
+    maven { url = 'https://maven.minecraftforge.net/' }
+    maven { url = 'https://maven.neoforged.net/releases' }
+}
+
+configurations {
+    forgeProductionTarget { transitive = false }
+    forgeDevelopmentTarget { transitive = false }
+    neoForgeTarget { transitive = false }
+    secureJar2Target { transitive = false }
+    secureJar3Target { transitive = false }
+}
+
+dependencies {
+    implementation 'org.ow2.asm:asm:9.7.1'
+    implementation 'org.ow2.asm:asm-tree:9.7.1'
+    testImplementation 'org.ow2.asm:asm-util:9.7.1'
+
+    forgeProductionTarget 'net.minecraftforge:fmlloader:1.20.1-47.4.0'
+    forgeDevelopmentTarget 'net.minecraftforge:fmlloader:1.20.1-47.4.20'
+    neoForgeTarget 'net.neoforged.fancymodloader:loader:4.0.42'
+    secureJar2Target 'cpw.mods:securejarhandler:2.1.10'
+    secureJar3Target 'cpw.mods:securejarhandler:3.0.8'
+}
+
+tasks.named('jar', Jar).configure {
+    enabled = false
+}
+
+tasks.named('shadowJar', com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar).configure {
+    archiveBaseName = 'lightspeed-bootstrap-agent'
+    archiveClassifier = ''
+    relocate 'org.objectweb.asm', 'com.ccr4ft3r.lightspeed.bootstrap.internal.asm'
+    manifest {
+        attributes(
+                'Premain-Class': 'com.ccr4ft3r.lightspeed.bootstrap.LightspeedAgent',
+                'Can-Redefine-Classes': 'false',
+                'Can-Retransform-Classes': 'false',
+                'Implementation-Title': 'Lightspeed Bootstrap Agent',
+                'Implementation-Version': project.version
+        )
+    }
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+}
+
+tasks.named('assemble').configure {
+    dependsOn tasks.named('shadowJar')
+}
+
+tasks.register('verifyAgent', JavaExec) {
+    group = 'verification'
+    description = 'Runs the dependency-free bootstrap agent regression checks.'
+    dependsOn tasks.named('testClasses'), tasks.named('shadowJar')
+    classpath = sourceSets.test.runtimeClasspath
+    javaLauncher = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+    mainClass = 'com.ccr4ft3r.lightspeed.bootstrap.AgentRegressionCheck'
+    systemProperty 'lightspeed.target.forge.production', configurations.forgeProductionTarget.singleFile
+    systemProperty 'lightspeed.target.forge.development', configurations.forgeDevelopmentTarget.singleFile
+    systemProperty 'lightspeed.target.neoforge', configurations.neoForgeTarget.singleFile
+    systemProperty 'lightspeed.target.securejar2', configurations.secureJar2Target.singleFile
+    systemProperty 'lightspeed.target.securejar3', configurations.secureJar3Target.singleFile
+    systemProperty 'lightspeed.agent.jar', tasks.named('shadowJar').get().archiveFile.get().asFile
+}
+
+tasks.register('smokeAgent', JavaExec) {
+    group = 'verification'
+    description = 'Loads the packaged agent through a real Java 17 -javaagent launch.'
+    dependsOn tasks.named('testClasses'), tasks.named('shadowJar')
+    classpath = sourceSets.test.output
+    javaLauncher = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+    jvmArgs "-javaagent:${tasks.named('shadowJar').get().archiveFile.get().asFile.absolutePath}"
+    mainClass = 'com.ccr4ft3r.lightspeed.bootstrap.AgentSmokeTarget'
+}
+
+tasks.named('check').configure {
+    dependsOn tasks.named('verifyAgent'), tasks.named('smokeAgent')
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
