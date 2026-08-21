@@ -52,6 +52,7 @@ public class TitleScreenInjector {
             LogUtils.getLogger().error("Cannot add launch time to title screen", e);
         }
         BootstrapAgentBridge.persistResourceImage();
+        GlobalCache.beginShutdown();
         GlobalCache.EXECUTOR.execute(() -> {
             try {
                 GlobalCache.disablePersistAndClear();

@@ -97,7 +97,7 @@ public abstract class FallbackResourceManagerMixin {
         if (indexedSearch.isPresent()) {
             return indexedSearch.get().isPresent() ? indexedSearch.get() : null;
         }
-        if (segment.size() < GlobalCache.parallelLookupMinPacks) {
+        if (segment.size() < GlobalCache.parallelLookupMinPacks || GlobalCache.isStartupWorkerThread()) {
             return lightspeed$searchSafeSegmentSequential(segment, location);
         }
 

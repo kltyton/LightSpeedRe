@@ -4,13 +4,18 @@ import com.ccr4ft3r.lightspeed.bootstrap.runtime.discovery.TransformerServiceSca
 import com.ccr4ft3r.lightspeed.bootstrap.runtime.event.EventMethodCache;
 import com.ccr4ft3r.lightspeed.bootstrap.runtime.image.StartupResourceImage;
 import com.ccr4ft3r.lightspeed.bootstrap.runtime.index.ResourceMembershipIndex;
+import com.ccr4ft3r.lightspeed.bootstrap.runtime.module.ModuleResolutionCache;
 import com.ccr4ft3r.lightspeed.bootstrap.runtime.scan.ScanMetadataCache;
 
+import java.lang.module.Configuration;
+import java.lang.module.ModuleFinder;
 import java.lang.module.ModuleReference;
 import java.lang.instrument.Instrumentation;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Collection;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -64,6 +69,17 @@ public final class BootstrapHooks {
         return EventMethodCache.declaredMethod(type, inherited);
     }
 
+    public static boolean canUseDirectEventWrapper(Method callback) {
+        return isPubliclyAccessible(callback.getDeclaringClass())
+                && Modifier.isPublic(callback.getModifiers())
+                && isPubliclyAccessible(callback.getParameterTypes()[0]);
+    }
+
+    public static Configuration resolveAndBind(ModuleFinder before, List<Configuration> parents,
+                                               ModuleFinder after, Collection<String> roots) {
+        return ModuleResolutionCache.resolveAndBind(before, parents, after, roots);
+    }
+
     public static void startResourceImageLoad() {
         StartupResourceImage.startLoading();
     }
@@ -94,9 +110,11 @@ public final class BootstrapHooks {
 
     public static void persistResourceImage() {
         StartupResourceImage.persist();
+        ModuleResolutionCache.persist();
     }
 
     private static void printSummary() {
+        ModuleResolutionCache.persist();
         System.err.println("[Lightspeed Agent] summary serviceCandidates=" + TransformerServiceScanner.candidates()
                 + " serviceRejected=" + TransformerServiceScanner.rejected()
                 + " resourceQueries=" + ResourceMembershipIndex.queries()
@@ -107,6 +125,8 @@ public final class BootstrapHooks {
                 + " qualificationChecks=" + ResourceMembershipIndex.qualificationChecks()
                 + " eventMethodHits=" + EventMethodCache.hits()
                 + " eventMethodMisses=" + EventMethodCache.misses()
+                + " modulePlanHits=" + ModuleResolutionCache.hits()
+                + " modulePlanMisses=" + ModuleResolutionCache.misses()
                 + " imageHits=" + StartupResourceImage.hits()
                 + " imageMisses=" + StartupResourceImage.misses()
                 + " imageRecordedBytes=" + StartupResourceImage.recordedBytes()
@@ -120,6 +140,15 @@ public final class BootstrapHooks {
                 + " failures=" + (TransformerServiceScanner.failures()
                 + ResourceMembershipIndex.failures()
                 + StartupResourceImage.failures()
+                + ModuleResolutionCache.failures()
                 + ScanMetadataCache.failures()));
+    }
+
+    private static boolean isPubliclyAccessible(Class<?> type) {
+        if (!Modifier.isPublic(type.getModifiers())) {
+            return false;
+        }
+        Module module = type.getModule();
+        return !module.isNamed() || module.isExported(type.getPackageName());
     }
 }

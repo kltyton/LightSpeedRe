@@ -11,6 +11,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class BootstrapAgentBridge {
     public static final int UNKNOWN = -1;
+
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final AtomicBoolean FAILURE_LOGGED = new AtomicBoolean();
     private static final boolean RESOURCE_INDEX_ENABLED = Boolean.getBoolean("lightspeed.bootstrapAgent.resourceIndex");
@@ -133,7 +134,8 @@ public final class BootstrapAgentBridge {
 
     private static void logFailure(String operation, Throwable throwable) {
         if (FAILURE_LOGGED.compareAndSet(false, true)) {
-            LOGGER.warn("Lightspeed bootstrap bridge could not {}; falling back to the standard startup path", operation, throwable);
+            LOGGER.warn("Lightspeed bootstrap bridge could not {}; falling back to the Mod-side resource index",
+                    operation, throwable);
         }
     }
 

@@ -1,8 +1,8 @@
 package com.ccr4ft3r.lightspeed.cache;
 
+import com.ccr4ft3r.lightspeed.cache.persistence.CacheFiles;
 import com.ccr4ft3r.lightspeed.compat.FusionPackCompat;
 import com.ccr4ft3r.lightspeed.interfaces.ICache;
-import com.ccr4ft3r.lightspeed.util.CacheUtil;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 import com.mojang.logging.LogUtils;
@@ -26,22 +26,15 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.ForkJoinTask;
 import java.util.concurrent.ForkJoinWorkerThread;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 
-import static com.ccr4ft3r.lightspeed.util.CacheUtil.*;
-
-public class GlobalCache {
-
+public final class GlobalCache {
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final AtomicInteger THREAD_ID = new AtomicInteger();
-    private static final AtomicInteger RELOAD_THREAD_ID = new AtomicInteger();
-    private static final AtomicBoolean PERSISTED_CACHE_LOAD_STARTED = new AtomicBoolean(false);
-    private static volatile CompletableFuture<Void> persistedCacheLoad = CompletableFuture.completedFuture(null);
+    private static final AtomicInteger STARTUP_THREAD_ID = new AtomicInteger();
+    private static final AtomicInteger CACHE_THREAD_ID = new AtomicInteger();
 
     public static volatile boolean isEnabled = true;
     public static volatile boolean shouldCacheWalkedPaths = true;
@@ -55,75 +48,53 @@ public class GlobalCache {
     public static volatile boolean shouldIsolateModdedResourceReloadFailures = true;
     public static volatile boolean shouldUseConnectorCompatibilityMode = true;
     public static volatile List<String> isolatedResourceReloadListenerPatterns = List.of("*");
+
     public static final Map<CharSequence, List<String>> SPLITTED_STRINGS_BY_SEQUENCE = Maps.newConcurrentMap();
     public static final Map<String, String> CANONICAL_PATH_PER_FILE = Maps.newConcurrentMap();
-    private static final Set<ICache> CACHES = Sets.newConcurrentHashSet();
     public static final Map<String, Map<String, Boolean>> PERSISTED_EXISTENCES_BY_MOD = Maps.newConcurrentMap();
-    public static final Map<String, Map<PackType, Set<String>>> PERSISTED_NAMESPACES_BY_MOD = Maps.newConcurrentMap();
-    public static final Map<String, Map<PackType, Map<String, List<String>>>> PERSISTED_RESOURCE_LISTS_BY_MOD = Maps.newConcurrentMap();
     public static final int WORKER_COUNT = getWorkerCount();
-    private static final AtomicInteger CACHE_THREAD_ID = new AtomicInteger();
+
+    private static final Set<ICache> CACHES = Sets.newConcurrentHashSet();
     private static final Set<CompletableFuture<?>> BACKGROUND_CACHE_TASKS = Sets.newConcurrentHashSet();
     private static final int CACHE_WORKER_COUNT = getCacheWorkerCount();
-    public static final ExecutorService EXECUTOR = Executors.newFixedThreadPool(WORKER_COUNT,
-            runnable -> newDaemonThread(runnable, "Lightspeed-", THREAD_ID, Math.max(Thread.MIN_PRIORITY, Thread.NORM_PRIORITY - 1)));
+    private static final ForkJoinPool STARTUP_EXECUTOR = new ForkJoinPool(
+            WORKER_COUNT,
+            GlobalCache::newStartupWorker,
+            (thread, throwable) -> LOGGER.error("Lightspeed startup worker failed: {}", thread.getName(), throwable),
+            true);
+
+    public static final ExecutorService EXECUTOR = STARTUP_EXECUTOR;
     public static final ExecutorService CACHE_EXECUTOR = Executors.newFixedThreadPool(CACHE_WORKER_COUNT,
             runnable -> newDaemonThread(runnable, "Lightspeed-Cache-", CACHE_THREAD_ID, Thread.MIN_PRIORITY));
-    private static final ExecutorService RESOURCE_RELOAD_EXECUTOR = new ForkJoinPool(
-            getReloadWorkerCount(),
-            GlobalCache::newReloadWorker,
-            (thread, throwable) -> LOGGER.error("Lightspeed resource reload worker failed: {}", thread.getName(), throwable),
-            true);
+
+    private GlobalCache() {
+    }
 
     public static void add(ICache cache) {
         CACHES.add(cache);
     }
 
-    public static CompletableFuture<Void> loadPersistedCachesAsync() {
-        if (PERSISTED_CACHE_LOAD_STARTED.compareAndSet(false, true)) {
-            persistedCacheLoad = CompletableFuture.allOf(
-                    loadPersistedCaches(NAMESPACE_CACHE_DIR, PERSISTED_NAMESPACES_BY_MOD),
-                    loadPersistedCaches(RESOURCE_LIST_CACHE_DIR, PERSISTED_RESOURCE_LISTS_BY_MOD)
-            ).exceptionally(throwable -> {
-                LOGGER.error("Lightspeed failed to load persisted caches", throwable);
-                return null;
-            });
-        }
-        return persistedCacheLoad;
-    }
-
-    public static <K, V> CompletableFuture<Void> loadPersistedCacheAsync(File dir, String id, Map<K, V> targetMap) {
+    public static <K, V> CompletableFuture<Void> loadPersistedCacheAsync(File directory, String id,
+                                                                         Map<K, V> targetMap) {
         if (id == null || id.isBlank()) {
             return CompletableFuture.completedFuture(null);
         }
-        File file = new File(dir, id + ".ser");
+        File file = new File(directory, id + ".ser");
         if (!file.isFile()) {
             return CompletableFuture.completedFuture(null);
         }
-        return executeCacheLogged("load cache file " + file.getName(), () -> targetMap.putAll(CacheUtil.load(file)));
-    }
-
-    public static void awaitPersistedCachesLoaded() {
-        try {
-            loadPersistedCachesAsync().get(30, TimeUnit.SECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            LOGGER.warn("Lightspeed cache loading interrupted; continuing without waiting for all cache files", e);
-        } catch (ExecutionException e) {
-            LOGGER.warn("Lightspeed cache loading failed; continuing with in-memory caches", e);
-        } catch (TimeoutException e) {
-            LOGGER.warn("Lightspeed cache loading timed out; continuing while remaining files load in the background", e);
-        }
+        return executeCacheLogged("load cache file " + file.getName(), () ->
+                CacheFiles.<K, V>load(file).forEach(targetMap::putIfAbsent));
     }
 
     public static CompletableFuture<Void> executeLogged(String taskName, Runnable task) {
         return CompletableFuture.runAsync(() -> {
             try {
                 task.run();
-            } catch (Exception e) {
-                LOGGER.error("Lightspeed task failed: {}", taskName, e);
+            } catch (Exception exception) {
+                LOGGER.error("Lightspeed task failed: {}", taskName, exception);
             }
-        }, EXECUTOR);
+        }, STARTUP_EXECUTOR);
     }
 
     public static CompletableFuture<Void> executeCacheLogged(String taskName, Runnable task) {
@@ -132,50 +103,53 @@ public class GlobalCache {
                 if (isEnabled) {
                     task.run();
                 }
-            } catch (Exception e) {
-                LOGGER.error("Lightspeed cache task failed: {}", taskName, e);
+            } catch (Exception exception) {
+                LOGGER.error("Lightspeed cache task failed: {}", taskName, exception);
             }
         }, CACHE_EXECUTOR);
         return trackBackgroundTask(future);
     }
 
-    public static <T> CompletableFuture<T> supplyCacheAfterPersistedLoad(String taskName, Supplier<T> task) {
-        CompletableFuture<T> future = loadPersistedCachesAsync().thenApplyAsync(ignored -> {
+    public static <T> CompletableFuture<T> supplyStartupAfter(CompletableFuture<?> prerequisite,
+                                                               String taskName, Supplier<T> task) {
+        CompletableFuture<T> future = prerequisite.thenApplyAsync(ignored -> {
             try {
                 return isEnabled ? task.get() : null;
-            } catch (Exception e) {
-                LOGGER.error("Lightspeed cache task failed: {}", taskName, e);
+            } catch (Exception exception) {
+                LOGGER.error("Lightspeed cache task failed: {}", taskName, exception);
                 return null;
             }
-        }, CACHE_EXECUTOR);
+        }, STARTUP_EXECUTOR);
         return trackBackgroundTask(future);
     }
 
     public static ExecutorService resourceReloadExecutor(ExecutorService fallback) {
-        return shouldUseDedicatedResourceReloadExecutor ? RESOURCE_RELOAD_EXECUTOR : fallback;
+        return isEnabled && shouldUseDedicatedResourceReloadExecutor ? STARTUP_EXECUTOR : fallback;
     }
 
-    private static <T> CompletableFuture<T> trackBackgroundTask(CompletableFuture<T> future) {
-        BACKGROUND_CACHE_TASKS.add(future);
-        future.whenComplete((ignored, throwable) -> BACKGROUND_CACHE_TASKS.remove(future));
-        return future;
+    public static boolean isStartupWorkerThread() {
+        return ForkJoinTask.getPool() == STARTUP_EXECUTOR;
     }
 
-    public static IoSupplier<InputStream> findFirstResource(List<PackResources> packs, PackType type, ResourceLocation location) {
+    public static IoSupplier<InputStream> findFirstResource(List<PackResources> packs, PackType type,
+                                                             ResourceLocation location) {
         if (packs.isEmpty()) {
             return null;
         }
-        if (packs.size() < parallelLookupMinPacks || !shouldParallelizeResourcePackLookup || packs.stream().anyMatch(pack -> !isSafeForParallelLookup(pack))) {
+        if (packs.size() < parallelLookupMinPacks
+                || !shouldParallelizeResourcePackLookup
+                || isStartupWorkerThread()
+                || packs.stream().anyMatch(pack -> !isSafeForParallelLookup(pack))) {
             return findFirstResourceSequential(packs, type, location);
         }
 
         List<CompletableFuture<IoSupplier<InputStream>>> futures = new ArrayList<>(packs.size());
         try {
             for (PackResources pack : packs) {
-                futures.add(CompletableFuture.supplyAsync(() -> pack.getResource(type, location), EXECUTOR));
+                futures.add(CompletableFuture.supplyAsync(() -> pack.getResource(type, location), STARTUP_EXECUTOR));
             }
-        } catch (RuntimeException e) {
-            LOGGER.warn("Lightspeed parallel resource lookup rejected; falling back to sequential lookup", e);
+        } catch (RuntimeException exception) {
+            LOGGER.warn("Lightspeed parallel resource lookup rejected; falling back to sequential lookup", exception);
             return findFirstResourceSequential(packs, type, location);
         }
 
@@ -185,11 +159,11 @@ public class GlobalCache {
                 if (supplier != null) {
                     return supplier;
                 }
-            } catch (InterruptedException e) {
+            } catch (InterruptedException exception) {
                 Thread.currentThread().interrupt();
                 return findFirstResourceSequential(packs, type, location);
-            } catch (ExecutionException e) {
-                LOGGER.warn("Lightspeed parallel resource lookup failed for {}", location, e);
+            } catch (ExecutionException exception) {
+                LOGGER.warn("Lightspeed parallel resource lookup failed for {}", location, exception);
             }
         }
         return null;
@@ -197,55 +171,69 @@ public class GlobalCache {
 
     public static void disablePersistAndClear() {
         isEnabled = false;
-        awaitPersistedCachesLoaded();
         awaitBackgroundCacheTasks();
 
         List<CompletableFuture<Void>> deleteTasks = new ArrayList<>();
-        CacheUtil.getCacheFiles(HAS_RESOURCE_CACHE_DIR).forEach(file -> deleteTasks.add(deleteAsync(file)));
-        CacheUtil.getCacheFiles(NAMESPACE_CACHE_DIR).forEach(file -> deleteTasks.add(deleteAsync(file)));
-        CacheUtil.getCacheFiles(RESOURCE_LIST_CACHE_DIR).forEach(file -> deleteTasks.add(deleteAsync(file)));
+        CacheFiles.getCacheFiles(CacheFiles.HAS_RESOURCE_CACHE_DIR)
+                .forEach(file -> deleteTasks.add(deleteAsync(file)));
+        CacheFiles.getCacheFiles(CacheFiles.NAMESPACE_CACHE_DIR)
+                .forEach(file -> deleteTasks.add(deleteAsync(file)));
+        CacheFiles.getCacheFiles(CacheFiles.RESOURCE_LIST_CACHE_DIR)
+                .forEach(file -> deleteTasks.add(deleteAsync(file)));
         CompletableFuture.allOf(deleteTasks.toArray(new CompletableFuture[0])).join();
 
-        List<CompletableFuture<Void>> persistTasks = new ArrayList<>();
-        CACHES.forEach(cache -> persistTasks.add(runPersistTask(cache)));
-        CompletableFuture.allOf(persistTasks.toArray(new CompletableFuture[0])).join();
+        for (ICache cache : CACHES) {
+            try {
+                cache.lightspeed$persistAndClearCache();
+            } catch (Exception exception) {
+                LOGGER.error("Lightspeed cache persist failed: {}", cache.getClass().getName(), exception);
+            }
+        }
+
         SPLITTED_STRINGS_BY_SEQUENCE.clear();
         CANONICAL_PATH_PER_FILE.clear();
         CACHES.clear();
         PERSISTED_EXISTENCES_BY_MOD.clear();
-        PERSISTED_NAMESPACES_BY_MOD.clear();
-        PERSISTED_RESOURCE_LISTS_BY_MOD.clear();
+    }
+
+    public static void shutdownExecutors() {
+        STARTUP_EXECUTOR.shutdown();
+        CACHE_EXECUTOR.shutdown();
+    }
+
+    public static void beginShutdown() {
+        isEnabled = false;
+    }
+
+    private static <T> CompletableFuture<T> trackBackgroundTask(CompletableFuture<T> future) {
+        BACKGROUND_CACHE_TASKS.add(future);
+        future.whenComplete((ignored, throwable) -> BACKGROUND_CACHE_TASKS.remove(future));
+        return future;
     }
 
     private static int getWorkerCount() {
         int configured = Integer.getInteger("lightspeed.workers", 0);
-        if (configured > 0) {
-            return configured;
-        }
-        return Math.max(2, Math.min(Runtime.getRuntime().availableProcessors(), 32));
-    }
-
-    private static int getCacheWorkerCount() {
-        int configured = Integer.getInteger("lightspeed.cacheWorkers", 0);
-        if (configured > 0) {
-            return Math.max(1, Math.min(configured, 8));
-        }
-        return Math.max(2, Math.min(Runtime.getRuntime().availableProcessors() / 4, 8));
-    }
-
-    private static int getReloadWorkerCount() {
-        int configured = Integer.getInteger("lightspeed.reloadWorkers", 0);
         if (configured > 0) {
             return Math.max(2, Math.min(configured, 32));
         }
         return Math.max(2, Math.min(Runtime.getRuntime().availableProcessors() - 2, 32));
     }
 
-    private static ForkJoinWorkerThread newReloadWorker(ForkJoinPool pool) {
+    private static int getCacheWorkerCount() {
+        int configured = Integer.getInteger("lightspeed.cacheWorkers", 0);
+        if (configured > 0) {
+            return Math.max(1, Math.min(configured, 2));
+        }
+        return Math.max(1, Math.min(Runtime.getRuntime().availableProcessors() / 8, 2));
+    }
+
+    private static ForkJoinWorkerThread newStartupWorker(ForkJoinPool pool) {
         ForkJoinWorkerThread thread = new ForkJoinWorkerThread(pool) {
         };
         thread.setContextClassLoader(GlobalCache.class.getClassLoader());
-        thread.setName("Lightspeed-Reload-" + RELOAD_THREAD_ID.incrementAndGet());
+        thread.setName("Lightspeed-Startup-" + STARTUP_THREAD_ID.incrementAndGet());
+        thread.setDaemon(true);
+        thread.setPriority(Math.max(Thread.MIN_PRIORITY, Thread.NORM_PRIORITY - 1));
         return thread;
     }
 
@@ -256,31 +244,10 @@ public class GlobalCache {
         return thread;
     }
 
-    private static <K, V> CompletableFuture<Void> loadPersistedCaches(File dir, Map<String, Map<K, V>> targetMap) {
-        dir.mkdirs();
-        CompletableFuture<?>[] futures = CacheUtil.getCacheFiles(dir)
-                .map(file -> executeCacheLogged("load cache file " + file.getName(), () -> {
-                    String id = org.apache.commons.io.FilenameUtils.getBaseName(file.getName());
-                    targetMap.computeIfAbsent(id, ignored -> Maps.newConcurrentMap()).putAll(CacheUtil.load(file));
-                }))
-                .toArray(CompletableFuture[]::new);
-        return CompletableFuture.allOf(futures);
-    }
-
     private static CompletableFuture<Void> deleteAsync(File file) {
         return CompletableFuture.runAsync(() -> {
             if (!file.delete() && file.exists()) {
                 LOGGER.warn("Lightspeed could not delete old cache file {}", file);
-            }
-        }, CACHE_EXECUTOR);
-    }
-
-    private static CompletableFuture<Void> runPersistTask(ICache cache) {
-        return CompletableFuture.runAsync(() -> {
-            try {
-                cache.lightspeed$persistAndClearCache();
-            } catch (Exception e) {
-                LOGGER.error("Lightspeed cache persist failed: {}", cache.getClass().getName(), e);
             }
         }, CACHE_EXECUTOR);
     }
@@ -293,18 +260,14 @@ public class GlobalCache {
             }
             try {
                 CompletableFuture.allOf(tasks).join();
-            } catch (CompletionException e) {
-                LOGGER.warn("Lightspeed cache task failed before persist", e.getCause());
+            } catch (CompletionException exception) {
+                LOGGER.warn("Lightspeed cache task failed before persist", exception.getCause());
             }
         }
     }
 
-    public static void shutdownExecutors() {
-        EXECUTOR.shutdown();
-        CACHE_EXECUTOR.shutdown();
-    }
-
-    private static IoSupplier<InputStream> findFirstResourceSequential(List<PackResources> packs, PackType type, ResourceLocation location) {
+    private static IoSupplier<InputStream> findFirstResourceSequential(List<PackResources> packs, PackType type,
+                                                                        ResourceLocation location) {
         for (PackResources pack : packs) {
             IoSupplier<InputStream> supplier = pack.getResource(type, location);
             if (supplier != null) {
@@ -317,7 +280,9 @@ public class GlobalCache {
     private static boolean isSafeForParallelLookup(PackResources packResources) {
         Class<?> packClass = packResources.getClass();
         boolean forgeModPathPack = packResources instanceof PathPackResources
-                && (packClass == PathPackResources.class || packClass.getName().startsWith("net.minecraftforge.resource.ResourcePackLoader$"));
-        return (forgeModPathPack || packClass == FilePackResources.class) && !FusionPackCompat.hasOverrides(packResources);
+                && (packClass == PathPackResources.class
+                || packClass.getName().startsWith("net.minecraftforge.resource.ResourcePackLoader$"));
+        return (forgeModPathPack || packClass == FilePackResources.class)
+                && !FusionPackCompat.hasOverrides(packResources);
     }
 }

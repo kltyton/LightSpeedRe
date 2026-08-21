@@ -1,8 +1,8 @@
 package com.ccr4ft3r.lightspeed.mixin.resources;
 
 import com.ccr4ft3r.lightspeed.cache.GlobalCache;
+import com.ccr4ft3r.lightspeed.cache.persistence.CacheFiles;
 import com.ccr4ft3r.lightspeed.interfaces.IPackResources;
-import com.ccr4ft3r.lightspeed.util.CacheUtil;
 import com.google.common.collect.Maps;
 import net.minecraft.SharedConstants;
 import net.minecraft.resources.ResourceLocation;
@@ -21,7 +21,7 @@ import java.io.InputStream;
 import java.util.Map;
 
 import static com.ccr4ft3r.lightspeed.cache.GlobalCache.PERSISTED_EXISTENCES_BY_MOD;
-import static com.ccr4ft3r.lightspeed.util.CacheUtil.HAS_RESOURCE_CACHE_DIR;
+import static com.ccr4ft3r.lightspeed.cache.persistence.CacheFiles.HAS_RESOURCE_CACHE_DIR;
 
 @Mixin(VanillaPackResources.class)
 public abstract class VanillaPackResourcesMixin implements IPackResources {
@@ -91,8 +91,8 @@ public abstract class VanillaPackResourcesMixin implements IPackResources {
     @Override
     public void lightspeed$persistAndClearCache() {
         if (lightspeed$versionId != null) {
-            CacheUtil.persist(lightspeed$existencePerClientResource, new File(HAS_RESOURCE_CACHE_DIR.getPath(), lightspeed$versionId + "-client.ser"));
-            CacheUtil.persist(lightspeed$existencePerServerResource, new File(HAS_RESOURCE_CACHE_DIR.getPath(), lightspeed$versionId + "-server.ser"));
+            CacheFiles.persist(lightspeed$existencePerClientResource, new File(HAS_RESOURCE_CACHE_DIR, lightspeed$versionId + "-client.ser"));
+            CacheFiles.persist(lightspeed$existencePerServerResource, new File(HAS_RESOURCE_CACHE_DIR, lightspeed$versionId + "-server.ser"));
         }
         lightspeed$existencePerClientResource.clear();
         lightspeed$existencePerServerResource.clear();

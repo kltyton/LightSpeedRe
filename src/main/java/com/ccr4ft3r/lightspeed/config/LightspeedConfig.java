@@ -34,7 +34,7 @@ public final class LightspeedConfig {
                     .comment("Preload Forge path resource pack indexes on Lightspeed worker threads during startup.")
                     .define("asyncPreloadPacks", true);
             dedicatedResourceReloadExecutor = builder
-                    .comment("Use a dedicated work-stealing pool for resource reload preparation instead of competing for the shared Minecraft worker pool.")
+                    .comment("Use Lightspeed's bounded startup pool for resource reload preparation; manual reloads after the title screen use Minecraft's live executor.")
                     .define("dedicatedResourceReloadExecutor", true);
             parallelResourceLookup = builder
                     .comment("Query safe resource-pack segments concurrently while preserving vanilla priority and filter order.")

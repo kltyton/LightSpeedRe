@@ -1,102 +1,78 @@
-# Lightspeed Bootstrap Agent
+# Embedded Lightspeed Bootstrap
 
-Lightspeed 1.2.4 produces two independent artifacts:
+Lightspeed 1.2.5 is distributed as one Forge Mod JAR. The same file contains:
 
-- `lightspeed-<version>.jar` is the ordinary Forge/NeoForge mod and remains usable by itself.
-- `lightspeed-bootstrap-agent-<version>.jar` is the optional early-startup accelerator.
+- the ordinary GAME-layer Mixins, which work on the first launch;
+- a dependency-free bootstrap Agent stored at `META-INF/lightspeed/bootstrap-agent.jar`;
+- a client-side installer that extracts the Agent and configures supported per-instance launcher profiles for later launches.
 
-The Agent runs from JVM `premain`, before `BootstrapLauncher.main`. It does not replace the Minecraft JAR or any Forge/NeoForge library. Remove its single JVM argument to roll back.
+Users do not install a second JAR. Lightspeed never writes `JAVA_TOOL_OPTIONS`, `JDK_JAVA_OPTIONS`, or another global Java setting.
 
-## Installation
+## Startup sequence
 
-1. Install the ordinary Lightspeed mod JAR in the instance `mods` directory.
-2. Keep the bootstrap Agent JAR outside `mods`.
-3. Add this JVM argument to the instance:
+On the first launch, the ordinary Mod provides the Mixin-side resource prefix indexes, path caches and bounded resource-reload scheduler. In the background it:
 
-   ```text
-   -javaagent:C:\absolute\path\to\lightspeed-bootstrap-agent-<version>.jar
-   ```
+1. verifies and extracts the embedded Agent to `.lightspeed/bootstrap/` using a SHA-256 versioned file name;
+2. preserves an adjacent `.lightspeed-backup` before changing a launcher profile;
+3. removes only stale Lightspeed Agent/owner/cache arguments;
+4. installs the current owner, cache-directory and `-javaagent` arguments atomically.
 
-Paths containing spaces follow the launcher's normal JVM-argument quoting rules. Do not pass the Agent JAR as `-jar`, place it in `mods`, or replace a Forge/NeoForge library with it.
+The installer currently supports:
 
-For this repository's Forge development run:
+- PCL per-version `PCL/Setup.ini` (`VersionAdvanceJvm`);
+- Prism Launcher and MultiMC `instance.cfg` only when the instance already has `OverrideJavaArgs=true`; inherited global JVM arguments are never replaced;
+- an isolated Minecraft version JSON stored directly in the active game directory.
 
-```powershell
-.\gradlew.bat runClient -Plightspeed.bootstrapAgent=true
-```
+Launchers that rebuild or ignore all three surfaces cannot be modified safely by a Mod. Lightspeed logs the exact extracted path and arguments in that case; the first-launch Mixin optimizations remain active.
 
-Without the property, `runClient` starts the ordinary mod without the Agent.
+## Why Mixins cannot replace every bootstrap patch
 
-## Supported startup libraries
+Ordinary Mod Mixins are registered for classes subsequently defined by ModLauncher's GAME `TransformingClassLoader`. The following classes are already defined by the application or `MC-BOOTSTRAP` loader before that point:
 
-The bytecode transformer is fail-closed and matches the complete SHA-256 of each target class before applying a patch.
+- `cpw.mods.modlauncher.ModuleLayerHandler`;
+- `cpw.mods.cl.ModuleClassLoader` and SecureJarHandler internals;
+- Forge `Scanner` and transformation-service discovery;
+- Forge EventBus `EventBus` and `ModLauncherFactory`.
 
-| Runtime | Target |
-|---|---|
-| Forge 1.20.1 production | FML Loader 47.4.0, ModLauncher 10.0.9, SecureJarHandler 2.1.10, ForgeSPI 7.0.1 |
-| Forge 1.20.1 development | FML Loader 47.4.20, ModLauncher 10.0.9, SecureJarHandler 2.1.10, ForgeSPI 7.0.1 |
-| NeoForge 1.21.1 | FML 4.0.42, ModLauncher 11.0.5, SecureJarHandler 3.0.8 |
+Jar-in-Jar changes packaging, not JVM startup order. A bundled `Premain-Class` is inert unless the JVM receives `-javaagent` before `main`. A Mod-provided transformation service or coremod also transforms later GAME classes and cannot rewrite these already-defined bootstrap classes.
 
-An unknown class fingerprint is logged and left unchanged. A partial transform is never installed.
+Therefore the implementation is split by the real class-loader boundary:
 
-## Optimizations
+- ordinary Mixins own `PathPackResources`, `FilePackResources`, resource priority lookup and Minecraft reload scheduling;
+- the embedded Agent owns SERVICE discovery, SecureJar indexing, raw class bytes, Forge scan metadata, EventBus bootstrap classes and ModuleLayer resolution.
 
-### SERVICE-layer fast negative
+## P1 and P2 algorithms
 
-Before FML constructs a complete `SecureJar`/`JarContents`, the Agent checks the physical ZIP central directory for the exact startup-service files. Explicit or versioned `module-info.class`, multi-release JARs, directories, unreadable archives, and unsupported files all fall back to the original loader path. This fast path can reject only a JAR that cannot provide a recognized startup service.
+### Immutable resource prefix index
 
-### Shared immutable-JAR resource index
+Resource paths are sorted and deduplicated once. Exact membership is `O(log E)`, while a directory listing is `O(log E + K)` for `E` indexed paths and `K` returned paths. The same structure is used for ZIP and path-backed packs. Mixin fallback caches remain independent even when the Agent handles only part of a logical resource view.
 
-When SecureJar creates an immutable UnionFS root, the Agent records all physical JAR roots and the active path filter. It reads each ZIP central directory once, publishes one exact sorted entry table plus a Bloom front filter, and shares immutable integer handles with the ordinary Mod through a fail-open bootstrap bridge.
+### Module resolution plan
 
-Each handle is bound to the pack's exact logical root. Standard packs and safe sub-path packs therefore see only their own relative entries. Directory-to-range tables and namespace sets are built once; hot listings no longer perform a filesystem map lookup, `CompletableFuture.join`, reflective method invocation, binary string search, or result-array copy. Mutable directories, multi-release overlays, unsupported file systems, and index failures retain the original path.
+The Agent fingerprints module descriptors, service providers, roots and parent graphs. A cold launch records the final service-bound root closure and graph digest. A matching warm launch resolves the recorded closure without repeating service binding; if the resulting reads graph differs, it immediately runs the original `Configuration.resolveAndBind` path.
 
-Index construction is `O(E log E)` once per JAR root, where `E` is the visible entry count. Exact membership is `O(log E)` after four Bloom probes, while a bound prefix listing is `O(1 + K)` for `K` returned resources. With the Agent active, the Mod does not eagerly load or rebuild its legacy serialized resource-list caches.
+### EventBus wrappers
 
-### EventBus declaration cache
+Forge 1.20.1 normally routes every generated listener wrapper through the GAME transformation chain. For exact supported EventBus fingerprints, the Agent calls EventBus's existing direct `ClassLoaderFactory` implementation instead. Listener discovery, ordering and generated bytecode stay in EventBus; only the unnecessary ModLauncher round trip is removed.
 
-Forge EventBus 6.0.5 repeatedly resolves inherited public listener methods with `Class.getDeclaredMethod` while registering objects. The Agent replaces only that private lookup helper with a `ClassValue`-scoped concurrent cache. Present and absent results are both retained, while annotation checks, listener ordering, factory generation, and registration remain in Forge's original code.
+### Bounded startup scheduling
 
-### Resource-byte startup image
+Resource preparation and safe fallback lookups share one work-stealing pool capped at `min(processors - 2, 32)`. Cache I/O uses at most two low-priority threads. Nested lookups from the startup pool remain sequential, providing backpressure instead of recursively submitting more futures. After the title screen, manual reloads use Minecraft's live executor rather than the stopped startup pool.
 
-For exact immutable Mod JAR pack views, successful resource opens are captured after the original UnionFS path has proved the resource exists. At the title screen, newly observed bytes are atomically merged into `lightspeed-cache/bootstrap/resource-image-v2.bin`. Later launches validate the Java/classpath/module-path/Mod-JAR metadata fingerprint and load the image asynchronously while Forge constructs mods.
+## Compatibility and rollback
 
-Image hits return an in-memory stream before UnionFS or ZIP access. Unregistered or mutable packs, multi-release roots, stale fingerprints, failed reads, entries larger than 32 MiB, and data beyond the default 512 MiB image budget keep the original path. Exact immutable sub-path views are supported. The budget can be changed with `-Dlightspeed.resourceImageMiB=<64..1024>`. Deleting the image is a complete rollback.
+Every bootstrap bytecode patch requires an exact SHA-256 target fingerprint. Unknown versions log `unsupported fingerprint` and retain the original code.
 
-### Raw class-byte image
+The installed Agent also receives `-Dlightspeed.agent.owner=<mod-jar>`. At premain it verifies that the owner still embeds the exact same Agent SHA-256. If the Mod is removed, replaced or updated in place, a stale extracted Agent becomes inert; the new Mod reconciles the profile on its next ordinary launch.
 
-The Agent patches SecureJarHandler's `ModuleClassLoader.getClassBytes` and records only the immutable bytes read before ModLauncher transformation. A hit bypasses the corresponding UnionFS/ZIP read, then follows the original Mixin, AccessTransformer, transformer, signer, protection-domain, verifier, and `defineClass` path unchanged. The class image is independent from resource bytes and defaults to 64 MiB (`-Dlightspeed.classImageMiB=<16..256>`). Set `-Dlightspeed.rawClassImage=false` to disable it.
-
-### Forge scan-metadata image
-
-Forge 47.4 walks every visible class, verifies it, and parses it with ASM to construct `ModFileScanData`. The Agent stores one neutral aggregate of all core class/annotation records per Mod. On a hit it restores the same ForgeSPI record types before `ModFile.scanFile`, skipping that Mod's complete `Files.find`, class verification and ASM pass. Current `IModFileInfo` and language-loader visitors still execute every launch.
-
-Each Mod key combines its physical path with a SHA-256 digest of the visible ZIP central-directory names, CRCs, sizes, compression sizes and methods. The scan image uses a Loader/Java environment fingerprint rather than a whole-Mod-set fingerprint: changing one Mod misses and rebuilds only that aggregate, while unchanged Mod keys remain valid. Signed archives, directory/multi-release roots, incomplete class counts, unsupported values, stale environments, corrupt entries and module-access failures retain Forge's original scanner. Unsigned hits restore Forge's original `UNVERIFIED`/`INVALID` security status; signed archives are never short-circuited.
-
-The aggregate image is `scan-image-v2.bin` and defaults to 128 MiB (`-Dlightspeed.scanImageMiB=<16..512>`). Set `-Dlightspeed.scanMetadataCache=false` to disable it. At persistence, entries for removed or replaced Mods are compacted out.
-
-### Rejected transformed-bytecode cache
-
-An explicit two-run ATM9 experiment always executed the real transformation chain and compared outputs for the same class name, context, and raw-byte SHA-256. It observed 49,092 matches and 926 mismatches. ModLauncher also mutates its audit trail and invokes arbitrary plugin/transformer callbacks. Returning cached transformed bytes would therefore change observable loader state and is intentionally not implemented.
-
-## Diagnostics and rollback
-
-Expected early log lines include:
+To undo automatic launcher configuration, remove these three owned arguments from the current profile:
 
 ```text
-[Lightspeed Agent] active: ...
-[Lightspeed Agent] patched net/minecraftforge/fml/loading/ModDirTransformerDiscoverer ...
-[Lightspeed Agent] patched cpw/mods/jarhandling/impl/Jar ...
-[Lightspeed Agent] patched cpw/mods/cl/ModuleClassLoader ...
-[Lightspeed Agent] patched net/minecraftforge/fml/loading/moddiscovery/Scanner ...
-[Lightspeed Agent] patched net/minecraftforge/eventbus/EventBus ...
+-Dlightspeed.bootstrapCacheDir=...
+-Dlightspeed.agent.owner=...
+-javaagent:...lightspeed-bootstrap-agent-....jar
 ```
 
-At JVM shutdown, a summary reports SERVICE candidates/rejections, resource queries/rejections, indexed roots/entries, and fail-open failures. If a supported target logs `unsupported fingerprint`, remove `-javaagent` until that loader build is explicitly validated.
+The adjacent `.lightspeed-backup` is an emergency recovery copy of the original file, not a normal uninstall mechanism; restoring it later may also revert unrelated launcher edits made since installation.
 
-Rollback is only:
-
-1. Remove the `-javaagent:...` JVM argument.
-2. Start the same instance again.
-
-No production version JSON edit or save change is involved. The optional `resource-image-v3.bin`, `class-image-v2.bin`, and `scan-image-v2.bin` files can be deleted independently.
+Uninstall order matters: first remove the three arguments and verify that the next launch no longer references the Agent, then delete `.lightspeed/`. The ordinary `lightspeed-cache` directory can be deleted independently because it does not contain the Agent executable. No save data is stored in either directory.

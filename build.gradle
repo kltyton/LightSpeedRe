@@ -20,6 +20,13 @@ apply plugin: 'org.spongepowered.mixin'
 group = mod_group_id
 version = mod_version
 
+evaluationDependsOn(':agent')
+def embeddedAgentTask = project(':agent').tasks.named('shadowJar')
+def embeddedAgentEnabled = providers.gradleProperty('lightspeed.embeddedAgent')
+        .map { value -> value.toBoolean() }
+        .getOrElse(false)
+def embeddedAgentPath = embeddedAgentTask.get().archiveFile.get().asFile.absolutePath
+
 java {
     toolchain.languageVersion = JavaLanguageVersion.of(17)
 }
@@ -27,13 +34,6 @@ java {
 base {
     archivesName = mod_id
 }
-
-def bootstrapAgentEnabled = providers.gradleProperty('lightspeed.bootstrapAgent')
-        .map { value -> value.toBoolean() }
-        .getOrElse(false)
-def bootstrapAgentPath = project(':agent').layout.buildDirectory
-        .file("libs/lightspeed-bootstrap-agent-${project.version}.jar")
-        .get().asFile.absolutePath
 
 minecraft {
     // The mappings can be changed at any time and must be in the following format.
@@ -62,8 +62,9 @@ minecraft {
             property 'forge.logging.markers', 'REGISTRIES'
             property 'forge.logging.console.level', 'debug'
 
-            if (bootstrapAgentEnabled) {
-                jvmArgs "-javaagent:${bootstrapAgentPath}"
+            if (embeddedAgentEnabled) {
+                jvmArgs "-javaagent:${embeddedAgentPath}"
+                property 'lightspeed.agent.allowUnowned', 'true'
             }
 
             mods {
@@ -174,11 +175,18 @@ tasks.named('processResources', ProcessResources).configure {
     filesMatching(['META-INF/mods.toml', 'pack.mcmeta']) {
         expand replaceProperties + [project: project]
     }
+
+    dependsOn embeddedAgentTask
+    from(embeddedAgentTask.flatMap { it.archiveFile }) {
+        into 'META-INF/lightspeed'
+        rename { 'bootstrap-agent.jar' }
+    }
 }
 
 // Example for how to get properties into the manifest for reading at runtime.
 tasks.named('jar', Jar).configure {
     archiveClassifier = 'slim'
+    destinationDirectory = layout.buildDirectory.dir('intermediates')
     manifest {
         attributes([
                 "Specification-Title"     : mod_id,
@@ -202,16 +210,94 @@ tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8' // Use the UTF-8 charset for Java compilation
 }
 
+tasks.register('verifyResourcePathIndex', JavaExec) {
+    group = 'verification'
+    description = 'Runs the dependency-free resource prefix index regression checks.'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    javaLauncher = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+    mainClass = 'com.ccr4ft3r.lightspeed.cache.resource.ResourcePathIndexCheck'
+}
+
+tasks.register('verifyLaunchProfileInstaller', JavaExec) {
+    group = 'verification'
+    description = 'Runs PCL and version-JSON bootstrap installation regression checks.'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    javaLauncher = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+    mainClass = 'com.ccr4ft3r.lightspeed.startup.installation.LaunchProfileInstallerCheck'
+}
+
+tasks.register('verifyDistribution') {
+    group = 'verification'
+    description = 'Verifies the single release JAR and its embedded bootstrap payload.'
+    dependsOn tasks.named('reobfJarJar'), embeddedAgentTask
+    doLast {
+        File release = tasks.named('jarJar').get().archiveFile.get().asFile
+        List<File> published = fileTree(layout.buildDirectory.dir('libs')) {
+            include '*.jar'
+        }.files.sort()
+        if (published != [release]) {
+            throw new GradleException("build/libs must contain only ${release.name}, found ${published*.name}")
+        }
+
+        byte[] embedded
+        new java.util.zip.ZipFile(release).withCloseable { zip ->
+            ['META-INF/mods.toml', 'lightspeed.mixins.json', 'META-INF/lightspeed/bootstrap-agent.jar'].each { name ->
+                if (zip.getEntry(name) == null) {
+                    throw new GradleException("release JAR is missing ${name}")
+                }
+            }
+            def manifest = new java.util.jar.Manifest(zip.getInputStream(zip.getEntry('META-INF/MANIFEST.MF')))
+            if (manifest.mainAttributes.getValue('Premain-Class') != null) {
+                throw new GradleException('top-level Mod JAR must not declare Premain-Class')
+            }
+            embedded = zip.getInputStream(zip.getEntry('META-INF/lightspeed/bootstrap-agent.jar')).readAllBytes()
+        }
+
+        byte[] builtAgent = embeddedAgentTask.get().archiveFile.get().asFile.bytes
+        if (!java.security.MessageDigest.isEqual(
+                java.security.MessageDigest.getInstance('SHA-256').digest(embedded),
+                java.security.MessageDigest.getInstance('SHA-256').digest(builtAgent))) {
+            throw new GradleException('embedded Agent differs from the verified Agent build')
+        }
+
+        boolean licenseFound = false
+        new java.util.jar.JarInputStream(new ByteArrayInputStream(embedded)).withCloseable { input ->
+            def manifest = input.manifest
+            if (manifest == null
+                    || manifest.mainAttributes.getValue('Premain-Class') != 'com.ccr4ft3r.lightspeed.bootstrap.LightspeedAgent'
+                    || manifest.mainAttributes.getValue('Implementation-Version') != project.version.toString()) {
+                throw new GradleException('embedded Agent manifest is incomplete or version-mismatched')
+            }
+            for (def entry = input.nextJarEntry; entry != null; entry = input.nextJarEntry) {
+                if (entry.name == 'META-INF/licenses/ASM.txt') {
+                    licenseFound = true
+                }
+            }
+        }
+        if (!licenseFound) {
+            throw new GradleException('embedded Agent is missing the ASM redistribution license')
+        }
+        println 'SINGLE_JAR_DISTRIBUTION_OK'
+    }
+}
+
 tasks.named('compileJava').configure {
     dependsOn ':agent:compileJava'
 }
 
-tasks.named('build').configure {
-    dependsOn ':agent:build'
+if (embeddedAgentEnabled) {
+    tasks.matching { task -> task.name.startsWith('run') }.configureEach {
+        dependsOn embeddedAgentTask
+    }
 }
 
-if (bootstrapAgentEnabled) {
-    tasks.matching { task -> task.name.startsWith('run') }.configureEach {
-        dependsOn ':agent:shadowJar'
-    }
+tasks.named('check').configure {
+    dependsOn tasks.named('verifyResourcePathIndex'), tasks.named('verifyLaunchProfileInstaller'),
+            tasks.named('verifyDistribution'), ':agent:check'
 }

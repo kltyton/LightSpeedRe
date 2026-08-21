@@ -2,9 +2,11 @@ package com.ccr4ft3r.lightspeed;
 
 import com.ccr4ft3r.lightspeed.cache.GlobalCache;
 import com.ccr4ft3r.lightspeed.config.LightspeedConfig;
+import com.ccr4ft3r.lightspeed.startup.installation.BootstrapAgentInstaller;
 import com.mojang.logging.LogUtils;
 import net.minecraftforge.eventbus.api.IEventBus;
 import net.minecraftforge.fml.ModLoadingContext;
+import net.minecraftforge.fml.loading.FMLEnvironment;
 import net.minecraftforge.fml.ModList;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.config.ModConfig;
@@ -23,6 +25,9 @@ public class Main {
         IEventBus modEventBus = FMLJavaModLoadingContext.get().getModEventBus();
         modEventBus.addListener(this::onConfigEvent);
         ModLoadingContext.get().registerConfig(ModConfig.Type.COMMON, LightspeedConfig.SPEC);
+        if (FMLEnvironment.dist.isClient()) {
+            BootstrapAgentInstaller.installForNextLaunch();
+        }
         updateCacheFlags();
     }
 

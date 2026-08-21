@@ -1,9 +1,9 @@
 package com.ccr4ft3r.lightspeed.mixin.resources;
 
 import com.ccr4ft3r.lightspeed.cache.GlobalCache;
+import com.ccr4ft3r.lightspeed.cache.resource.ResourcePathIndex;
 import com.ccr4ft3r.lightspeed.compat.FusionPackCompat;
 import com.ccr4ft3r.lightspeed.interfaces.IPackResources;
-import com.google.common.collect.Maps;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.packs.FilePackResources;
 import net.minecraft.server.packs.PackResources;
@@ -20,9 +20,6 @@ import javax.annotation.Nullable;
 import java.io.FileNotFoundException;
 import java.io.File;
 import java.io.InputStream;
-import java.util.List;
-import java.util.Map;
-import java.util.stream.Collectors;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -35,7 +32,7 @@ public abstract class FilePackResourcesMixin implements IPackResources {
     @Nullable
     private ZipFile zipFile;
     @Unique
-    private final Map<PackType, List<String>> lightspeed$entriesByPackType = Maps.newConcurrentMap();
+    private volatile ResourcePathIndex lightspeed$entries;
 
     @Inject(method = "<init>", at = @At("RETURN"))
     public void initReturnInjected(String name, File file, boolean builtin, CallbackInfo ci) {
@@ -53,30 +50,35 @@ public abstract class FilePackResourcesMixin implements IPackResources {
             return;
         }
 
-        String s = packType.getDirectory() + "/" + namespace + "/";
-        String s1 = s + path + "/";
-
-        List<String> entries;
-
-        if ((entries = lightspeed$entriesByPackType.get(packType)) == null) {
-            entries = zip.stream()
-                    .filter(e -> !e.isDirectory())
-                    .map(ZipEntry::getName)
-                    .collect(Collectors.toList());
-            lightspeed$entriesByPackType.put(packType, entries);
-        }
-
-        entries.stream()
-                .filter(entry -> entry.startsWith(s1))
-                .forEach(entry -> {
-                    String s3 = entry.substring(s.length());
-                    ResourceLocation resourcelocation = ResourceLocation.tryBuild(namespace, s3);
+        String namespacePrefix = packType.getDirectory() + "/" + namespace + "/";
+        lightspeed$getEntries(zip).forEachUnder(namespacePrefix + path, entry -> {
+                    String resourcePath = entry.substring(namespacePrefix.length());
+                    ResourceLocation resourcelocation = ResourceLocation.tryBuild(namespace, resourcePath);
                     if (resourcelocation != null) {
                         resourceOutput.accept(resourcelocation, lightspeed$openResource(packType, resourcelocation));
                     }
                 });
 
         ci.cancel();
+    }
+
+    @Unique
+    private ResourcePathIndex lightspeed$getEntries(ZipFile zip) {
+        ResourcePathIndex current = lightspeed$entries;
+        if (current != null) {
+            return current;
+        }
+        synchronized (this) {
+            current = lightspeed$entries;
+            if (current == null) {
+                current = ResourcePathIndex.from(zip.stream()
+                        .filter(entry -> !entry.isDirectory())
+                        .map(ZipEntry::getName)
+                        .toList());
+                lightspeed$entries = current;
+            }
+            return current;
+        }
     }
 
     @Unique
@@ -119,6 +121,6 @@ public abstract class FilePackResourcesMixin implements IPackResources {
 
     @Override
     public void lightspeed$persistAndClearCache() {
-        lightspeed$entriesByPackType.clear();
+        lightspeed$entries = null;
     }
 }

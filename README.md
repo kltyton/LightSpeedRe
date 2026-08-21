@@ -1,4 +1,12 @@
-<p><img src="https://img.shields.io/badge/-ModLoader:%20Forge-lightgrey" width="111" height="20" />&nbsp;<img src="https://img.shields.io/badge/-Minecraft%201.18.2-green" alt="" width="101" height="20" />&nbsp;<img src="https://img.shields.io/badge/-More%20versions%20&amp;%20optimizations%20are%20work%20in%20progress-informational" width="295" height="20" />&nbsp;<img src="https://img.shields.io/badge/-Client%20Mod%20-critical" width="69" height="20" />&nbsp;</p>
+## Lightspeed 1.20.1
+
+Install the single `lightspeed-1.20.1-1.2.5.jar` file in the instance `mods` directory. No second Agent download is required.
+
+The first launch uses the ordinary Forge Mixins and extracts the embedded bootstrap Agent. PCL, Prism/MultiMC instances that already override JVM arguments, and launchers with an isolated version JSON in the game directory are configured for subsequent launches. Unknown launchers keep the Mixin optimizations and receive a diagnostic with the exact optional arguments; Lightspeed never replaces inherited launcher-wide arguments or modifies global Java environment variables.
+
+See [the embedded bootstrap design](docs/dev/bootstrap-agent.md) for compatibility, rollback and implementation boundaries.
+
+<p><img src="https://img.shields.io/badge/-ModLoader:%20Forge-lightgrey" width="111" height="20" />&nbsp;<img src="https://img.shields.io/badge/-Minecraft%201.20.1-green" alt="" width="101" height="20" />&nbsp;<img src="https://img.shields.io/badge/-Single%20Mod%20JAR-informational" width="125" height="20" />&nbsp;<img src="https://img.shields.io/badge/-Client%20Mod%20-critical" width="69" height="20" />&nbsp;</p>
 <h5><strong>Are you using a large modpack? Do you also experience insanely high launch times when using it?<br /> Then my mod "Lightspeed" might be just what you are looking for.</strong></h5>
 <p>&nbsp;</p>
 <p><strong>🥳Thank you for 1000 Downloads - That's incredible for this short amount of time. More optimizations will come soon :)</strong></p>

@@ -3,7 +3,9 @@ package com.ccr4ft3r.lightspeed.bootstrap.transform;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.ResourceLookupPatch;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.ClassBytesPatch;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.EventBusPatch;
+import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.EventWrapperPatch;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.ForgeScanPatch;
+import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.ModuleLayerPatch;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.ServiceDiscoveryPatch;
 
 import java.lang.instrument.ClassFileTransformer;
@@ -23,6 +25,8 @@ public final class LauncherTransformer implements ClassFileTransformer {
     private static final String MODULE_CLASS_LOADER = "cpw/mods/cl/ModuleClassLoader";
     private static final String FORGE_SCANNER = "net/minecraftforge/fml/loading/moddiscovery/Scanner";
     private static final String EVENT_BUS = "net/minecraftforge/eventbus/EventBus";
+    private static final String EVENT_WRAPPER_FACTORY = "net/minecraftforge/eventbus/ModLauncherFactory";
+    private static final String MODULE_LAYER_HANDLER = "cpw/mods/modlauncher/ModuleLayerHandler";
     private static final Map<String, List<Target>> TARGETS = Map.of(
             FORGE_DISCOVERY, List.of(
                     target("fe801f95d52cff0afda4a64768a77a6567fcb8a55cbeed1efee491e2098142f3", ServiceDiscoveryPatch::forge),
@@ -37,7 +41,16 @@ public final class LauncherTransformer implements ClassFileTransformer {
             FORGE_SCANNER, List.of(
                     target("40475b4b77a9709ac07ef64f00aa234aad403c0f82c4e65b8329ee03f379f495", ForgeScanPatch::apply)),
             EVENT_BUS, List.of(
-                    target("85c5db423fac7eb69107993923aa8a1967d21916fd5c9b32d36332700e31e3d0", EventBusPatch::apply)));
+                    target("85c5db423fac7eb69107993923aa8a1967d21916fd5c9b32d36332700e31e3d0", EventBusPatch::apply)),
+            EVENT_WRAPPER_FACTORY, List.of(
+                    target("eecfddd6384bf97f6769da1e80a427bda678f093d46e3e77a27b7be696b3e46b", EventWrapperPatch::apply),
+                    target("437ddbbab024eba0c41c969f74dd656cf077433fc6535264689982f211ff5676", EventWrapperPatch::apply),
+                    target("3d562e4869935631d040a160b8f7c8949570eae38b23d0551c1243f0c995f38a", EventWrapperPatch::apply),
+                    target("b884ef498fbdbfad4ce9b1f010993baf32ea150dc1408070086a70c638ab2806", EventWrapperPatch::apply)),
+            MODULE_LAYER_HANDLER, List.of(
+                    target("b8095ee7008211f12d8b0c4db4f01fb49eb5f76ce1bb6d41b4e736cfc9b8394f", ModuleLayerPatch::apply),
+                    target("7d7a7736322c9489df70c93bbe2469007468f91c296c927a4319f3fd3a146558", ModuleLayerPatch::apply),
+                    target("c6cd537240737843f9cf13d26736cc9301d6ba6a452565bc6dc7bb90d210f9b4", ModuleLayerPatch::apply)));
 
     private final Consumer<String> logger;
 

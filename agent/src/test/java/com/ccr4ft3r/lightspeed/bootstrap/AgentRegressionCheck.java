@@ -49,6 +49,7 @@ public final class AgentRegressionCheck {
         resourceImagePersistsRecordedBytes();
         scanMetadataRoundTripsWithoutClassIo();
         eventMethodCachePreservesReflectionSemantics();
+        ownerGuardRejectsMismatchedAgent();
         packagedAgentIsIsolated();
     }
 
@@ -63,6 +64,11 @@ public final class AgentRegressionCheck {
             require(!MessageDigest.isEqual(original, transformed), "transform returned unchanged bytes: " + target.className());
             for (String hookName : target.hookNames()) {
                 require(hasHookCall(transformed, hookName), "transformed class lacks hook " + hookName);
+            }
+            if (target.className().equals("net/minecraftforge/eventbus/ModLauncherFactory")) {
+                require(hasInvocation(transformed, Opcodes.INVOKESPECIAL,
+                                "net/minecraftforge/eventbus/ClassLoaderFactory", "createWrapper"),
+                        "EventBus wrapper fast path does not call the direct wrapper factory");
             }
             new ClassReader(transformed).accept(new CheckClassAdapter(new ClassWriter(0), true), 0);
         }
@@ -210,6 +216,38 @@ public final class AgentRegressionCheck {
         require(EventMethodCache.hits() == hits + 1, "event method cache did not record the repeated lookup");
         require(EventMethodCache.declaredMethod(String.class, inherited).isEmpty(),
                 "missing declared event method did not remain empty");
+        require(BootstrapHooks.canUseDirectEventWrapper(inherited),
+                "public listener in an exported package did not use the direct wrapper path");
+        Method hidden = HiddenEventMethodParent.class.getMethod("handle", String.class);
+        require(!BootstrapHooks.canUseDirectEventWrapper(hidden),
+                "non-public listener owner did not retain the ModLauncher fallback");
+    }
+
+    private static void ownerGuardRejectsMismatchedAgent() throws Exception {
+        Path directory = Files.createTempDirectory("lightspeed-agent-owner-");
+        String previousOwner = System.getProperty("lightspeed.agent.owner");
+        try {
+            Path agent = Path.of(requireProperty("lightspeed.agent.jar"));
+            byte[] agentBytes = Files.readAllBytes(agent);
+            String digest = sha256(agentBytes);
+            Path owner = jar(directory.resolve("lightspeed-owner.jar"), Map.of(
+                    "META-INF/mods.toml", new byte[]{1},
+                    "META-INF/lightspeed/bootstrap-agent.jar", agentBytes), false);
+            System.setProperty("lightspeed.agent.owner", owner.toString());
+            require(LightspeedAgent.ownerMatchesAgent(digest), "matching embedded Agent was rejected");
+
+            jar(owner, Map.of(
+                    "META-INF/mods.toml", new byte[]{1},
+                    "META-INF/lightspeed/bootstrap-agent.jar", new byte[]{9, 9, 9}), false);
+            require(!LightspeedAgent.ownerMatchesAgent(digest), "mismatched embedded Agent was accepted");
+        } finally {
+            if (previousOwner == null) {
+                System.clearProperty("lightspeed.agent.owner");
+            } else {
+                System.setProperty("lightspeed.agent.owner", previousOwner);
+            }
+            deleteTree(directory);
+        }
     }
 
     private static void resourceImagePersistsRecordedBytes() throws IOException {
@@ -331,7 +369,28 @@ public final class AgentRegressionCheck {
                         "ce036690cdf020cafb15d4a3a84a009c6bb50cea8073ea82ada379e5778d0838", "mightContain"),
                 target("lightspeed.target.eventbus", "net/minecraftforge/eventbus/EventBus",
                         "85c5db423fac7eb69107993923aa8a1967d21916fd5c9b32d36332700e31e3d0",
-                        "declaredEventMethod")
+                        "declaredEventMethod"),
+                target("lightspeed.target.eventbus", "net/minecraftforge/eventbus/ModLauncherFactory",
+                        "437ddbbab024eba0c41c969f74dd656cf077433fc6535264689982f211ff5676",
+                        "canUseDirectEventWrapper"),
+                target("lightspeed.target.eventbus.old", "net/minecraftforge/eventbus/ModLauncherFactory",
+                        "eecfddd6384bf97f6769da1e80a427bda678f093d46e3e77a27b7be696b3e46b",
+                        "canUseDirectEventWrapper"),
+                target("lightspeed.target.eventbus.mid", "net/minecraftforge/eventbus/ModLauncherFactory",
+                        "3d562e4869935631d040a160b8f7c8949570eae38b23d0551c1243f0c995f38a",
+                        "canUseDirectEventWrapper"),
+                target("lightspeed.target.eventbus.current", "net/minecraftforge/eventbus/ModLauncherFactory",
+                        "b884ef498fbdbfad4ce9b1f010993baf32ea150dc1408070086a70c638ab2806",
+                        "canUseDirectEventWrapper"),
+                target("lightspeed.target.modlauncher10", "cpw/mods/modlauncher/ModuleLayerHandler",
+                        "b8095ee7008211f12d8b0c4db4f01fb49eb5f76ce1bb6d41b4e736cfc9b8394f",
+                        "resolveAndBind"),
+                target("lightspeed.target.modlauncher11", "cpw/mods/modlauncher/ModuleLayerHandler",
+                        "c6cd537240737843f9cf13d26736cc9301d6ba6a452565bc6dc7bb90d210f9b4",
+                        "resolveAndBind"),
+                target("lightspeed.target.modlauncher11.legacy", "cpw/mods/modlauncher/ModuleLayerHandler",
+                        "7d7a7736322c9489df70c93bbe2469007468f91c296c927a4319f3fd3a146558",
+                        "resolveAndBind")
         );
     }
 
@@ -364,6 +423,26 @@ public final class AgentRegressionCheck {
                     @Override
                     public void visitMethodInsn(int opcode, String owner, String name, String descriptor, boolean isInterface) {
                         if (opcode == Opcodes.INVOKESTATIC && HOOK_OWNER.equals(owner) && hookName.equals(name)) {
+                            found[0] = true;
+                        }
+                    }
+                };
+            }
+        }, ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+        return found[0];
+    }
+
+    private static boolean hasInvocation(byte[] bytes, int expectedOpcode, String expectedOwner, String expectedName) {
+        boolean[] found = {false};
+        new ClassReader(bytes).accept(new ClassVisitor(Opcodes.ASM9) {
+            @Override
+            public MethodVisitor visitMethod(int access, String name, String descriptor, String signature,
+                                             String[] exceptions) {
+                return new MethodVisitor(Opcodes.ASM9) {
+                    @Override
+                    public void visitMethodInsn(int opcode, String owner, String name, String descriptor,
+                                                boolean isInterface) {
+                        if (opcode == expectedOpcode && owner.equals(expectedOwner) && name.equals(expectedName)) {
                             found[0] = true;
                         }
                     }
@@ -414,6 +493,11 @@ public final class AgentRegressionCheck {
     }
 
     public static class EventMethodParent {
+        public void handle(String value) {
+        }
+    }
+
+    static class HiddenEventMethodParent {
         public void handle(String value) {
         }
     }

@@ -144,3 +144,16 @@ The following parts are pack-specific and must be re-profiled:
 3. The actual reduction in title time after a class or module is made lazy.
 
 Therefore the method and the loader-level measurement surface are general, while the final lazy-initialization allowlist is not. The next safe implementation should be an opt-in, bounded attribution mode in the bootstrap layer that records counts by module/JAR and initiating framework phase with negligible overhead. It should first be run on at least two materially different Forge packs before any common lazy policy is enabled by default.
+
+## Implemented single-JAR follow-up
+
+Version 1.2.5 keeps the ordinary GAME-layer changes as Mixins and embeds the bootstrap Agent inside the one distributable Mod JAR. The first launch extracts the exact embedded Agent and installs per-instance arguments for supported launchers; later launches retain premain access without a second user-installed file.
+
+The remaining P1/P2 implementation adds:
+
+- immutable resource prefix indexes with `O(log E + K)` listing;
+- a fingerprinted ModuleLayer service-closure plan that verifies the resolved reads graph and fails back to `resolveAndBind`;
+- direct EventBus wrapper generation through EventBus's existing non-ModLauncher factory path;
+- one bounded startup CPU pool with nested lookup backpressure and at most two low-priority cache I/O workers.
+
+The class-loader boundary remains explicit: `ModuleLayerHandler`, SecureJarHandler, Forge Scanner and EventBus bootstrap classes cannot be transformed by an ordinary Mod Mixin because they are already defined outside the GAME transforming loader. The embedded premain Agent handles only these exact SHA-256-supported bootstrap targets.
