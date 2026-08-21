@@ -9,6 +9,9 @@
 - 将物理 JAR 的精确资源清单共享给普通 Mod，使用排序前缀查询替代重复 UnionFS 遍历、逐项 `Path.resolve` 和分散的资源列表缓存。
 - 在Agent阶段缓存Forge EventBus的声明方法反射结果，避免大量对象监听器重复执行`Class.getDeclaredMethod`。
 - 新增有界资源字节启动镜像：首轮记录实际成功打开的标准Mod JAR资源，后续启动在整包指纹匹配时绕过UnionFS和ZIP读取。
+- 将资源索引绑定到每个资源包的精确逻辑根，使用预构建目录区间和整数句柄替代热路径二分、文件系统查表、Future等待、反射和结果数组复制；子路径资源包不会读取整JAR视图。
+- 新增独立有界的原始类字节与Forge扫描元数据镜像；缓存命中仍执行原始Mixin、AccessTransformer、语言加载器和安全验证流程。
+- 生产实验发现相同输入存在926个转换后字节不一致结果，因此未启用转换后字节码短路缓存。
 - 所有 ASM 补丁按目标类 SHA-256 严格匹配；未知版本、目录、多版本 JAR 和读取失败均保持原版路径并输出可诊断日志。
 
 ### English
@@ -18,6 +21,9 @@
 - Shared exact physical-JAR resource entries with the ordinary mod, replacing repeated UnionFS walks, per-entry `Path.resolve`, and fragmented resource-list caches with sorted prefix queries.
 - Cached Forge EventBus declared-method reflection results in the Agent, avoiding repeated `Class.getDeclaredMethod` calls while object listeners are registered.
 - Added a bounded resource-byte startup image: the first run records successfully opened standard-Mod JAR resources, and later matching launches bypass UnionFS and ZIP reads.
+- Bound each resource pack to an exact logical-root view, replacing hot-path binary searches, filesystem maps, future joins, reflection, and copied result arrays with immutable handles and prebuilt directory ranges.
+- Added separate bounded images for raw class bytes and Forge scan metadata; cache hits still execute the original Mixin, AccessTransformer, language-loader, and security pipelines.
+- Production verification found 926 transformed-byte mismatches for identical input keys, so transformed-bytecode short-circuit caching remains rejected.
 - All ASM patches require an exact target-class SHA-256; unknown versions, directories, multi-release JARs, and read failures keep the original path with diagnostic logging.
 
 ## 1.20.1-1.2.3

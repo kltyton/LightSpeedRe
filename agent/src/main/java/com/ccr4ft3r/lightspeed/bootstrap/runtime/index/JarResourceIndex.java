@@ -6,7 +6,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.BitSet;
-import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.function.BiPredicate;
@@ -52,37 +51,21 @@ final class JarResourceIndex {
         return isExact() && bloom.mightContain(name) && Arrays.binarySearch(entries, name) >= 0;
     }
 
-    String[] entries(String basePrefix, String requestedPath) {
+    JarResourceView view(String rootPrefix, String imageSource) {
         if (!isExact()) {
             return null;
         }
-        String base = basePrefix.isEmpty() ? "" : basePrefix + '/';
-        String requested = requestedPath.isEmpty() ? base : base + requestedPath + '/';
-        int start = lowerBound(entries, requested);
+        String prefix = rootPrefix.isEmpty() ? "" : rootPrefix + '/';
+        int start = lowerBound(entries, prefix);
         int end = start;
-        while (end < entries.length && entries[end].startsWith(requested)) {
+        while (end < entries.length && entries[end].startsWith(prefix)) {
             end++;
         }
         String[] relative = new String[end - start];
         for (int index = start; index < end; index++) {
-            relative[index - start] = entries[index].substring(base.length());
+            relative[index - start] = entries[index].substring(prefix.length());
         }
-        return relative;
-    }
-
-    String[] namespaces(String directory) {
-        if (!isExact()) {
-            return null;
-        }
-        String prefix = directory.isEmpty() ? "" : directory + '/';
-        Set<String> namespaces = new LinkedHashSet<>();
-        for (int index = lowerBound(entries, prefix); index < entries.length && entries[index].startsWith(prefix); index++) {
-            int separator = entries[index].indexOf('/', prefix.length());
-            if (separator > prefix.length()) {
-                namespaces.add(entries[index].substring(prefix.length(), separator));
-            }
-        }
-        return namespaces.toArray(String[]::new);
+        return new JarResourceView(relative, Bloom.create(relative), imageSource, rootPrefix);
     }
 
     private static boolean addJarEntries(Path path, BiPredicate<String, String> filter, Set<String> names) {
@@ -124,7 +107,7 @@ final class JarResourceIndex {
         return low;
     }
 
-    private record Bloom(BitSet bits, int mask) {
+    record Bloom(BitSet bits, int mask) {
         private static final int HASH_COUNT = 4;
 
         static Bloom create(String[] entries) {

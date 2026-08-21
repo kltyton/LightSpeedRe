@@ -33,8 +33,8 @@ The bytecode transformer is fail-closed and matches the complete SHA-256 of each
 
 | Runtime | Target |
 |---|---|
-| Forge 1.20.1 production | FML Loader 47.4.0, ModLauncher 10.0.9, SecureJarHandler 2.1.10 |
-| Forge 1.20.1 development | FML Loader 47.4.20, SecureJarHandler 2.1.10 |
+| Forge 1.20.1 production | FML Loader 47.4.0, ModLauncher 10.0.9, SecureJarHandler 2.1.10, ForgeSPI 7.0.1 |
+| Forge 1.20.1 development | FML Loader 47.4.20, ModLauncher 10.0.9, SecureJarHandler 2.1.10, ForgeSPI 7.0.1 |
 | NeoForge 1.21.1 | FML 4.0.42, ModLauncher 11.0.5, SecureJarHandler 3.0.8 |
 
 An unknown class fingerprint is logged and left unchanged. A partial transform is never installed.
@@ -47,11 +47,11 @@ Before FML constructs a complete `SecureJar`/`JarContents`, the Agent checks the
 
 ### Shared immutable-JAR resource index
 
-When SecureJar creates an immutable UnionFS root, the Agent records all physical JAR roots and the active path filter. It reads each ZIP central directory once, publishes one exact sorted entry table plus a Bloom front filter, and shares that table with the ordinary Mod through a fail-open bootstrap bridge.
+When SecureJar creates an immutable UnionFS root, the Agent records all physical JAR roots and the active path filter. It reads each ZIP central directory once, publishes one exact sorted entry table plus a Bloom front filter, and shares immutable integer handles with the ordinary Mod through a fail-open bootstrap bridge.
 
-Definite misses skip `Files.exists` and `UnionFileSystem.testFilter`. `PathPackResources.listResources` uses binary prefix ranges instead of walking UnionFS or creating a `Path` per cached entry. Mutable directories, multi-release overlays, unsupported file systems, and index failures retain the original path.
+Each handle is bound to the pack's exact logical root. Standard packs and safe sub-path packs therefore see only their own relative entries. Directory-to-range tables and namespace sets are built once; hot listings no longer perform a filesystem map lookup, `CompletableFuture.join`, reflective method invocation, binary string search, or result-array copy. Mutable directories, multi-release overlays, unsupported file systems, and index failures retain the original path.
 
-Index construction is `O(E log E)` once per JAR root, where `E` is the visible entry count. Exact membership is `O(log E)` after four Bloom probes, and prefix listing is `O(log E + K)` for `K` returned resources. With the Agent active, the Mod does not eagerly load or rebuild its legacy serialized resource-list caches.
+Index construction is `O(E log E)` once per JAR root, where `E` is the visible entry count. Exact membership is `O(log E)` after four Bloom probes, while a bound prefix listing is `O(1 + K)` for `K` returned resources. With the Agent active, the Mod does not eagerly load or rebuild its legacy serialized resource-list caches.
 
 ### EventBus declaration cache
 
@@ -59,9 +59,21 @@ Forge EventBus 6.0.5 repeatedly resolves inherited public listener methods with 
 
 ### Resource-byte startup image
 
-For standard immutable Mod JAR packs, successful resource opens are captured after the original UnionFS path has proved the resource exists. At the title screen, newly observed bytes are atomically merged into `lightspeed-cache/bootstrap/resource-image-v1.bin`. Later launches validate the complete Mod-JAR metadata fingerprint and load the image asynchronously while Forge constructs mods.
+For exact immutable Mod JAR pack views, successful resource opens are captured after the original UnionFS path has proved the resource exists. At the title screen, newly observed bytes are atomically merged into `lightspeed-cache/bootstrap/resource-image-v2.bin`. Later launches validate the Java/classpath/module-path/Mod-JAR metadata fingerprint and load the image asynchronously while Forge constructs mods.
 
-Image hits return an in-memory stream before UnionFS or ZIP access. Dynamic/subpath packs, directory roots, multi-release roots, stale fingerprints, failed reads, entries larger than 32 MiB, and data beyond the default 512 MiB image budget keep the original path. The budget can be changed with `-Dlightspeed.resourceImageMiB=<64..1024>`. Deleting the image is a complete rollback.
+Image hits return an in-memory stream before UnionFS or ZIP access. Unregistered or mutable packs, multi-release roots, stale fingerprints, failed reads, entries larger than 32 MiB, and data beyond the default 512 MiB image budget keep the original path. Exact immutable sub-path views are supported. The budget can be changed with `-Dlightspeed.resourceImageMiB=<64..1024>`. Deleting the image is a complete rollback.
+
+### Raw class-byte image
+
+The Agent patches SecureJarHandler's `ModuleClassLoader.getClassBytes` and records only the immutable bytes read before ModLauncher transformation. A hit bypasses the corresponding UnionFS/ZIP read, then follows the original Mixin, AccessTransformer, transformer, signer, protection-domain, verifier, and `defineClass` path unchanged. The class image is independent from resource bytes and defaults to 64 MiB (`-Dlightspeed.classImageMiB=<16..256>`). Set `-Dlightspeed.rawClassImage=false` to disable it.
+
+### Forge scan-metadata image
+
+Forge 47.4 scans class files with ASM to construct `ModFileScanData`. The Agent stores a neutral, bounded representation of each class/annotation record and reconstructs the same ForgeSPI record types on a cache hit. Language-loader visitors still run after the core scan. The image defaults to 128 MiB (`-Dlightspeed.scanImageMiB=<16..512>`); set `-Dlightspeed.scanMetadataCache=false` to disable it. Unsupported values, stale fingerprints, module-access failures, and corrupt entries fall back to Forge's original scanner.
+
+### Rejected transformed-bytecode cache
+
+An explicit two-run ATM9 experiment always executed the real transformation chain and compared outputs for the same class name, context, and raw-byte SHA-256. It observed 49,092 matches and 926 mismatches. ModLauncher also mutates its audit trail and invokes arbitrary plugin/transformer callbacks. Returning cached transformed bytes would therefore change observable loader state and is intentionally not implemented.
 
 ## Diagnostics and rollback
 
@@ -71,6 +83,8 @@ Expected early log lines include:
 [Lightspeed Agent] active: ...
 [Lightspeed Agent] patched net/minecraftforge/fml/loading/ModDirTransformerDiscoverer ...
 [Lightspeed Agent] patched cpw/mods/jarhandling/impl/Jar ...
+[Lightspeed Agent] patched cpw/mods/cl/ModuleClassLoader ...
+[Lightspeed Agent] patched net/minecraftforge/fml/loading/moddiscovery/Scanner ...
 [Lightspeed Agent] patched net/minecraftforge/eventbus/EventBus ...
 ```
 
@@ -81,4 +95,4 @@ Rollback is only:
 1. Remove the `-javaagent:...` JVM argument.
 2. Start the same instance again.
 
-No production version JSON edit or save change is involved. The optional resource image can be deleted independently.
+No production version JSON edit or save change is involved. The optional `resource-image-v2.bin`, `class-image-v1.bin`, and `scan-image-v1.bin` files can be deleted independently.

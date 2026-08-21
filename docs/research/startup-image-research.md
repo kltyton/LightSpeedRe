@@ -38,11 +38,13 @@ This record covers external implementation patterns considered for the Forge 1.2
 
 ## Selected clean-room design
 
-Lightspeed caches only immutable standard-Mod resource bytes that were successfully opened during a real startup. It does not serialize baked models, mod objects, GL handles, native images, classes, or transformed bytecode.
+Lightspeed caches immutable resource bytes, bounded raw pre-transform class bytes, and neutral Forge scan metadata that were observed during a real startup. It does not serialize baked models, mod objects, GL handles, native images, loaded `Class` objects, or transformed bytecode.
 
-- First run: read through the original UnionFS path, retain bounded bytes, and atomically write one startup image after the title screen appears.
-- Later runs: validate the complete Mod-JAR metadata fingerprint and serve matching bytes before UnionFS/ZIP access.
+- First run: read through the original UnionFS/Forge paths, retain bounded data by category, and atomically write independent images after the title screen appears.
+- Later runs: validate Java, classpath, module-path, and complete Mod-JAR metadata fingerprints before serving cached data.
 - Dynamic packs, resource packs without an `IModFile`, directory roots, multi-release roots, oversized resources, stale images, and any read/write failure use the original path.
 - The image has fixed per-entry and total-size limits. Removing it is a complete rollback.
 
-This targets generic ZIP/UnionFS resource I/O while preserving ModernFix and third-party model/render behavior.
+The production images are independently bounded at 512 MiB for resources, 64 MiB for raw classes, and 128 MiB for scan metadata. Splitting them prevents class bytes from evicting the resource workload. A combined 447 MB prototype was rejected after 52-54 second warm starts; the split logical-root design reached 47 seconds on capture and 46 seconds warm.
+
+The transformed-byte experiment remained read-only with respect to loader behavior: it executed all transformers and compared output. The second run observed 49,092 identical outputs and 926 mismatches for identical input keys. Together with ModLauncher's audit/plugin side effects, this rejects transformed-byte short-circuit caching as a generic optimization.

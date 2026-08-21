@@ -23,12 +23,15 @@ configurations {
     secureJar2Target { transitive = false }
     secureJar3Target { transitive = false }
     eventBusTarget { transitive = false }
+    forgeSpiTarget { transitive = false }
 }
 
 dependencies {
     implementation 'org.ow2.asm:asm:9.7.1'
     implementation 'org.ow2.asm:asm-tree:9.7.1'
     testImplementation 'org.ow2.asm:asm-util:9.7.1'
+    testImplementation files(configurations.forgeProductionTarget)
+    testImplementation files(configurations.forgeSpiTarget)
 
     forgeProductionTarget 'net.minecraftforge:fmlloader:1.20.1-47.4.0'
     forgeDevelopmentTarget 'net.minecraftforge:fmlloader:1.20.1-47.4.20'
@@ -36,6 +39,7 @@ dependencies {
     secureJar2Target 'cpw.mods:securejarhandler:2.1.10'
     secureJar3Target 'cpw.mods:securejarhandler:3.0.8'
     eventBusTarget 'net.minecraftforge:eventbus:6.0.5'
+    forgeSpiTarget 'net.minecraftforge:forgespi:7.0.1'
 }
 
 tasks.named('jar', Jar).configure {

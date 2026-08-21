@@ -3,9 +3,10 @@ package com.ccr4ft3r.lightspeed.compat.bootstrap;
 import com.mojang.logging.LogUtils;
 import org.slf4j.Logger;
 
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
+import java.lang.reflect.Constructor;
 import java.nio.file.Path;
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class BootstrapAgentBridge {
@@ -13,108 +14,142 @@ public final class BootstrapAgentBridge {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final AtomicBoolean FAILURE_LOGGED = new AtomicBoolean();
     private static final boolean RESOURCE_INDEX_ENABLED = Boolean.getBoolean("lightspeed.bootstrapAgent.resourceIndex");
-    private static final Method RESOURCE_ENTRIES;
-    private static final Method CONTAINS_RESOURCE;
-    private static final Method RESOURCE_NAMESPACES;
-    private static final Method RESOURCE_BYTES;
-    private static final Method RECORD_RESOURCE_BYTES;
-    private static final Method PERSIST_RESOURCE_IMAGE;
+    private static volatile Access access;
 
     static {
-        Method resourceEntries = null;
-        Method containsResource = null;
-        Method resourceNamespaces = null;
-        Method resourceBytes = null;
-        Method recordResourceBytes = null;
-        Method persistResourceImage = null;
         if (Boolean.getBoolean("lightspeed.bootstrapAgent.active")) {
             try {
-                Class<?> hooks = Class.forName(
-                        "com.ccr4ft3r.lightspeed.bootstrap.runtime.BootstrapHooks", false, null);
-                resourceEntries = hooks.getMethod("resourceEntries", Path.class, String.class, String.class);
-                containsResource = hooks.getMethod("containsResource", Path.class, String.class);
-                resourceNamespaces = hooks.getMethod("resourceNamespaces", Path.class, String.class);
-                resourceBytes = hooks.getMethod("resourceBytes", Path.class, String.class);
-                recordResourceBytes = hooks.getMethod("recordResourceBytes", Path.class, String.class, byte[].class);
-                persistResourceImage = hooks.getMethod("persistResourceImage");
+                Constructor<?> constructor = Class.forName(
+                        "com.ccr4ft3r.lightspeed.compat.bootstrap.BootstrapAgentAccess", true,
+                        BootstrapAgentBridge.class.getClassLoader()).getDeclaredConstructor();
+                constructor.setAccessible(true);
+                access = (Access) constructor.newInstance();
             } catch (ReflectiveOperationException | LinkageError exception) {
                 logFailure("initialize", exception);
             }
         }
-        RESOURCE_ENTRIES = resourceEntries;
-        CONTAINS_RESOURCE = containsResource;
-        RESOURCE_NAMESPACES = resourceNamespaces;
-        RESOURCE_BYTES = resourceBytes;
-        RECORD_RESOURCE_BYTES = recordResourceBytes;
-        PERSIST_RESOURCE_IMAGE = persistResourceImage;
     }
 
     private BootstrapAgentBridge() {
     }
 
     public static boolean isAvailable() {
-        return RESOURCE_INDEX_ENABLED && RESOURCE_ENTRIES != null;
+        return RESOURCE_INDEX_ENABLED && access != null;
     }
 
-    public static String[] resourceEntries(Path path, String basePrefix, String requestedPath) {
-        if (!RESOURCE_INDEX_ENABLED) {
-            return null;
-        }
-        Object result = invoke(RESOURCE_ENTRIES, "list resources", path, basePrefix, requestedPath);
-        return result instanceof String[] entries ? entries : null;
-    }
-
-    public static int containsResource(Path path, String name) {
-        if (!RESOURCE_INDEX_ENABLED) {
+    public static int bindResourceIndex(Path path) {
+        Access current = access;
+        if (!RESOURCE_INDEX_ENABLED || current == null) {
             return UNKNOWN;
         }
-        Object result = invoke(CONTAINS_RESOURCE, "test resource membership", path, name);
-        return result instanceof Integer value ? value : UNKNOWN;
+        try {
+            return current.bindResourceIndex(path);
+        } catch (RuntimeException | LinkageError exception) {
+            disable("bind resource index", exception);
+            return UNKNOWN;
+        }
     }
 
-    public static String[] resourceNamespaces(Path path, String directory) {
-        if (!RESOURCE_INDEX_ENABLED) {
+    public static List<String> resourceEntries(int handle, String basePrefix, String requestedPath) {
+        Access current = access;
+        if (!RESOURCE_INDEX_ENABLED || current == null) {
             return null;
         }
-        Object result = invoke(RESOURCE_NAMESPACES, "list namespaces", path, directory);
-        return result instanceof String[] namespaces ? namespaces : null;
-    }
-
-    public static byte[] resourceBytes(Path path, String name) {
-        if (!RESOURCE_INDEX_ENABLED) {
+        try {
+            return current.resourceEntries(handle, basePrefix, requestedPath);
+        } catch (RuntimeException | LinkageError exception) {
+            disable("list resources", exception);
             return null;
         }
-        Object result = invoke(RESOURCE_BYTES, "load startup resource image", path, name);
-        return result instanceof byte[] bytes ? bytes : null;
     }
 
-    public static void recordResourceBytes(Path path, String name, byte[] bytes) {
-        if (RESOURCE_INDEX_ENABLED) {
-            invoke(RECORD_RESOURCE_BYTES, "record startup resource image", path, name, bytes);
+    public static int containsResource(int handle, String name) {
+        Access current = access;
+        if (!RESOURCE_INDEX_ENABLED || current == null) {
+            return UNKNOWN;
+        }
+        try {
+            return current.containsResource(handle, name);
+        } catch (RuntimeException | LinkageError exception) {
+            disable("test resource membership", exception);
+            return UNKNOWN;
+        }
+    }
+
+    public static Set<String> resourceNamespaces(int handle, String directory) {
+        Access current = access;
+        if (!RESOURCE_INDEX_ENABLED || current == null) {
+            return null;
+        }
+        try {
+            return current.resourceNamespaces(handle, directory);
+        } catch (RuntimeException | LinkageError exception) {
+            disable("list namespaces", exception);
+            return null;
+        }
+    }
+
+    public static byte[] resourceBytes(int handle, String name) {
+        Access current = access;
+        if (!RESOURCE_INDEX_ENABLED || current == null) {
+            return null;
+        }
+        try {
+            return current.resourceBytes(handle, name);
+        } catch (RuntimeException | LinkageError exception) {
+            disable("load startup image", exception);
+            return null;
+        }
+    }
+
+    public static void recordResourceBytes(int handle, String name, byte[] bytes) {
+        Access current = access;
+        if (!RESOURCE_INDEX_ENABLED || current == null) {
+            return;
+        }
+        try {
+            current.recordResourceBytes(handle, name, bytes);
+        } catch (RuntimeException | LinkageError exception) {
+            disable("record startup image", exception);
         }
     }
 
     public static void persistResourceImage() {
-        if (RESOURCE_INDEX_ENABLED) {
-            invoke(PERSIST_RESOURCE_IMAGE, "persist startup resource image");
+        Access current = access;
+        if (!RESOURCE_INDEX_ENABLED || current == null) {
+            return;
+        }
+        try {
+            current.persistResourceImage();
+        } catch (RuntimeException | LinkageError exception) {
+            disable("persist startup image", exception);
         }
     }
 
-    private static Object invoke(Method method, String operation, Object... arguments) {
-        if (method == null) {
-            return null;
-        }
-        try {
-            return method.invoke(null, arguments);
-        } catch (IllegalAccessException | InvocationTargetException | RuntimeException exception) {
-            logFailure(operation, exception);
-            return null;
-        }
+    private static void disable(String operation, Throwable throwable) {
+        access = null;
+        logFailure(operation, throwable);
     }
 
     private static void logFailure(String operation, Throwable throwable) {
         if (FAILURE_LOGGED.compareAndSet(false, true)) {
             LOGGER.warn("Lightspeed bootstrap bridge could not {}; falling back to the standard startup path", operation, throwable);
         }
+    }
+
+    interface Access {
+        int bindResourceIndex(Path path);
+
+        List<String> resourceEntries(int handle, String basePrefix, String requestedPath);
+
+        int containsResource(int handle, String name);
+
+        Set<String> resourceNamespaces(int handle, String directory);
+
+        byte[] resourceBytes(int handle, String name);
+
+        void recordResourceBytes(int handle, String name, byte[] bytes);
+
+        void persistResourceImage();
     }
 }

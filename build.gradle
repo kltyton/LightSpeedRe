@@ -127,6 +127,7 @@ dependencies {
     // that the dep is a ForgeGradle 'patcher' dependency, and its patches will be applied.
     // The userdev artifact is a special name and will get all sorts of transformations applied to it.
     minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
+    compileOnly files(project(':agent').layout.buildDirectory.dir('classes/java/main'))
     annotationProcessor 'org.spongepowered:mixin:0.8.5:processor'
 
     // MixinExtras (@WrapOperation/@Local) - official Forge 1.18.2+ ForgeGradle setup.
@@ -199,6 +200,10 @@ tasks.named('jarJar').configure {
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8' // Use the UTF-8 charset for Java compilation
+}
+
+tasks.named('compileJava').configure {
+    dependsOn ':agent:compileJava'
 }
 
 tasks.named('build').configure {

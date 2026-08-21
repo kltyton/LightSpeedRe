@@ -4,15 +4,20 @@ import com.ccr4ft3r.lightspeed.bootstrap.runtime.BootstrapHooks;
 import com.ccr4ft3r.lightspeed.bootstrap.runtime.event.EventMethodCache;
 import com.ccr4ft3r.lightspeed.bootstrap.runtime.image.StartupResourceImage;
 import com.ccr4ft3r.lightspeed.bootstrap.runtime.index.ResourceMembershipIndex;
+import com.ccr4ft3r.lightspeed.bootstrap.runtime.scan.ScanMetadataCache;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.LauncherTransformer;
+import net.minecraftforge.fml.loading.moddiscovery.ModAnnotation;
+import net.minecraftforge.forgespi.language.ModFileScanData;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassVisitor;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.Type;
 import org.objectweb.asm.util.CheckClassAdapter;
 
 import java.io.IOException;
+import java.lang.annotation.ElementType;
 import java.lang.reflect.Method;
 import java.nio.file.FileSystem;
 import java.nio.file.FileSystems;
@@ -42,6 +47,7 @@ public final class AgentRegressionCheck {
         servicePrefilterIsFailOpen();
         resourceIndexHasNoFalseNegatives();
         resourceImagePersistsRecordedBytes();
+        scanMetadataRoundTripsWithoutClassIo();
         eventMethodCachePreservesReflectionSemantics();
         packagedAgentIsIsolated();
     }
@@ -111,7 +117,10 @@ public final class AgentRegressionCheck {
                 require(BootstrapHooks.mightContain(root, archive, "present.txt"), "present resource was rejected");
                 require(BootstrapHooks.mightContain(root, archive, "nested/also-present.txt"), "nested resource was rejected");
                 require(!BootstrapHooks.mightContain(root, archive, "missing.txt"), "missing resource was not rejected");
-                require(List.of(BootstrapHooks.resourceEntries(root, "", "nested"))
+                int handle = BootstrapHooks.bindResourceIndex(root);
+                require(handle != ResourceMembershipIndex.UNKNOWN, "exact resource root did not bind a handle");
+                require(handle == BootstrapHooks.bindResourceIndex(root), "resource root handle was not stable");
+                require(BootstrapHooks.resourceEntries(handle, "", "nested")
                                 .equals(List.of("nested/also-present.txt")),
                         "prefix resource listing crossed a path-segment boundary");
             }
@@ -141,9 +150,34 @@ public final class AgentRegressionCheck {
                         "second union resource was rejected");
                 require(!BootstrapHooks.mightContain(root, first, "assets/first/hidden.txt"),
                         "filtered union resource was retained");
-                require(Set.of(BootstrapHooks.resourceNamespaces(root, "assets"))
+                int handle = BootstrapHooks.bindResourceIndex(root);
+                require(BootstrapHooks.resourceNamespaces(handle, "assets")
                                 .equals(Set.of("first", "second")),
                         "namespace index did not preserve all physical roots");
+            }
+
+            Path subRootArchive = jar(directory.resolve("sub-root.jar"), Map.of(
+                    "assets/root/root.txt", new byte[]{1},
+                    "optional/assets/child/inside.txt", new byte[]{2},
+                    "optional/assets/child/nested/deep.txt", new byte[]{3}), false);
+            try (FileSystem zip = FileSystems.newFileSystem(subRootArchive)) {
+                Path root = zip.getPath("/");
+                BootstrapHooks.mightContain(root, subRootArchive, "assets/root/root.txt");
+                int rootHandle = BootstrapHooks.bindResourceIndex(root);
+                int subRootHandle = BootstrapHooks.bindResourceIndex(root.resolve("optional"));
+                require(BootstrapHooks.resourceEntries(rootHandle, "assets/root", "")
+                                .equals(List.of("root.txt")),
+                        "root view did not preserve root resources");
+                List<String> subRootEntries = BootstrapHooks.resourceEntries(
+                        subRootHandle, "assets/child", "nested");
+                require(subRootEntries.equals(List.of("nested/deep.txt")),
+                        "sub-root view leaked entries outside its logical root");
+                try {
+                    subRootEntries.set(0, "changed");
+                    throw new AssertionError("resource view exposed mutable entries");
+                } catch (UnsupportedOperationException expected) {
+                    // Expected immutable view.
+                }
             }
         } finally {
             deleteTree(directory);
@@ -184,12 +218,12 @@ public final class AgentRegressionCheck {
         try {
             System.setProperty("lightspeed.bootstrapCacheDir", directory.toString());
             byte[] expected = new byte[]{1, 2, 3, 4};
-            StartupResourceImage.record("test.jar\0assets/test/value.bin", expected);
+            StartupResourceImage.recordResource("test.jar\0assets/test/value.bin", expected);
             require(MessageDigest.isEqual(expected,
-                            StartupResourceImage.get("test.jar\0assets/test/value.bin")),
+                            StartupResourceImage.resource("test.jar\0assets/test/value.bin")),
                     "recorded resource image bytes were not readable");
             StartupResourceImage.persist();
-            require(Files.size(directory.resolve("resource-image-v1.bin")) > expected.length,
+            require(Files.size(directory.resolve("resource-image-v2.bin")) > expected.length,
                     "resource image was not persisted");
         } finally {
             if (previous == null) {
@@ -197,6 +231,42 @@ public final class AgentRegressionCheck {
             } else {
                 System.setProperty("lightspeed.bootstrapCacheDir", previous);
             }
+            deleteTree(directory);
+        }
+    }
+
+    private static void scanMetadataRoundTripsWithoutClassIo() throws IOException {
+        Path directory = Files.createTempDirectory("lightspeed-agent-scan-");
+        try {
+            Path archive = jar(directory.resolve("scan.jar"),
+                    Map.of("nested/Test.class", new byte[]{1}), false);
+            try (FileSystem zip = FileSystems.newFileSystem(archive)) {
+                Path root = zip.getPath("/");
+                BootstrapHooks.mightContain(root, archive, "nested/Test.class");
+                Path classPath = root.resolve("nested/Test.class");
+                Type classType = Type.getObjectType("nested/Test");
+                ModFileScanData source = new ModFileScanData();
+                source.getClasses().add(new ModFileScanData.ClassData(
+                        classType, Type.getType(Object.class), Set.of(Type.getType(Runnable.class))));
+                source.getAnnotations().add(new ModFileScanData.AnnotationData(
+                        Type.getType(Deprecated.class), ElementType.TYPE, classType, null,
+                        Map.of("name", "cached", "kind", new ModAnnotation.EnumHolder("Lsample/Kind;", "VALUE"),
+                                "nested", Map.of("type", Type.getType(String.class)),
+                                "values", List.of(1, true, "three"))));
+
+                ScanMetadataCache.record(classPath, source);
+                ModFileScanData restored = new ModFileScanData();
+                require(ScanMetadataCache.replay(classPath, restored), "scan metadata did not replay");
+                require(restored.getClasses().equals(source.getClasses()), "scan class data changed during replay");
+                require(restored.getAnnotations().size() == 1, "scan annotations were not restored");
+                ModFileScanData.AnnotationData annotation = restored.getAnnotations().iterator().next();
+                require(annotation.annotationType().equals(Type.getType(Deprecated.class)),
+                        "scan annotation type changed during replay");
+                ModAnnotation.EnumHolder enumValue = (ModAnnotation.EnumHolder) annotation.annotationData().get("kind");
+                require(enumValue.getDesc().equals("Lsample/Kind;") && enumValue.getValue().equals("VALUE"),
+                        "scan enum annotation value changed during replay");
+            }
+        } finally {
             deleteTree(directory);
         }
     }
@@ -212,6 +282,12 @@ public final class AgentRegressionCheck {
                 target("lightspeed.target.securejar2", "cpw/mods/jarhandling/impl/Jar",
                         "bba6a4ee9327d364967a3cfec4707d695d5962cb42a20a4b212a26434a5b9055",
                         "registerResourceRoot", "mightContain"),
+                target("lightspeed.target.securejar2", "cpw/mods/cl/ModuleClassLoader",
+                        "62e3eaa069098d55f5da70e6dbc2a35a1e622d68804b2af6049583151bcb6f16",
+                        "rawClassBytes", "recordRawClassBytes"),
+                target("lightspeed.target.forge.production", "net/minecraftforge/fml/loading/moddiscovery/Scanner",
+                        "40475b4b77a9709ac07ef64f00aa234aad403c0f82c4e65b8329ee03f379f495",
+                        "replayScanMetadata", "recordScanMetadata"),
                 target("lightspeed.target.securejar3", "cpw/mods/jarhandling/impl/Jar",
                         "ce036690cdf020cafb15d4a3a84a009c6bb50cea8073ea82ada379e5778d0838", "mightContain"),
                 target("lightspeed.target.eventbus", "net/minecraftforge/eventbus/EventBus",

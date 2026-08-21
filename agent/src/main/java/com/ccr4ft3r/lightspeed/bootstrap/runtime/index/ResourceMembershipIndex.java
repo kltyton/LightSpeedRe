@@ -6,7 +6,9 @@ import java.nio.file.FileSystem;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.LongAdder;
@@ -16,6 +18,8 @@ public final class ResourceMembershipIndex {
     public static final int UNKNOWN = -1;
     private static final ConcurrentHashMap<FileSystem, RootRegistration> ROOTS = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<FileSystem, CompletableFuture<JarResourceIndex>> INDEXES = new ConcurrentHashMap<>();
+    private static final Object VIEW_LOCK = new Object();
+    private static volatile JarResourceView[] VIEWS = new JarResourceView[0];
     private static final LongAdder QUERIES = new LongAdder();
     private static final LongAdder REJECTED = new LongAdder();
     private static final LongAdder INDEXED_ENTRIES = new LongAdder();
@@ -36,7 +40,8 @@ public final class ResourceMembershipIndex {
         if (existing.length == 0 && primary != null && Files.exists(primary)) {
             existing = new Path[]{primary};
         }
-        ROOTS.putIfAbsent(root.getFileSystem(), new RootRegistration(root, primary, filter, existing));
+        ROOTS.putIfAbsent(root.getFileSystem(),
+                new RootRegistration(root, primary, filter, existing, new ConcurrentHashMap<>()));
     }
 
     public static boolean mightContain(Path root, Path primary, String name) {
@@ -44,8 +49,8 @@ public final class ResourceMembershipIndex {
         if (name == null || root == null) {
             return true;
         }
-        RootRegistration registration = ROOTS.computeIfAbsent(root.getFileSystem(),
-                ignored -> new RootRegistration(root, primary, null, primary == null ? new Path[0] : new Path[]{primary}));
+        RootRegistration registration = ROOTS.computeIfAbsent(root.getFileSystem(), ignored -> new RootRegistration(
+                root, primary, null, primary == null ? new Path[0] : new Path[]{primary}, new ConcurrentHashMap<>()));
         JarResourceIndex index = index(registration);
         if (!index.isExact()) {
             return true;
@@ -57,54 +62,107 @@ public final class ResourceMembershipIndex {
         return result;
     }
 
-    public static String[] entries(Path path, String basePrefix, String requestedPath) {
-        JarResourceIndex index = indexFor(path);
-        return index == null ? null : index.entries(normalizePrefix(basePrefix), normalizePrefix(requestedPath));
-    }
-
-    public static int contains(Path path, String name) {
-        JarResourceIndex index = indexFor(path);
-        if (index == null || !index.isExact()) {
+    public static int bind(Path path) {
+        RootRegistration registration = registration(path);
+        if (registration == null) {
             return UNKNOWN;
         }
-        return index.contains(normalize(name)) ? 1 : 0;
+        String prefix = relativePrefix(registration, path);
+        if (prefix == null) {
+            return UNKNOWN;
+        }
+        return registration.views().computeIfAbsent(prefix, ignored -> {
+            JarResourceIndex index = index(registration);
+            if (!index.isExact()) {
+                return UNKNOWN;
+            }
+            String imageSource = registration.paths().length == 1
+                    ? registration.paths()[0].toAbsolutePath().normalize().toString()
+                    : null;
+            return publish(index.view(prefix, imageSource));
+        });
     }
 
-    public static String[] namespaces(Path path, String directory) {
-        JarResourceIndex index = indexFor(path);
-        return index == null ? null : index.namespaces(normalizePrefix(directory));
+    public static List<String> entries(int handle, String basePrefix, String requestedPath) {
+        JarResourceView view = view(handle);
+        return view == null ? null : view.entries(normalizePrefix(basePrefix), normalizePrefix(requestedPath));
     }
 
-    public static byte[] resourceBytes(Path path, String name) {
-        return StartupResourceImage.get(resourceKey(path, name));
+    public static int contains(int handle, String name) {
+        JarResourceView view = view(handle);
+        if (view == null) {
+            return UNKNOWN;
+        }
+        return view.contains(normalize(name)) ? 1 : 0;
     }
 
-    public static void recordResourceBytes(Path path, String name, byte[] bytes) {
-        StartupResourceImage.record(resourceKey(path, name), bytes);
+    public static Set<String> namespaces(int handle, String directory) {
+        JarResourceView view = view(handle);
+        return view == null ? null : view.namespaces(normalizePrefix(directory));
     }
 
-    private static String resourceKey(Path path, String name) {
-        if (path == null || name == null) {
+    public static byte[] resourceBytes(int handle, String name) {
+        JarResourceView view = view(handle);
+        return view == null ? null : StartupResourceImage.resource(view.imageKey(normalize(name)));
+    }
+
+    public static void recordResourceBytes(int handle, String name, byte[] bytes) {
+        JarResourceView view = view(handle);
+        if (view != null) {
+            StartupResourceImage.recordResource(view.imageKey(normalize(name)), bytes);
+        }
+    }
+
+    public static String persistentPathKey(Path path) {
+        RootRegistration registration = registration(path);
+        if (registration == null || registration.paths().length != 1) {
             return null;
         }
-        RootRegistration registration = ROOTS.get(path.getFileSystem());
-        if (registration == null || registration.paths().length != 1 || !index(registration).isExact()) {
+        String relative = relativePrefix(registration, path);
+        if (relative == null || !index(registration).isExact()) {
             return null;
         }
         Path source = registration.paths()[0];
-        return source.toAbsolutePath().normalize() + "\0" + normalize(name);
+        return source.toAbsolutePath().normalize() + "\0" + relative;
     }
 
-    private static JarResourceIndex indexFor(Path path) {
+    private static RootRegistration registration(Path path) {
         if (path == null) {
             return null;
         }
-        RootRegistration registration = ROOTS.get(path.getFileSystem());
-        if (registration == null) {
+        return ROOTS.get(path.getFileSystem());
+    }
+
+    private static String relativePrefix(RootRegistration registration, Path path) {
+        try {
+            Path root = registration.root().toAbsolutePath().normalize();
+            Path candidate = path.toAbsolutePath().normalize();
+            if (!candidate.startsWith(root)) {
+                return null;
+            }
+            return normalize(root.relativize(candidate).toString());
+        } catch (RuntimeException exception) {
+            FAILURES.increment();
             return null;
         }
-        JarResourceIndex index = index(registration);
-        return index.isExact() ? index : null;
+    }
+
+    private static int publish(JarResourceView view) {
+        if (view == null) {
+            return UNKNOWN;
+        }
+        synchronized (VIEW_LOCK) {
+            JarResourceView[] current = VIEWS;
+            int handle = current.length;
+            VIEWS = Arrays.copyOf(current, handle + 1);
+            VIEWS[handle] = view;
+            return handle;
+        }
+    }
+
+    private static JarResourceView view(int handle) {
+        JarResourceView[] views = VIEWS;
+        return handle < 0 || handle >= views.length ? null : views[handle];
     }
 
     private static JarResourceIndex index(RootRegistration registration) {
@@ -137,7 +195,7 @@ public final class ResourceMembershipIndex {
         return "union".equalsIgnoreCase(scheme) || "jar".equalsIgnoreCase(scheme);
     }
 
-    static String normalize(String value) {
+    public static String normalize(String value) {
         String normalized = value.replace('\\', '/');
         while (normalized.startsWith("/")) {
             normalized = normalized.substring(1);
@@ -173,10 +231,15 @@ public final class ResourceMembershipIndex {
         return INDEXES.size();
     }
 
+    public static int viewCount() {
+        return VIEWS.length;
+    }
+
     public static long qualificationChecks() {
         return QUALIFICATION_CHECKS.sum();
     }
 
-    record RootRegistration(Path root, Path primary, BiPredicate<String, String> filter, Path[] paths) {
+    record RootRegistration(Path root, Path primary, BiPredicate<String, String> filter, Path[] paths,
+                            ConcurrentHashMap<String, Integer> views) {
     }
 }

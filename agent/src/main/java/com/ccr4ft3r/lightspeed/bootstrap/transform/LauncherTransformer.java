@@ -1,7 +1,9 @@
 package com.ccr4ft3r.lightspeed.bootstrap.transform;
 
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.ResourceLookupPatch;
+import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.ClassBytesPatch;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.EventBusPatch;
+import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.ForgeScanPatch;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.ServiceDiscoveryPatch;
 
 import java.lang.instrument.ClassFileTransformer;
@@ -18,6 +20,8 @@ public final class LauncherTransformer implements ClassFileTransformer {
     private static final String FORGE_DISCOVERY = "net/minecraftforge/fml/loading/ModDirTransformerDiscoverer";
     private static final String NEOFORGE_DISCOVERY = "net/neoforged/fml/loading/ModDirTransformerDiscoverer";
     private static final String SECURE_JAR = "cpw/mods/jarhandling/impl/Jar";
+    private static final String MODULE_CLASS_LOADER = "cpw/mods/cl/ModuleClassLoader";
+    private static final String FORGE_SCANNER = "net/minecraftforge/fml/loading/moddiscovery/Scanner";
     private static final String EVENT_BUS = "net/minecraftforge/eventbus/EventBus";
     private static final Map<String, List<Target>> TARGETS = Map.of(
             FORGE_DISCOVERY, List.of(
@@ -28,6 +32,10 @@ public final class LauncherTransformer implements ClassFileTransformer {
             SECURE_JAR, List.of(
                     target("bba6a4ee9327d364967a3cfec4707d695d5962cb42a20a4b212a26434a5b9055", ResourceLookupPatch::applyWithRegistration),
                     target("ce036690cdf020cafb15d4a3a84a009c6bb50cea8073ea82ada379e5778d0838", ResourceLookupPatch::apply)),
+            MODULE_CLASS_LOADER, List.of(
+                    target("62e3eaa069098d55f5da70e6dbc2a35a1e622d68804b2af6049583151bcb6f16", ClassBytesPatch::apply)),
+            FORGE_SCANNER, List.of(
+                    target("40475b4b77a9709ac07ef64f00aa234aad403c0f82c4e65b8329ee03f379f495", ForgeScanPatch::apply)),
             EVENT_BUS, List.of(
                     target("85c5db423fac7eb69107993923aa8a1967d21916fd5c9b32d36332700e31e3d0", EventBusPatch::apply)));
 

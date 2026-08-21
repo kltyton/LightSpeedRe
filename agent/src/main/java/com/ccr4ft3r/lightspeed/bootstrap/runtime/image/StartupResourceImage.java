@@ -1,210 +1,164 @@
 package com.ccr4ft3r.lightspeed.bootstrap.runtime.image;
 
-import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
-import java.io.DataInputStream;
-import java.io.DataOutputStream;
+import java.io.File;
 import java.io.IOException;
+import java.lang.module.ModuleReference;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.HexFormat;
-import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.LongAdder;
 
 public final class StartupResourceImage {
-    private static final int MAGIC = 0x4c535249;
-    private static final int VERSION = 1;
-    private static final int MAX_ENTRY_BYTES = 32 * 1024 * 1024;
-    private static final long MAX_IMAGE_BYTES = Math.max(64, Math.min(1024,
-            Integer.getInteger("lightspeed.resourceImageMiB", 512))) * 1024L * 1024L;
-    private static final ConcurrentHashMap<String, byte[]> RECORDED = new ConcurrentHashMap<>();
-    private static final AtomicLong RECORDED_BYTES = new AtomicLong();
-    private static final LongAdder HITS = new LongAdder();
-    private static final LongAdder MISSES = new LongAdder();
-    private static final LongAdder FAILURES = new LongAdder();
-    private static final CompletableFuture<Map<String, byte[]>> LOADED = CompletableFuture.supplyAsync(
-            StartupResourceImage::load, command -> {
-                Thread thread = new Thread(command, "Lightspeed-Resource-Image-Load");
-                thread.setDaemon(true);
-                thread.setPriority(Math.max(Thread.MIN_PRIORITY, Thread.NORM_PRIORITY - 1));
-                thread.start();
-            });
+    private static final boolean RAW_CLASS_ENABLED =
+            Boolean.parseBoolean(System.getProperty("lightspeed.rawClassImage", "true"));
+    private static final String FINGERPRINT = fingerprint();
+    private static final Path CACHE_DIRECTORY = cacheDirectory();
+    private static final StartupByteImage RESOURCES = image(
+            "resource-image-v2.bin", "lightspeed.resourceImageMiB", 512, 64, 1024, "Lightspeed-Resource-Image-Load");
+    private static final StartupByteImage CLASSES = image(
+            "class-image-v1.bin", "lightspeed.classImageMiB", 64, 16, 256, "Lightspeed-Class-Image-Load");
+    private static final StartupByteImage SCANS = image(
+            "scan-image-v1.bin", "lightspeed.scanImageMiB", 128, 16, 512, "Lightspeed-Scan-Image-Load");
 
     private StartupResourceImage() {
     }
 
     public static void startLoading() {
-        LOADED.isDone();
+        RESOURCES.start();
+        if (RAW_CLASS_ENABLED) {
+            CLASSES.start();
+        }
+        SCANS.start();
     }
 
-    public static byte[] get(String key) {
-        if (key == null) {
+    public static byte[] resource(String key) {
+        return RESOURCES.get(key);
+    }
+
+    public static void recordResource(String key, byte[] bytes) {
+        RESOURCES.record(key, bytes);
+    }
+
+    public static byte[] rawClass(ModuleReference reference, String name) {
+        if (!RAW_CLASS_ENABLED || reference == null || name == null) {
             return null;
         }
-        byte[] recorded = RECORDED.get(key);
-        if (recorded != null) {
-            HITS.increment();
-            return recorded;
-        }
-        try {
-            byte[] loaded = LOADED.join().get(key);
-            if (loaded == null) {
-                MISSES.increment();
-            } else {
-                HITS.increment();
-            }
-            return loaded;
-        } catch (RuntimeException exception) {
-            FAILURES.increment();
-            return null;
+        return CLASSES.get(reference.descriptor().name() + '\0' + name);
+    }
+
+    public static void recordRawClass(ModuleReference reference, String name, byte[] bytes) {
+        if (RAW_CLASS_ENABLED && reference != null && name != null) {
+            CLASSES.record(reference.descriptor().name() + '\0' + name, bytes);
         }
     }
 
-    public static void record(String key, byte[] bytes) {
-        if (key == null || bytes == null || bytes.length == 0 || bytes.length > MAX_ENTRY_BYTES
-                || RECORDED.containsKey(key)) {
-            return;
-        }
-        long total = RECORDED_BYTES.addAndGet(bytes.length);
-        if (total > MAX_IMAGE_BYTES) {
-            RECORDED_BYTES.addAndGet(-bytes.length);
-            return;
-        }
-        byte[] previous = RECORDED.putIfAbsent(key, bytes);
-        if (previous != null) {
-            RECORDED_BYTES.addAndGet(-bytes.length);
-        }
+    public static byte[] scanMetadata(String key) {
+        return SCANS.get(key);
+    }
+
+    public static void recordScanMetadata(String key, byte[] bytes) {
+        SCANS.record(key, bytes);
     }
 
     public static void persist() {
-        if (RECORDED.isEmpty()) {
-            return;
+        RESOURCES.persist();
+        if (RAW_CLASS_ENABLED) {
+            CLASSES.persist();
         }
-        Map<String, byte[]> entries = new HashMap<>();
-        try {
-            entries.putAll(LOADED.join());
-        } catch (RuntimeException exception) {
-            FAILURES.increment();
-        }
-        entries.putAll(RECORDED);
-        if (entries.isEmpty()) {
-            return;
-        }
-
-        Path file = cacheFile();
-        Path temporary = file.resolveSibling(file.getFileName() + ".tmp");
-        try {
-            Files.createDirectories(file.getParent());
-            try (DataOutputStream output = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(temporary)))) {
-                output.writeInt(MAGIC);
-                output.writeInt(VERSION);
-                output.writeUTF(fingerprint());
-                output.writeInt(entries.size());
-                for (Map.Entry<String, byte[]> entry : entries.entrySet()) {
-                    output.writeUTF(entry.getKey());
-                    output.writeInt(entry.getValue().length);
-                    output.write(entry.getValue());
-                }
-            }
-            try {
-                Files.move(temporary, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-            } catch (AtomicMoveNotSupportedException exception) {
-                Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING);
-            }
-        } catch (IOException | RuntimeException exception) {
-            FAILURES.increment();
-            try {
-                Files.deleteIfExists(temporary);
-            } catch (IOException cleanupFailure) {
-                FAILURES.increment();
-            }
-        }
+        SCANS.persist();
     }
 
     public static long hits() {
-        return HITS.sum();
+        return RESOURCES.hits();
     }
 
     public static long misses() {
-        return MISSES.sum();
+        return RESOURCES.misses();
     }
 
     public static long recordedBytes() {
-        return RECORDED_BYTES.get();
+        return RESOURCES.recordedBytes() + CLASSES.recordedBytes() + SCANS.recordedBytes();
+    }
+
+    public static long classHits() {
+        return CLASSES.hits();
+    }
+
+    public static long classMisses() {
+        return CLASSES.misses();
+    }
+
+    public static long classRecordedBytes() {
+        return CLASSES.recordedBytes();
+    }
+
+    public static long scanHits() {
+        return SCANS.hits();
+    }
+
+    public static long scanMisses() {
+        return SCANS.misses();
     }
 
     public static long failures() {
-        return FAILURES.sum();
+        return RESOURCES.failures() + CLASSES.failures() + SCANS.failures();
     }
 
-    private static Map<String, byte[]> load() {
-        Path file = cacheFile();
-        if (!Files.isRegularFile(file)) {
-            return Map.of();
-        }
-        try (DataInputStream input = new DataInputStream(new BufferedInputStream(Files.newInputStream(file)))) {
-            if (input.readInt() != MAGIC || input.readInt() != VERSION || !fingerprint().equals(input.readUTF())) {
-                return Map.of();
-            }
-            int count = input.readInt();
-            if (count < 0 || count > 1_000_000) {
-                throw new IOException("Invalid resource image entry count " + count);
-            }
-            Map<String, byte[]> entries = new HashMap<>(Math.max(16, count * 2));
-            long total = 0;
-            for (int index = 0; index < count; index++) {
-                String key = input.readUTF();
-                int length = input.readInt();
-                total += length;
-                if (length <= 0 || length > MAX_ENTRY_BYTES || total > MAX_IMAGE_BYTES) {
-                    throw new IOException("Invalid resource image entry length " + length);
-                }
-                entries.put(key, input.readNBytes(length));
-                if (entries.get(key).length != length) {
-                    throw new IOException("Truncated resource image entry " + key);
-                }
-            }
-            return Map.copyOf(entries);
-        } catch (IOException | RuntimeException exception) {
-            FAILURES.increment();
-            return Map.of();
-        }
+    private static StartupByteImage image(String name, String property, int defaultMiB, int minimumMiB,
+                                          int maximumMiB, String threadName) {
+        int configured = Integer.getInteger(property, defaultMiB);
+        long maxBytes = Math.max(minimumMiB, Math.min(maximumMiB, configured)) * 1024L * 1024L;
+        return new StartupByteImage(CACHE_DIRECTORY.resolve(name), FINGERPRINT, maxBytes, threadName);
     }
 
-    private static Path cacheFile() {
+    private static Path cacheDirectory() {
         String configured = System.getProperty("lightspeed.bootstrapCacheDir");
-        Path directory = configured == null || configured.isBlank()
+        return configured == null || configured.isBlank()
                 ? Path.of(System.getProperty("user.dir", "."), "lightspeed-cache", "bootstrap")
                 : Path.of(configured);
-        return directory.resolve("resource-image-v1.bin");
     }
 
     private static String fingerprint() {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            update(digest, System.getProperty("java.version", ""));
+            updateRuntimePath(digest, System.getProperty("java.class.path", ""));
+            updateRuntimePath(digest, System.getProperty("jdk.module.path", ""));
             Path mods = Path.of(System.getProperty("user.dir", "."), "mods");
             if (Files.isDirectory(mods)) {
                 try (var files = Files.list(mods)) {
-                    for (Path file : files.filter(Files::isRegularFile).sorted(Comparator.comparing(Path::toString)).toList()) {
-                        String value = file.getFileName() + "\t" + Files.size(file) + "\t" + Files.getLastModifiedTime(file).toMillis();
-                        digest.update(value.getBytes(StandardCharsets.UTF_8));
+                    for (Path file : files.filter(Files::isRegularFile)
+                            .sorted(Comparator.comparing(Path::toString)).toList()) {
+                        update(digest, file.getFileName() + "\t" + Files.size(file) + "\t"
+                                + Files.getLastModifiedTime(file).toMillis());
                     }
                 }
             }
             return HexFormat.of().formatHex(digest.digest());
         } catch (NoSuchAlgorithmException | IOException | RuntimeException exception) {
-            FAILURES.increment();
             return "unavailable";
         }
+    }
+
+    private static void updateRuntimePath(MessageDigest digest, String value) throws IOException {
+        update(digest, value);
+        for (String entry : value.split(java.util.regex.Pattern.quote(File.pathSeparator))) {
+            if (entry.isBlank()) {
+                continue;
+            }
+            Path path = Path.of(entry).toAbsolutePath().normalize();
+            update(digest, path.toString());
+            if (Files.isRegularFile(path)) {
+                update(digest, Files.size(path) + "\t" + Files.getLastModifiedTime(path).toMillis());
+            }
+        }
+    }
+
+    private static void update(MessageDigest digest, String value) {
+        digest.update(value.getBytes(StandardCharsets.UTF_8));
+        digest.update((byte) 0);
     }
 }

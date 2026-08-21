@@ -4,10 +4,15 @@ import com.ccr4ft3r.lightspeed.bootstrap.runtime.discovery.TransformerServiceSca
 import com.ccr4ft3r.lightspeed.bootstrap.runtime.event.EventMethodCache;
 import com.ccr4ft3r.lightspeed.bootstrap.runtime.image.StartupResourceImage;
 import com.ccr4ft3r.lightspeed.bootstrap.runtime.index.ResourceMembershipIndex;
+import com.ccr4ft3r.lightspeed.bootstrap.runtime.scan.ScanMetadataCache;
 
+import java.lang.module.ModuleReference;
+import java.lang.instrument.Instrumentation;
 import java.lang.reflect.Method;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiPredicate;
 
@@ -23,6 +28,10 @@ public final class BootstrapHooks {
         }
     }
 
+    public static void installInstrumentation(Instrumentation instrumentation) {
+        RuntimeModuleAccess.install(instrumentation);
+    }
+
     public static boolean mayProvideTransformerService(Path path) {
         return TransformerServiceScanner.mayProvide(path);
     }
@@ -35,16 +44,20 @@ public final class BootstrapHooks {
         ResourceMembershipIndex.register(root, primary, filter, paths);
     }
 
-    public static String[] resourceEntries(Path path, String basePrefix, String requestedPath) {
-        return ResourceMembershipIndex.entries(path, basePrefix, requestedPath);
+    public static int bindResourceIndex(Path path) {
+        return ResourceMembershipIndex.bind(path);
     }
 
-    public static int containsResource(Path path, String name) {
-        return ResourceMembershipIndex.contains(path, name);
+    public static List<String> resourceEntries(int handle, String basePrefix, String requestedPath) {
+        return ResourceMembershipIndex.entries(handle, basePrefix, requestedPath);
     }
 
-    public static String[] resourceNamespaces(Path path, String directory) {
-        return ResourceMembershipIndex.namespaces(path, directory);
+    public static int containsResource(int handle, String name) {
+        return ResourceMembershipIndex.contains(handle, name);
+    }
+
+    public static Set<String> resourceNamespaces(int handle, String directory) {
+        return ResourceMembershipIndex.namespaces(handle, directory);
     }
 
     public static Optional<Method> declaredEventMethod(Class<?> type, Method inherited) {
@@ -55,12 +68,28 @@ public final class BootstrapHooks {
         StartupResourceImage.startLoading();
     }
 
-    public static byte[] resourceBytes(Path path, String name) {
-        return ResourceMembershipIndex.resourceBytes(path, name);
+    public static byte[] resourceBytes(int handle, String name) {
+        return ResourceMembershipIndex.resourceBytes(handle, name);
     }
 
-    public static void recordResourceBytes(Path path, String name, byte[] bytes) {
-        ResourceMembershipIndex.recordResourceBytes(path, name, bytes);
+    public static void recordResourceBytes(int handle, String name, byte[] bytes) {
+        ResourceMembershipIndex.recordResourceBytes(handle, name, bytes);
+    }
+
+    public static byte[] rawClassBytes(ModuleReference reference, String name) {
+        return StartupResourceImage.rawClass(reference, name);
+    }
+
+    public static void recordRawClassBytes(ModuleReference reference, String name, byte[] bytes) {
+        StartupResourceImage.recordRawClass(reference, name, bytes);
+    }
+
+    public static boolean replayScanMetadata(Path path, Object scanData) {
+        return ScanMetadataCache.replay(path, scanData);
+    }
+
+    public static void recordScanMetadata(Path path, Object scanData) {
+        ScanMetadataCache.record(path, scanData);
     }
 
     public static void persistResourceImage() {
@@ -73,6 +102,7 @@ public final class BootstrapHooks {
                 + " resourceQueries=" + ResourceMembershipIndex.queries()
                 + " resourceRejected=" + ResourceMembershipIndex.rejected()
                 + " indexes=" + ResourceMembershipIndex.indexCount()
+                + " views=" + ResourceMembershipIndex.viewCount()
                 + " indexedEntries=" + ResourceMembershipIndex.indexedEntries()
                 + " qualificationChecks=" + ResourceMembershipIndex.qualificationChecks()
                 + " eventMethodHits=" + EventMethodCache.hits()
@@ -80,8 +110,15 @@ public final class BootstrapHooks {
                 + " imageHits=" + StartupResourceImage.hits()
                 + " imageMisses=" + StartupResourceImage.misses()
                 + " imageRecordedBytes=" + StartupResourceImage.recordedBytes()
+                + " classHits=" + StartupResourceImage.classHits()
+                + " classMisses=" + StartupResourceImage.classMisses()
+                + " classRecordedBytes=" + StartupResourceImage.classRecordedBytes()
+                + " scanHits=" + ScanMetadataCache.hits()
+                + " scanMisses=" + ScanMetadataCache.misses()
+                + " scanRecorded=" + ScanMetadataCache.recorded()
                 + " failures=" + (TransformerServiceScanner.failures()
                 + ResourceMembershipIndex.failures()
-                + StartupResourceImage.failures()));
+                + StartupResourceImage.failures()
+                + ScanMetadataCache.failures()));
     }
 }

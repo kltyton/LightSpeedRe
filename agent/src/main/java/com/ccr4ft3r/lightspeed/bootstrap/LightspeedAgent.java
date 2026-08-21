@@ -14,6 +14,8 @@ public final class LightspeedAgent {
             "net.minecraftforge.fml.loading.ModDirTransformerDiscoverer",
             "net.neoforged.fml.loading.ModDirTransformerDiscoverer",
             "cpw.mods.jarhandling.impl.Jar",
+            "cpw.mods.cl.ModuleClassLoader",
+            "net.minecraftforge.fml.loading.moddiscovery.Scanner",
             "net.minecraftforge.eventbus.EventBus");
     private static JarFile bootstrapJar;
 
@@ -34,6 +36,7 @@ public final class LightspeedAgent {
                     "com.ccr4ft3r.lightspeed.bootstrap.runtime.BootstrapHooks", true, null);
             Class<?> transformerType = Class.forName(
                     "com.ccr4ft3r.lightspeed.bootstrap.transform.LauncherTransformer", true, null);
+            hooks.getMethod("installInstrumentation", Instrumentation.class).invoke(null, instrumentation);
             ClassFileTransformer transformer = (ClassFileTransformer) transformerType
                     .getConstructor(Consumer.class)
                     .newInstance((Consumer<String>) LightspeedAgent::log);

@@ -63,6 +63,8 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
     private volatile boolean lightspeed$existenceCacheLoadRequested;
     @Unique
     private volatile boolean lightspeed$bootstrapIndexUsed;
+    @Unique
+    private volatile int lightspeed$bootstrapIndexHandle = BootstrapAgentBridge.UNKNOWN;
 
     
     @Unique
@@ -72,6 +74,7 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
     private String lightspeed$id;
     @Inject(method = "<init>", at = @At("RETURN"))
     public void initReturnInjected(String packId, boolean isBuiltin, Path source, CallbackInfo ci) {
+        lightspeed$bootstrapIndexHandle = BootstrapAgentBridge.bindResourceIndex(source);
         if (GlobalCache.isEnabled) {
             lightspeed$resolvedPaths();
             lightspeed$namespaces();
@@ -118,11 +121,12 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
     public void getNamespacesHeadInjected(PackType type, CallbackInfoReturnable<Set<String>> cir) {
         if (!GlobalCache.isEnabled || FusionPackCompat.hasOverrides(this))
             return;
-        if (lightspeed$modFile != null) {
-            String[] indexed = BootstrapAgentBridge.resourceNamespaces(resolve(type.getDirectory()), type.getDirectory());
+        if (lightspeed$bootstrapIndexHandle != BootstrapAgentBridge.UNKNOWN) {
+            Set<String> indexed = BootstrapAgentBridge.resourceNamespaces(
+                    lightspeed$bootstrapIndexHandle, type.getDirectory());
             if (indexed != null) {
                 lightspeed$bootstrapIndexUsed = true;
-                cir.setReturnValue(Set.of(indexed));
+                cir.setReturnValue(indexed);
                 return;
             }
         }
@@ -171,9 +175,8 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
         if (!GlobalCache.isEnabled || !GlobalCache.shouldCacheWalkedPaths || FusionPackCompat.hasOverrides(this)) {
             return;
         }
-        if (lightspeed$modFile != null) {
-            Path root = resolve(type.getDirectory(), location.getNamespace());
-            int bootstrapIndexed = BootstrapAgentBridge.containsResource(root,
+        if (lightspeed$bootstrapIndexHandle != BootstrapAgentBridge.UNKNOWN) {
+            int bootstrapIndexed = BootstrapAgentBridge.containsResource(lightspeed$bootstrapIndexHandle,
                     type.getDirectory() + '/' + location.getNamespace() + '/' + location.getPath());
             if (bootstrapIndexed != BootstrapAgentBridge.UNKNOWN) {
                 lightspeed$bootstrapIndexUsed = true;
@@ -193,10 +196,10 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
             return;
         }
 
-        if (lightspeed$modFile != null && lightspeed$isSafeListingPath(path)) {
-            Path root = resolve(type.getDirectory(), namespace).toAbsolutePath();
-            String[] indexed = BootstrapAgentBridge.resourceEntries(
-                    root, type.getDirectory() + '/' + namespace, path);
+        if (lightspeed$bootstrapIndexHandle != BootstrapAgentBridge.UNKNOWN && lightspeed$isSafeListingPath(path)) {
+            String basePrefix = type.getDirectory() + '/' + namespace;
+            List<String> indexed = BootstrapAgentBridge.resourceEntries(
+                    lightspeed$bootstrapIndexHandle, basePrefix, path);
             if (indexed != null) {
                 lightspeed$bootstrapIndexUsed = true;
                 for (String resourcePath : indexed) {
@@ -276,6 +279,9 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
     @Override
     public void lightspeed$setModFile(IModFile modFile) {
         this.lightspeed$modFile = modFile;
+        if (lightspeed$bootstrapIndexHandle == BootstrapAgentBridge.UNKNOWN) {
+            lightspeed$bootstrapIndexHandle = BootstrapAgentBridge.bindResourceIndex(modFile.findResource(""));
+        }
         this.lightspeed$id = modFile.getModFileInfo().moduleName() + modFile.getModFileInfo().versionString()
                 + "-" + FilenameUtils.getBaseName(modFile.getFilePath().toString()).replaceAll("[^a-zA-Z0-9.-]", "");
         lightspeed$setExistenceByResource(GlobalCache.PERSISTED_EXISTENCES_BY_MOD.computeIfAbsent(
@@ -549,13 +555,13 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
             return () -> Files.newInputStream(path);
         }
         String name = String.join("/", parts);
-        byte[] cached = BootstrapAgentBridge.resourceBytes(path, name);
+        byte[] cached = BootstrapAgentBridge.resourceBytes(lightspeed$bootstrapIndexHandle, name);
         if (cached != null) {
             return () -> new ByteArrayInputStream(cached);
         }
         return () -> {
             byte[] bytes = Files.readAllBytes(path);
-            BootstrapAgentBridge.recordResourceBytes(path, name, bytes);
+            BootstrapAgentBridge.recordResourceBytes(lightspeed$bootstrapIndexHandle, name, bytes);
             return new ByteArrayInputStream(bytes);
         };
     }
