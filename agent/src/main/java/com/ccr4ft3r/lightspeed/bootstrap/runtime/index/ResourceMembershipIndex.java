@@ -18,13 +18,14 @@ public final class ResourceMembershipIndex {
     private static final LongAdder REJECTED = new LongAdder();
     private static final LongAdder INDEXED_ENTRIES = new LongAdder();
     private static final LongAdder FAILURES = new LongAdder();
+    private static final LongAdder QUALIFICATION_CHECKS = new LongAdder();
 
     private ResourceMembershipIndex() {
     }
 
     public static boolean mightContain(Path root, Path primary, String name) {
         QUERIES.increment();
-        if (name == null || !isPhysicalJar(primary) || !isSupportedRoot(root)) {
+        if (name == null || root == null) {
             return true;
         }
 
@@ -33,7 +34,7 @@ public final class ResourceMembershipIndex {
         if (future == null) {
             future = created;
             try {
-                created.complete(buildMembership(root));
+                created.complete(buildMembership(root, primary));
             } catch (IOException | RuntimeException exception) {
                 FAILURES.increment();
                 created.complete(Membership.ALWAYS_MAYBE);
@@ -67,7 +68,14 @@ public final class ResourceMembershipIndex {
         return INDEXES.size();
     }
 
-    private static Membership buildMembership(Path root) throws IOException {
+    public static long qualificationChecks() {
+        return QUALIFICATION_CHECKS.sum();
+    }
+
+    private static Membership buildMembership(Path root, Path primary) throws IOException {
+        if (!isPhysicalJar(primary) || !isSupportedRoot(root)) {
+            return Membership.ALWAYS_MAYBE;
+        }
         List<String> entries = new ArrayList<>();
         boolean multiRelease = false;
         try (Stream<Path> paths = Files.walk(root)) {
@@ -84,6 +92,7 @@ public final class ResourceMembershipIndex {
     }
 
     private static boolean isPhysicalJar(Path path) {
+        QUALIFICATION_CHECKS.increment();
         if (path == null) {
             return false;
         }

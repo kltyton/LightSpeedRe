@@ -33,6 +33,7 @@ public final class BootstrapHooks {
                 + " resourceRejected=" + ResourceMembershipIndex.rejected()
                 + " indexes=" + ResourceMembershipIndex.indexCount()
                 + " indexedEntries=" + ResourceMembershipIndex.indexedEntries()
+                + " qualificationChecks=" + ResourceMembershipIndex.qualificationChecks()
                 + " failures=" + (TransformerServiceScanner.failures() + ResourceMembershipIndex.failures()));
     }
 }
