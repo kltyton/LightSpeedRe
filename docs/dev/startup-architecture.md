@@ -47,8 +47,6 @@ of 2. Override it with:
 
 `config/lightspeed-common.toml` controls the risky startup optimizations:
 
-- `startup.asyncPreloadPacks=true`: background mod resource-pack scanning is
-  enabled by default and builds resource-list indexes concurrently.
 - `startup.parallelResourceLookup=true`: concurrent candidate-pack lookup in
   `FallbackResourceManager#getResource` is enabled only for safe unfiltered pack
   segments while preserving vanilla priority and filter order.
