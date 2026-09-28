@@ -29,9 +29,9 @@ Thus the combination is better for fallback coverage and amortized availability,
 
 ## Current Forge boundary
 
-ModLauncher 10.0.9 explicitly rejects OpenJ9 before constructing its launcher because its transformation behavior is unsupported. HotSpot JEP 483 does not target classes loaded by user-defined class loaders, which excludes the Forge GAME `ModuleClassLoader` population measured in this repository. Java 17 AppCDS has separate custom-loader facilities and must not be conflated with JEP 483; its transformed Forge coverage still requires an independent measurement.
+ModLauncher 10.0.9 explicitly rejects OpenJ9 before constructing its launcher because its transformation behavior is unsupported. A 2026-08-24 test used an official, SHA-256-verified IBM Semeru OpenJ9 21.0.12 runtime. A temporary exact-fingerprint research patch bypassed only the ModLauncher rejection and was not retained. The next transformation service then failed because Mixin Transmogrifier expects HotSpot's private `ClassLoader.package2certs` field; OpenJ9 has no equivalent field, and package signer validation failed immediately afterward.
 
-The user separately verified that OpenJ9 shared classes did not approach the 30-second target for the target pack. Lightspeed therefore keeps JVM replacement outside the product path and focuses its portable implementation on loader work reduction, exact caches and the optional embedded premain Agent.
+That result closes the generic OpenJ9 path for this product. Supporting it would require a Mod-specific transformation-service patch or a modified JVM/class-loader signing contract, not a general Forge optimization. HotSpot JEP 483 also does not target classes loaded by user-defined class loaders, which excludes the Forge GAME `ModuleClassLoader` population measured in this repository. Lightspeed therefore keeps JVM replacement outside the product path and focuses its portable implementation on loader work reduction, exact caches and the optional embedded premain Agent.
 
 ## Sources
 

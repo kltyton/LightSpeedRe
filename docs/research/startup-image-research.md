@@ -29,24 +29,22 @@ This record covers external implementation patterns considered for the Forge 1.2
 ### OpenJDK AOT and CRaC
 
 - JEP 483 AOT class loading/linking does not cache classes loaded by user-defined class loaders, which excludes Forge's `ModuleClassLoader` hot path.
-- Java 17 static AppCDS is a separate mechanism. OpenJDK's tests demonstrate fingerprint-mode custom-loader archiving, but ATM9's transformed Mod classes were absent from the normal class list. Enabling the diagnostic Java-Agent archive mode changed Forge behavior and caused Quark/Supplementaries FATAL failures, so this route was rejected.
 - CRaC currently relies on Linux/CRIU and requires open files, sockets, audio, and graphics resources to participate in checkpoint/restore. It is not a Windows Minecraft delivery path here.
 - URLs:
   - https://openjdk.org/jeps/483
-  - https://github.com/openjdk/jdk/tree/master/test/hotspot/jtreg/runtime/cds/appcds/customLoader
   - https://github.com/openjdk/crac
 
 ## Selected clean-room design
 
 Lightspeed caches immutable resource bytes, bounded raw pre-transform class bytes, and neutral Forge scan metadata that were observed during a real startup. It does not serialize baked models, mod objects, GL handles, native images, loaded `Class` objects, or transformed bytecode.
 
-- First run: read through the original UnionFS/Forge paths, retain bounded data by category, and atomically write independent images after the title screen appears.
-- Later runs: validate Java, classpath, module-path, and complete Mod-JAR metadata fingerprints before serving cached data.
+- First run: read through the original UnionFS/Forge paths, retain bounded data by category, and atomically write independent images at the normal launch-complete hook or, for custom menus that bypass it, from the Agent shutdown hook.
+- Later runs: validate the image format/JVM fingerprint and each physical JAR or resource source independently before serving cached data. Updating one source evicts only that logical segment instead of invalidating the complete classpath image.
 - Dynamic packs, resource packs without an `IModFile`, directory roots, multi-release roots, oversized resources, stale images, and any read/write failure use the original path.
 - The image has fixed per-entry and total-size limits. Removing it is a complete rollback.
 
-The production images are independently bounded at 512 MiB for resources, 64 MiB for raw classes, and 128 MiB for scan metadata. Splitting them prevents class bytes from evicting the resource workload. A combined 447 MB prototype was rejected after 52-54 second warm starts; the split logical-root design reached 47 seconds on capture and 46-47 seconds warm.
+The production images are independently bounded at 512 MiB for resources, 64 MiB for raw classes, and 128 MiB for scan metadata. Splitting them prevents class bytes from evicting the resource workload. Entries inside each atomic image are further segmented by the physical source identity already produced by the exact JAR index. Replacing a source removes its stale bytes before applying the image limit, while unrelated source segments remain available. A combined 447 MB prototype was rejected after 52-54 second warm starts; the split logical-root design reached 47 seconds on capture and 46-47 seconds warm.
 
-The scan image was subsequently promoted from per-class records to one aggregate per Mod. An ATM9 cold run recorded 409 of 431 scan objects; 22 unsupported/incomplete cases retained Forge. The warm run restored all 409 aggregates. Adding a harmless entry to only the Lightspeed Mod changed the result to 408 hits, 23 misses, and exactly one rebuild; restoring the original JAR produced the same one-Mod rebuild in reverse. This demonstrates incremental invalidation without discarding unchanged Mod caches.
+The scan image was subsequently promoted from per-class records to one aggregate per Mod. An ATM9 cold run recorded 409 of 431 scan objects; 22 unsupported/incomplete cases retained Forge. The warm run restored all 409 aggregates. In the final source-segmentation acceptance, changing only the deployed Lightspeed JAR timestamp reduced total rebuilt image bytes from 224,416,523 to 285,785, reduced raw-class writes from 67,108,758 to 183,014, and changed scan reuse from 409 rebuilds to 408 hits plus one rebuild. This demonstrates incremental invalidation across resource, raw-class, and scan images without discarding unchanged Mod caches.
 
 The transformed-byte experiment remained read-only with respect to loader behavior: it executed all transformers and compared output. The second run observed 49,092 identical outputs and 926 mismatches for identical input keys. Together with ModLauncher's audit/plugin side effects, this rejects transformed-byte short-circuit caching as a generic optimization.

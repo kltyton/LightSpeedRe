@@ -52,6 +52,10 @@ Sources:
 - https://github.com/spring-projects/spring-boot/blob/c329ffa25dc160a90ebe5e4b006ad4cdf89d8683/documentation/spring-boot-docs/src/docs/antora/modules/reference/pages/packaging/aot-cache.adoc
 - https://openjdk.org/jeps/483
 
+2026-09-27 复核：Oracle 的 [JDK 26 `java` 手册](https://docs.oracle.com/en/java/javase/26/docs/specs/man/java.html) 和 [JDK 27 `java` 手册](https://docs.oracle.com/en/java/javase/27/docs/specs/man/java.html) 仍把 AOT 缓存描述为类与堆对象，并列出 JVMTI 选项导致归档不兼容的情况；[OpenJDK 的 AOT 类链接实现讨论](https://mail.openjdk.org/pipermail/hotspot-dev/2024-October/095670.html) 限定其类链接目标为内建 bootstrap/platform/application loader。这些资料没有给出可直接替代 Forge `TransformingClassLoader` 加可改写 Java Agent 的受支持生产路径，因此不重复无新机制的 JDK 版本切换或归档测试。
+
+[JLS 26 第 12 章](https://docs.oracle.com/en/java/javase/26/docs/specs/jls/jls-12.html) 还要求类加载器的预取错误只在正常执行也可能发生错误的位置反映。此前过早类预取在 ATM9 遇到 `.class_manual` 生成接口未就绪，说明提前定义任意第三方类不是无副作用的通用缓存；当前恢复到客户端模组加载边界的原型尚未证明其他整合包的这一合同。
+
 ### Eclipse OpenJ9 shared classes
 
 OpenJ9 exposes shared-class helpers specifically for custom class loaders. A loader can look up bytes using a stable token, call `defineClass`, and store the resulting class in a VM-managed shared cache. The loader remains responsible for stale-entry/version tokens. This is closer to Forge's architecture than HotSpot's current AOT cache and is the strongest next runtime experiment, but Forge, Mixin, LWJGL, Java-Agent, crash-report, and world-entry compatibility must be proven.
@@ -71,7 +75,7 @@ Sources:
 
 ## Recommended next work
 
-1. Run an isolated Semeru/OpenJ9 Java 17 ATM9 branch and integrate `SharedClassTokenHelper` with `ModuleClassLoader` only if the unmodified pack reaches the title screen and a world. This is the only surveyed route that explicitly supports custom-loader VM shared classes without process restoration.
+1. Do not add an OpenJ9 backend unless ModLauncher and every participating transformation service gain an upstream, generic signing/class-loader contract. The verified Semeru 21 experiment failed first at ModLauncher's explicit guard and then at a transformation service's dependency on HotSpot `ClassLoader.package2certs`; no bypass remains in the product.
 2. Build a complete Forge launch-plan cache around module/package routing, manifests, scan data, and immutable class-source locations. Treat it like Gradle's configuration cache: strict full-input fingerprint, one serialization model, same cold/hit execution contract, and fail-open invalidation.
 3. Measure loaded-class counts and `defineClass` CPU by loader/module. If a small set of eager Forge/Mod initialization chains forces most classes, pursue loader-level lazy construction only for contracts proven order-independent. Do not generically defer arbitrary Mod constructors.
 4. For a separate Linux-only product, evaluate a CRaC checkpoint immediately before native client initialization or with explicit native-resource recovery. This is the plausible route to sub-30-second restore times, but it is not a Windows Forge Mod feature.
@@ -121,7 +125,6 @@ The whole-start call tree showed the reusable framework boundary more clearly: F
 Sources:
 
 - OpenJ9 custom-loader helper and test implementation: https://github.com/eclipse-openj9/openj9/blob/38bcdf07ccd668f29bcf439b4a5b7eab473de3f5/jcl/src/openj9.sharedclasses/share/classes/com/ibm/oti/shared/SharedClassTokenHelper.java and https://github.com/eclipse-openj9/openj9/blob/38bcdf07ccd668f29bcf439b4a5b7eab473de3f5/test/functional/cmdLineTests/shareClassTests/utils/src/CustomCLs/CustomTokenClassLoader.java
-- OpenJ9 bytecode-instrumentation behavior: https://github.com/eclipse-openj9/openj9-docs/blob/e49e5962c5d9792ae0af36c88f63dd06b6d827f1/docs/xxshareclassesenablebci.md
 - Legacy Minecraft transformed-class cache: https://github.com/LunNova/CachingClassLoader/blob/53c02d1a9edbec7c6cbdcce7ad01c8c243dc2996/README.md
 - SecureJarHandler parallel class loader: https://github.com/McModLauncher/securejarhandler/blob/ab1d9f4cf60cc66b6ff648795238fd71e5448b91/src/main/java/cpw/mods/cl/ModuleClassLoader.java
 - Quarkus runner class loader: https://github.com/quarkusio/quarkus/blob/478e5fe6c974b9cefce07598e79db6359a1ab7d0/independent-projects/bootstrap/runner/src/main/java/io/quarkus/bootstrap/runner/RunnerClassLoader.java
@@ -156,4 +159,17 @@ The remaining P1/P2 implementation adds:
 - direct EventBus wrapper generation through EventBus's existing non-ModLauncher factory path;
 - one bounded startup CPU pool with nested lookup backpressure and at most two low-priority cache I/O workers.
 
+## 2026-08-22 framework work-elimination follow-up
+
+- Enabling the existing JDK 21 `Resolver.makeGraph` ArrayList-to-HashSet rewrite on the actual retransformed Oracle/Adoptium bytecode was rejected by runtime A/B. Two fully warm runs regressed to 45.695 and 45.808 seconds, with the ModLauncher-to-launch-target interval increasing from 9.661 to 11.063 seconds. The runtime fingerprint support and smoke path were removed.
+- Registry-aware ObjectHolder routing retained Forge ordering/fallback semantics, routed 162 filtered calls, skipped 665,896 unrelated handlers, and reported no failures. Together with SecureJar package/index reuse and shared path validation, the final fully warm title runs reached 40.412, 39.800, and 39.762 seconds; the final build also entered and rendered a singleplayer world.
+
 The class-loader boundary remains explicit: `ModuleLayerHandler`, SecureJarHandler, Forge Scanner and EventBus bootstrap classes cannot be transformed by an ordinary Mod Mixin because they are already defined outside the GAME transforming loader. The embedded premain Agent handles only these exact SHA-256-supported bootstrap targets.
+
+## 2026-08-22 JProfiler follow-up
+
+A complete 47-second GraalVM JFR loaded through JProfiler recorded 170,949 loaded classes, including 153,028 under Forge's `TransformingClassLoader`. The runnable call tree assigned 10% to Mod construction, 10% to the model completion event, 5.9% to sprite resource loading and 5.4% to module resolution. The warm Agent summary showed the 64 MiB raw class image saturated at 16,320 hits and 60,447 misses while recording no additional bytes.
+
+Class-definition attribution is absent from ordinary production launches. The previously unconditional top-level model-bake parallelism was removed after a scheduling perturbation spent 141 seconds without reaching the title screen inside a non-thread-safe third-party bake hook map. Future model concurrency must split pure preparation from ordered external-hook commit.
+
+The subsequent same-instance A/B rejected the larger raw class image as a default optimization. A filled 396 MB image reached the ModernFix title marker in 48.424 seconds; bypassing raw class-image loading reached it in 39.895 seconds with the same Mod JAR and no model-bake or linkage errors. Avoided ZIP reads did not compensate for loading/indexing the image while all transforms and `defineClass` work still executed. The image is therefore experimental and disabled by default.
