@@ -9,6 +9,9 @@ plugins {
 group = mod_group_id
 version = mod_version
 
+evaluationDependsOn(':agent')
+def embeddedAgentTask = project(':agent').tasks.named('shadowJar')
+
 base {
     archivesName = mod_id
 }
@@ -103,8 +106,16 @@ var generateModMetadata = tasks.register("generateModMetadata", ProcessResources
 sourceSets.main.resources.srcDir generateModMetadata
 neoForge.ideSyncTask generateModMetadata
 
+dependencies {
+    compileOnly files(project(':agent').layout.buildDirectory.dir('classes/java/main'))
+}
+
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
+}
+
+tasks.named('compileJava').configure {
+    dependsOn ':agent:compileJava'
 }
 
 tasks.named('build').configure {
@@ -118,6 +129,15 @@ if (bootstrapAgentEnabled) {
 }
 
 tasks.named('jar', Jar).configure {
+    dependsOn embeddedAgentTask
+    from('LICENSE') {
+        into 'META-INF'
+        rename { 'LICENSE-Lightspeed.txt' }
+    }
+    from(embeddedAgentTask.flatMap { it.archiveFile }) {
+        into 'META-INF/lightspeed'
+        rename { 'bootstrap-agent.jar' }
+    }
     manifest {
         attributes([
                 "Specification-Title"     : mod_id,
@@ -128,6 +148,36 @@ tasks.named('jar', Jar).configure {
                 "Implementation-Vendor"   : mod_authors,
                 "Implementation-Timestamp": new Date().format("yyyy-MM-dd'T'HH:mm:ssZ")
         ])
+    }
+}
+
+tasks.register('verifyDistribution') {
+    group = 'verification'
+    description = 'Verifies the NeoForge Mod JAR and its embedded bootstrap Agent.'
+    notCompatibleWithConfigurationCache('Reads the built Mod and Agent task outputs directly.')
+    dependsOn tasks.named('jar'), embeddedAgentTask
+    doLast {
+        File release = tasks.named('jar').get().archiveFile.get().asFile
+        new java.util.zip.ZipFile(release).withCloseable { zip ->
+            ['META-INF/neoforge.mods.toml', 'META-INF/LICENSE-Lightspeed.txt', 'lightspeed.mixins.json',
+             'META-INF/lightspeed/bootstrap-agent.jar'].each { name ->
+                if (zip.getEntry(name) == null) {
+                    throw new GradleException("release JAR is missing ${name}")
+                }
+            }
+            def manifest = new java.util.jar.Manifest(zip.getInputStream(zip.getEntry('META-INF/MANIFEST.MF')))
+            if (manifest.mainAttributes.getValue('Premain-Class') != null) {
+                throw new GradleException('top-level Mod JAR must not declare Premain-Class')
+            }
+            byte[] embedded = zip.getInputStream(zip.getEntry('META-INF/lightspeed/bootstrap-agent.jar')).readAllBytes()
+            byte[] builtAgent = embeddedAgentTask.get().archiveFile.get().asFile.bytes
+            if (!java.security.MessageDigest.isEqual(
+                    java.security.MessageDigest.getInstance('SHA-256').digest(embedded),
+                    java.security.MessageDigest.getInstance('SHA-256').digest(builtAgent))) {
+                throw new GradleException('embedded Agent differs from its build artifact')
+            }
+        }
+        println 'SINGLE_JAR_DISTRIBUTION_OK'
     }
 }
 

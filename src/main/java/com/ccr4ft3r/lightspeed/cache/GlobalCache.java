@@ -1,16 +1,13 @@
 package com.ccr4ft3r.lightspeed.cache;
 
-import com.ccr4ft3r.lightspeed.compat.FusionPackCompat;
 import com.ccr4ft3r.lightspeed.interfaces.ICache;
 import com.ccr4ft3r.lightspeed.util.CacheUtil;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 import com.mojang.logging.LogUtils;
 import net.minecraft.resources.ResourceLocation;
-import net.minecraft.server.packs.FilePackResources;
 import net.minecraft.server.packs.PackResources;
 import net.minecraft.server.packs.PackType;
-import net.minecraft.server.packs.PathPackResources;
 import net.minecraft.server.packs.resources.IoSupplier;
 import org.slf4j.Logger;
 
@@ -48,10 +45,8 @@ public class GlobalCache {
     public static volatile boolean shouldCacheEmptyNamespaces = true;
     public static volatile boolean shouldCacheResourceExistence = true;
     public static volatile boolean shouldCacheMaterials = true;
-    public static volatile boolean shouldAsyncPreloadPacks = true;
     public static volatile boolean shouldParallelizeResourcePackLookup = true;
     public static volatile boolean shouldUseDedicatedResourceReloadExecutor = true;
-    public static volatile int parallelLookupMinPacks = 4;
     public static volatile boolean shouldIsolateModdedResourceReloadFailures = true;
     public static volatile boolean shouldUseConnectorCompatibilityMode = true;
     public static volatile List<String> isolatedResourceReloadListenerPatterns = List.of("*");
@@ -162,37 +157,7 @@ public class GlobalCache {
     }
 
     public static IoSupplier<InputStream> findFirstResource(List<PackResources> packs, PackType type, ResourceLocation location) {
-        if (packs.isEmpty()) {
-            return null;
-        }
-        if (packs.size() < parallelLookupMinPacks || !shouldParallelizeResourcePackLookup || packs.stream().anyMatch(pack -> !isSafeForParallelLookup(pack))) {
-            return findFirstResourceSequential(packs, type, location);
-        }
-
-        List<CompletableFuture<IoSupplier<InputStream>>> futures = new ArrayList<>(packs.size());
-        try {
-            for (PackResources pack : packs) {
-                futures.add(CompletableFuture.supplyAsync(() -> pack.getResource(type, location), EXECUTOR));
-            }
-        } catch (RuntimeException e) {
-            LOGGER.warn("Lightspeed parallel resource lookup rejected; falling back to sequential lookup", e);
-            return findFirstResourceSequential(packs, type, location);
-        }
-
-        for (CompletableFuture<IoSupplier<InputStream>> future : futures) {
-            try {
-                IoSupplier<InputStream> supplier = future.get();
-                if (supplier != null) {
-                    return supplier;
-                }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return findFirstResourceSequential(packs, type, location);
-            } catch (ExecutionException e) {
-                LOGGER.warn("Lightspeed parallel resource lookup failed for {}", location, e);
-            }
-        }
-        return null;
+        return findFirstResourceSequential(packs, type, location);
     }
 
     public static void disablePersistAndClear() {
@@ -314,9 +279,4 @@ public class GlobalCache {
         return null;
     }
 
-    private static boolean isSafeForParallelLookup(PackResources packResources) {
-        Class<?> packClass = packResources.getClass();
-        return (packClass == PathPackResources.class || packClass == FilePackResources.class)
-                && !FusionPackCompat.hasOverrides(packResources);
-    }
 }

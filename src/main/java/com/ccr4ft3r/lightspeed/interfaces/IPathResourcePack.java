@@ -8,7 +8,5 @@ import net.neoforged.neoforgespi.locating.IModFile;
 public interface IPathResourcePack extends PackResources, IPackResources {
     void lightspeed$setModFile(IModFile modFile);
 
-    void lightspeed$startAsyncPreload();
-
     Boolean lightspeed$hasIndexedResource(PackType type, ResourceLocation location);
 }

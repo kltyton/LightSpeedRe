@@ -26,8 +26,6 @@ import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
 
 @Mixin(FallbackResourceManager.class)
 public abstract class FallbackResourceManagerMixin {
@@ -97,43 +95,7 @@ public abstract class FallbackResourceManagerMixin {
         if (indexedSearch.isPresent()) {
             return indexedSearch.get().isPresent() ? indexedSearch.get() : null;
         }
-        if (segment.size() < GlobalCache.parallelLookupMinPacks) {
-            return lightspeed$searchSafeSegmentSequential(segment, location);
-        }
-
-        if (segment.size() == 1) {
-            IndexedPack indexedPack = segment.get(0);
-            IoSupplier<InputStream> supplier = indexedPack.pack().getResource(this.type, location);
-            return supplier == null ? null : Optional.of(lightspeed$createResource(indexedPack.pack(), location,
-                    supplier, lightspeed$createStackMetadataFinder(location, indexedPack.index())));
-        }
-
-        List<CompletableFuture<IoSupplier<InputStream>>> futures = new ArrayList<>(segment.size());
-        try {
-            for (IndexedPack indexedPack : segment) {
-                futures.add(CompletableFuture.supplyAsync(() -> indexedPack.pack().getResource(this.type, location), GlobalCache.EXECUTOR));
-            }
-        } catch (RuntimeException e) {
-            LOGGER.warn("Lightspeed parallel resource lookup rejected for {}; falling back to vanilla order", location, e);
-            return lightspeed$searchSafeSegmentSequential(segment, location);
-        }
-
-        for (int i = 0; i < segment.size(); i++) {
-            IndexedPack indexedPack = segment.get(i);
-            try {
-                IoSupplier<InputStream> supplier = futures.get(i).get();
-                if (supplier != null) {
-                    return Optional.of(lightspeed$createResource(indexedPack.pack(), location,
-                            supplier, lightspeed$createStackMetadataFinder(location, indexedPack.index())));
-                }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return lightspeed$searchSafeSegmentSequential(segment, location);
-            } catch (ExecutionException e) {
-                LOGGER.warn("Lightspeed parallel resource lookup failed for {} in {}", location, indexedPack.pack().packId(), e);
-            }
-        }
-        return null;
+        return lightspeed$searchSafeSegmentSequential(segment, location);
     }
 
     @Unique

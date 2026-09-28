@@ -211,30 +211,6 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
     }
 
     @Override
-    public void lightspeed$startAsyncPreload() {
-        if (!GlobalCache.isEnabled || !GlobalCache.shouldAsyncPreloadPacks) {
-            return;
-        }
-
-        for (PackType packType : PackType.values()) {
-            GlobalCache.supplyCacheAfterPersistedLoad("preload namespaces " + lightspeed$id + " " + packType, () -> {
-                Set<String> namespaces = lightspeed$getCachedNamespaces(packType);
-                if (namespaces == null) {
-                    namespaces = lightspeed$scanNamespaces(packType);
-                    lightspeed$cacheNamespaces(packType, namespaces);
-                }
-                for (String namespace : namespaces) {
-                    if (lightspeed$getCachedFilePaths(packType, namespace) == null) {
-                        Path namespaceRoot = lightspeed$resolve(packType.getDirectory(), namespace).toAbsolutePath();
-                        lightspeed$scheduleFilePathScan(packType, namespace, namespaceRoot);
-                    }
-                }
-                return null;
-            });
-        }
-    }
-
-    @Override
     public Boolean lightspeed$hasIndexedResource(PackType type, ResourceLocation location) {
         List<String> cachedPaths = lightspeed$getCachedFilePaths(type, location.getNamespace());
         if (cachedPaths == null) {

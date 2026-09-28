@@ -19,10 +19,8 @@ public final class LightspeedConfig {
     }
 
     public static final class Common {
-        public final ModConfigSpec.BooleanValue asyncPreloadPacks;
         public final ModConfigSpec.BooleanValue dedicatedResourceReloadExecutor;
         public final ModConfigSpec.BooleanValue parallelResourceLookup;
-        public final ModConfigSpec.IntValue parallelLookupMinPacks;
         public final ModConfigSpec.BooleanValue cacheResourceExistence;
         public final ModConfigSpec.BooleanValue isolateModdedResourceReloadFailures;
         public final ModConfigSpec.ConfigValue<List<? extends String>> isolatedResourceReloadListenerPatterns;
@@ -30,18 +28,12 @@ public final class LightspeedConfig {
 
         private Common(ModConfigSpec.Builder builder) {
             builder.push("startup");
-            asyncPreloadPacks = builder
-                    .comment("Preload NeoForge path resource pack indexes on Lightspeed worker threads during startup.")
-                    .define("asyncPreloadPacks", true);
             dedicatedResourceReloadExecutor = builder
                     .comment("Use a dedicated work-stealing pool for resource reload preparation instead of competing for the shared Minecraft worker pool.")
                     .define("dedicatedResourceReloadExecutor", true);
             parallelResourceLookup = builder
-                    .comment("Query safe resource-pack segments concurrently while preserving vanilla priority and filter order.")
+                    .comment("Use indexed resource lookup for safe pack segments while preserving vanilla priority and filter order.")
                     .define("parallelResourceLookup", true);
-            parallelLookupMinPacks = builder
-                    .comment("Minimum safe pack segment size before Lightspeed uses parallel resource lookup. Small segments are faster sequentially.")
-                    .defineInRange("parallelLookupMinPacks", 4, 2, 64);
             cacheResourceExistence = builder
                     .comment("Cache per-pack resource existence checks. The persisted cache is loaded lazily so it does not block startup IO.")
                     .define("cacheResourceExistence", true);

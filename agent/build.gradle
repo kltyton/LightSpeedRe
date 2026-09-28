@@ -19,21 +19,47 @@ repositories {
 configurations {
     forgeProductionTarget { transitive = false }
     forgeDevelopmentTarget { transitive = false }
+    forgeGameTarget { transitive = false }
     neoForgeTarget { transitive = false }
     secureJar2Target { transitive = false }
     secureJar3Target { transitive = false }
+    eventBusTarget { transitive = false }
+    eventBusOldTarget { transitive = false }
+    eventBusMidTarget { transitive = false }
+    eventBusCurrentTarget { transitive = false }
+    modLauncher10Target { transitive = false }
+    modLauncher11Target { transitive = false }
+    modLauncher11LegacyTarget { transitive = false }
+    forgeSpiTarget { transitive = false }
+    forgeScanAsmTarget { transitive = false }
+    forgeScanGuavaTarget { transitive = false }
 }
 
 dependencies {
     implementation 'org.ow2.asm:asm:9.7.1'
     implementation 'org.ow2.asm:asm-tree:9.7.1'
     testImplementation 'org.ow2.asm:asm-util:9.7.1'
+    testCompileOnly files(configurations.eventBusTarget)
+    testImplementation files(configurations.forgeProductionTarget)
+    testImplementation files(configurations.forgeSpiTarget)
+    testImplementation files(configurations.forgeGameTarget)
 
     forgeProductionTarget 'net.minecraftforge:fmlloader:1.20.1-47.4.0'
     forgeDevelopmentTarget 'net.minecraftforge:fmlloader:1.20.1-47.4.20'
+    forgeGameTarget 'net.minecraftforge:forge:1.20.1-47.4.0:universal'
     neoForgeTarget 'net.neoforged.fancymodloader:loader:4.0.42'
     secureJar2Target 'cpw.mods:securejarhandler:2.1.10'
     secureJar3Target 'cpw.mods:securejarhandler:3.0.8'
+    eventBusTarget 'net.minecraftforge:eventbus:6.0.5'
+    eventBusOldTarget 'net.minecraftforge:eventbus:6.0.3'
+    eventBusMidTarget 'net.minecraftforge:eventbus:6.2.8'
+    eventBusCurrentTarget 'net.minecraftforge:eventbus:6.2.33'
+    modLauncher10Target 'cpw.mods:modlauncher:10.0.9'
+    modLauncher11Target 'cpw.mods:modlauncher:11.0.5'
+    modLauncher11LegacyTarget 'cpw.mods:modlauncher:11.0.4'
+    forgeSpiTarget 'net.minecraftforge:forgespi:7.0.1'
+    forgeScanAsmTarget 'org.ow2.asm:asm:9.5'
+    forgeScanGuavaTarget 'com.google.guava:guava:31.1-jre'
 }
 
 tasks.named('jar', Jar).configure {
@@ -43,12 +69,15 @@ tasks.named('jar', Jar).configure {
 tasks.named('shadowJar', com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar).configure {
     archiveBaseName = 'lightspeed-bootstrap-agent'
     archiveClassifier = ''
+    archiveVersion = ''
+    destinationDirectory = rootProject.layout.buildDirectory.dir('embedded-agent')
     relocate 'org.objectweb.asm', 'com.ccr4ft3r.lightspeed.bootstrap.internal.asm'
     manifest {
         attributes(
                 'Premain-Class': 'com.ccr4ft3r.lightspeed.bootstrap.LightspeedAgent',
+                'Agent-Class': 'com.ccr4ft3r.lightspeed.bootstrap.LightspeedAgent',
                 'Can-Redefine-Classes': 'false',
-                'Can-Retransform-Classes': 'false',
+                'Can-Retransform-Classes': 'true',
                 'Implementation-Title': 'Lightspeed Bootstrap Agent',
                 'Implementation-Version': project.version
         )
@@ -72,9 +101,17 @@ tasks.register('verifyAgent', JavaExec) {
     mainClass = 'com.ccr4ft3r.lightspeed.bootstrap.AgentRegressionCheck'
     systemProperty 'lightspeed.target.forge.production', configurations.forgeProductionTarget.singleFile
     systemProperty 'lightspeed.target.forge.development', configurations.forgeDevelopmentTarget.singleFile
+    systemProperty 'lightspeed.target.forge.game', configurations.forgeGameTarget.singleFile
     systemProperty 'lightspeed.target.neoforge', configurations.neoForgeTarget.singleFile
     systemProperty 'lightspeed.target.securejar2', configurations.secureJar2Target.singleFile
     systemProperty 'lightspeed.target.securejar3', configurations.secureJar3Target.singleFile
+    systemProperty 'lightspeed.target.eventbus', configurations.eventBusTarget.singleFile
+    systemProperty 'lightspeed.target.eventbus.old', configurations.eventBusOldTarget.singleFile
+    systemProperty 'lightspeed.target.eventbus.mid', configurations.eventBusMidTarget.singleFile
+    systemProperty 'lightspeed.target.eventbus.current', configurations.eventBusCurrentTarget.singleFile
+    systemProperty 'lightspeed.target.modlauncher10', configurations.modLauncher10Target.singleFile
+    systemProperty 'lightspeed.target.modlauncher11', configurations.modLauncher11Target.singleFile
+    systemProperty 'lightspeed.target.modlauncher11.legacy', configurations.modLauncher11LegacyTarget.singleFile
     systemProperty 'lightspeed.agent.jar', tasks.named('shadowJar').get().archiveFile.get().asFile
 }
 
@@ -87,13 +124,138 @@ tasks.register('smokeAgent', JavaExec) {
         languageVersion = JavaLanguageVersion.of(17)
     }
     jvmArgs "-javaagent:${tasks.named('shadowJar').get().archiveFile.get().asFile.absolutePath}"
+    systemProperty 'lightspeed.agent.allowUnowned', 'true'
     mainClass = 'com.ccr4ft3r.lightspeed.bootstrap.AgentSmokeTarget'
 }
 
+tasks.register('smokeModuleBridge', JavaExec) {
+    group = 'verification'
+    description = 'Exercises the exact Agent hook bridge through the real parent-null ModuleClassLoader.'
+    dependsOn tasks.named('testClasses'), tasks.named('shadowJar')
+    classpath = sourceSets.test.output + configurations.secureJar2Target
+    javaLauncher = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+    jvmArgs "-javaagent:${tasks.named('shadowJar').get().archiveFile.get().asFile.absolutePath}"
+    systemProperty 'lightspeed.agent.allowUnowned', 'true'
+    mainClass = 'com.ccr4ft3r.lightspeed.bootstrap.ModuleClassLoaderBridgeSmokeTarget'
+}
+
+tasks.register('smokeModuleReadGrant', JavaExec) {
+    group = 'verification'
+    description = 'Exercises a real Instrumentation read grant from a named module to the Agent hook module.'
+    dependsOn tasks.named('testClasses'), tasks.named('shadowJar')
+    classpath = sourceSets.test.output
+    javaLauncher = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+    jvmArgs "-javaagent:${tasks.named('shadowJar').get().archiveFile.get().asFile.absolutePath}"
+    systemProperty 'lightspeed.agent.allowUnowned', 'true'
+    systemProperty 'lightspeed.agent.jar', tasks.named('shadowJar').get().archiveFile.get().asFile
+    mainClass = 'com.ccr4ft3r.lightspeed.bootstrap.ModuleReadGrantSmokeTarget'
+}
+
+tasks.register('smokeEventBusLoaderReuse', JavaExec) {
+    group = 'verification'
+    description = 'Verifies the EventBus ASMClassLoader reuses a previously defined wrapper identity.'
+    dependsOn tasks.named('testClasses'), tasks.named('shadowJar')
+    classpath = sourceSets.test.output + configurations.eventBusTarget
+    javaLauncher = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+    jvmArgs "-javaagent:${tasks.named('shadowJar').get().archiveFile.get().asFile.absolutePath}"
+    systemProperty 'lightspeed.agent.allowUnowned', 'true'
+    mainClass = 'com.ccr4ft3r.lightspeed.bootstrap.EventBusAsmLoaderReuseSmokeTarget'
+}
+
+tasks.register('verifySegmentedImage', JavaExec) {
+    group = 'verification'
+    description = 'Verifies one changed source does not invalidate unrelated startup image segments.'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    javaLauncher = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+    mainClass = 'com.ccr4ft3r.lightspeed.bootstrap.runtime.image.StartupByteImageSegmentCheck'
+}
+
+tasks.register('verifyModScanExecutor', JavaExec) {
+    group = 'verification'
+    description = 'Verifies bounded parallel Mod scan execution and serial override behavior.'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    javaLauncher = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+    mainClass = 'com.ccr4ft3r.lightspeed.bootstrap.runtime.scan.ModScanExecutorFactoryCheck'
+}
+
+tasks.register('verifyClassAttribution', JavaExec) {
+    group = 'verification'
+    description = 'Verifies bounded class-definition attribution and its callback overhead.'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    javaLauncher = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+    systemProperty 'lightspeed.agent.attribution.maxGroups', '4'
+    systemProperty 'lightspeed.agent.attribution', 'true'
+    mainClass = 'com.ccr4ft3r.lightspeed.bootstrap.runtime.attribution.ClassDefinitionAttributionCheck'
+}
+
+tasks.register('verifyObjectHolderRouter', JavaExec) {
+    group = 'verification'
+    description = 'Verifies registry-aware ObjectHolder routing and fallback order.'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    javaLauncher = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+    mainClass = 'com.ccr4ft3r.lightspeed.bootstrap.runtime.registry.ObjectHolderRouterCheck'
+}
+
+tasks.register('verifyScanPackCompiler', JavaExec) {
+    group = 'verification'
+    description = 'Runs the extracted Agent JAR scan Pack compiler against the exact Forge scan runtime.'
+    dependsOn tasks.named('testClasses'), tasks.named('shadowJar')
+    classpath(sourceSets.test.output, files(tasks.named('shadowJar').flatMap { it.archiveFile }),
+            configurations.forgeProductionTarget, configurations.forgeSpiTarget,
+            configurations.forgeScanAsmTarget, configurations.forgeScanGuavaTarget,
+            configurations.secureJar2Target)
+    javaLauncher = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+    jvmArgs '--add-opens=java.base/java.lang.invoke=ALL-UNNAMED'
+    mainClass = 'com.ccr4ft3r.lightspeed.bootstrap.compiler.ScanPackCompilerCheck'
+}
+
+tasks.register('smokeDynamicAttach', JavaExec) {
+    group = 'verification'
+    description = 'Loads the packaged Agent through a real external Attach API helper.'
+    dependsOn tasks.named('testClasses'), tasks.named('shadowJar')
+    classpath = sourceSets.test.output
+    javaLauncher = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+    jvmArgs '-XX:+EnableDynamicAgentLoading'
+    systemProperty 'lightspeed.agent.allowUnowned', 'true'
+    systemProperty 'lightspeed.agent.jar', tasks.named('shadowJar').get().archiveFile.get().asFile
+    systemProperty 'lightspeed.java21', javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(21)
+    }.get().executablePath.asFile
+    mainClass = 'com.ccr4ft3r.lightspeed.bootstrap.DynamicAttachSmokeTarget'
+}
+
 tasks.named('check').configure {
-    dependsOn tasks.named('verifyAgent'), tasks.named('smokeAgent')
+    dependsOn tasks.named('verifyAgent'), tasks.named('smokeAgent'), tasks.named('smokeModuleBridge'),
+            tasks.named('smokeModuleReadGrant'), tasks.named('smokeEventBusLoaderReuse'),
+            tasks.named('verifySegmentedImage'),
+            tasks.named('verifyClassAttribution'),
+            tasks.named('verifyModScanExecutor'), tasks.named('verifyObjectHolderRouter'),
+            tasks.named('verifyScanPackCompiler'), tasks.named('smokeDynamicAttach')
 }
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
+    options.compilerArgs += ['--add-modules', 'jdk.attach']
 }

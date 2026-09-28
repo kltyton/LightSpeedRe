@@ -45,7 +45,6 @@ public abstract class ResourcePackLoaderMixin {
             return;
         }
         lightspeedPack.lightspeed$setModFile(modFileInfo.getFile());
-        lightspeedPack.lightspeed$startAsyncPreload();
     }
 
     private static PackResources lightspeed$getPrimaryResources(PackResources resources) {

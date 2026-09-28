@@ -2,10 +2,13 @@ package com.ccr4ft3r.lightspeed;
 
 import com.ccr4ft3r.lightspeed.cache.GlobalCache;
 import com.ccr4ft3r.lightspeed.config.LightspeedConfig;
+import com.ccr4ft3r.lightspeed.startup.installation.BootstrapAgentInstaller;
+import com.ccr4ft3r.lightspeed.startup.metrics.StartupMetrics;
 import com.mojang.logging.LogUtils;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.ModList;
+import net.neoforged.fml.loading.FMLEnvironment;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.config.ModConfig;
 import net.neoforged.fml.event.config.ModConfigEvent;
@@ -19,8 +22,12 @@ public class Main {
     private static boolean loggedConnectorCompatibilityMode;
 
     public Main(IEventBus modEventBus, ModContainer modContainer) {
+        StartupMetrics.mark("mod-construction");
         modEventBus.addListener(this::onConfigEvent);
         modContainer.registerConfig(ModConfig.Type.COMMON, LightspeedConfig.SPEC);
+        if (FMLEnvironment.dist.isClient()) {
+            BootstrapAgentInstaller.installForNextLaunch();
+        }
         updateCacheFlags();
     }
 
@@ -36,10 +43,8 @@ public class Main {
         GlobalCache.shouldCacheMaterials = true;
 
         try {
-            GlobalCache.shouldAsyncPreloadPacks = LightspeedConfig.COMMON.asyncPreloadPacks.get();
             GlobalCache.shouldUseDedicatedResourceReloadExecutor = LightspeedConfig.COMMON.dedicatedResourceReloadExecutor.get();
             GlobalCache.shouldParallelizeResourcePackLookup = LightspeedConfig.COMMON.parallelResourceLookup.get();
-            GlobalCache.parallelLookupMinPacks = LightspeedConfig.COMMON.parallelLookupMinPacks.get();
             GlobalCache.shouldCacheResourceExistence = LightspeedConfig.COMMON.cacheResourceExistence.get();
             GlobalCache.shouldIsolateModdedResourceReloadFailures = LightspeedConfig.COMMON.isolateModdedResourceReloadFailures.get();
             GlobalCache.shouldUseConnectorCompatibilityMode = LightspeedConfig.COMMON.connectorCompatibilityMode.get();
@@ -53,7 +58,6 @@ public class Main {
         }
 
         if (GlobalCache.shouldUseConnectorCompatibilityMode && needsResourcePackCompatibilityMode()) {
-            GlobalCache.shouldAsyncPreloadPacks = false;
             GlobalCache.shouldUseDedicatedResourceReloadExecutor = false;
             GlobalCache.shouldParallelizeResourcePackLookup = false;
             GlobalCache.shouldCacheWalkedPaths = false;

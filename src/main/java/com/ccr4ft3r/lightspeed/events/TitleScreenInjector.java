@@ -2,14 +2,20 @@ package com.ccr4ft3r.lightspeed.events;
 
 import com.ccr4ft3r.lightspeed.ModConstants;
 import com.ccr4ft3r.lightspeed.cache.GlobalCache;
+import com.ccr4ft3r.lightspeed.compat.bootstrap.BootstrapAgentBridge;
+import com.ccr4ft3r.lightspeed.startup.metrics.StartupMetrics;
 import com.mojang.logging.LogUtils;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.TitleScreen;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.EventPriority;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.fml.common.Mod;
+import net.neoforged.fml.ModLoader;
+import net.neoforged.neoforge.client.loading.ClientModLoader;
 import net.neoforged.neoforge.client.event.ScreenEvent;
+import net.neoforged.neoforge.client.event.ClientTickEvent;
 import net.neoforged.neoforge.internal.BrandingControl;
 
 import java.lang.management.ManagementFactory;
@@ -27,9 +33,18 @@ public class TitleScreenInjector {
     @SuppressWarnings({"InstantiationOfUtilityClass", "unchecked"})
     @SubscribeEvent(priority = EventPriority.LOWEST)
     public static void onScreenInit(ScreenEvent.Init.Post event) {
-        if (!(event.getScreen() instanceof TitleScreen) || launchComplete)
+        if (!(event.getScreen() instanceof TitleScreen) || launchComplete || !ready())
             return;
+        finishTitleInit();
+    }
+
+    private static boolean ready() {
+        return !ClientModLoader.isLoading() && !ModLoader.hasErrors();
+    }
+
+    private static void finishTitleInit() {
         launchComplete = true;
+        StartupMetrics.mark("title-screen-init");
         try {
             long secondsToStart = ManagementFactory.getRuntimeMXBean().getUptime() / 1000;
             LogUtils.getLogger().info("Lightspeed: Launch took {}s", secondsToStart);
@@ -51,6 +66,7 @@ public class TitleScreenInjector {
                  InvocationTargetException e) {
             LogUtils.getLogger().error("Cannot add launch time to title screen", e);
         }
+        BootstrapAgentBridge.persistResourceImage();
         GlobalCache.EXECUTOR.execute(() -> {
             try {
                 GlobalCache.disablePersistAndClear();
@@ -58,5 +74,18 @@ public class TitleScreenInjector {
                 GlobalCache.shutdownExecutors();
             }
         });
+    }
+
+    @SubscribeEvent
+    public static void onClientTick(ClientTickEvent.Post event) {
+        if (!(Minecraft.getInstance().screen instanceof TitleScreen)) {
+            return;
+        }
+        if (!launchComplete && ready()) {
+            finishTitleInit();
+        }
+        if (launchComplete) {
+            StartupMetrics.mark("title-screen-operable");
+        }
     }
 }
