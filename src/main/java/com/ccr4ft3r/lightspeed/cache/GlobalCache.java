@@ -1,17 +1,14 @@
 package com.ccr4ft3r.lightspeed.cache;
 
 import com.ccr4ft3r.lightspeed.cache.persistence.CacheFiles;
-import com.ccr4ft3r.lightspeed.compat.FusionPackCompat;
 import com.ccr4ft3r.lightspeed.interfaces.ICache;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 import com.mojang.logging.LogUtils;
 import net.minecraft.resources.ResourceLocation;
-import net.minecraft.server.packs.FilePackResources;
 import net.minecraft.server.packs.PackResources;
 import net.minecraft.server.packs.PackType;
 import net.minecraft.server.packs.resources.IoSupplier;
-import net.minecraftforge.resource.PathPackResources;
 import org.slf4j.Logger;
 
 import java.io.File;
@@ -22,11 +19,9 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ForkJoinPool;
-import java.util.concurrent.ForkJoinTask;
 import java.util.concurrent.ForkJoinWorkerThread;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
@@ -44,10 +39,9 @@ public final class GlobalCache {
     public static volatile boolean shouldAsyncPreloadPacks = true;
     public static volatile boolean shouldParallelizeResourcePackLookup = true;
     public static volatile boolean shouldUseDedicatedResourceReloadExecutor = true;
-    public static volatile int parallelLookupMinPacks = 4;
-    public static volatile boolean shouldIsolateModdedResourceReloadFailures = true;
+    public static volatile boolean shouldIsolateModdedResourceReloadFailures = false;
     public static volatile boolean shouldUseConnectorCompatibilityMode = true;
-    public static volatile List<String> isolatedResourceReloadListenerPatterns = List.of("*");
+    public static volatile List<String> isolatedResourceReloadListenerPatterns = List.of();
 
     public static final Map<CharSequence, List<String>> SPLITTED_STRINGS_BY_SEQUENCE = Maps.newConcurrentMap();
     public static final Map<String, String> CANONICAL_PATH_PER_FILE = Maps.newConcurrentMap();
@@ -79,7 +73,7 @@ public final class GlobalCache {
         if (id == null || id.isBlank()) {
             return CompletableFuture.completedFuture(null);
         }
-        File file = new File(directory, id + ".ser");
+        File file = CacheFiles.cacheFile(directory, id);
         if (!file.isFile()) {
             return CompletableFuture.completedFuture(null);
         }
@@ -127,46 +121,9 @@ public final class GlobalCache {
         return isEnabled && shouldUseDedicatedResourceReloadExecutor ? STARTUP_EXECUTOR : fallback;
     }
 
-    public static boolean isStartupWorkerThread() {
-        return ForkJoinTask.getPool() == STARTUP_EXECUTOR;
-    }
-
     public static IoSupplier<InputStream> findFirstResource(List<PackResources> packs, PackType type,
                                                              ResourceLocation location) {
-        if (packs.isEmpty()) {
-            return null;
-        }
-        if (packs.size() < parallelLookupMinPacks
-                || !shouldParallelizeResourcePackLookup
-                || isStartupWorkerThread()
-                || packs.stream().anyMatch(pack -> !isSafeForParallelLookup(pack))) {
-            return findFirstResourceSequential(packs, type, location);
-        }
-
-        List<CompletableFuture<IoSupplier<InputStream>>> futures = new ArrayList<>(packs.size());
-        try {
-            for (PackResources pack : packs) {
-                futures.add(CompletableFuture.supplyAsync(() -> pack.getResource(type, location), STARTUP_EXECUTOR));
-            }
-        } catch (RuntimeException exception) {
-            LOGGER.warn("Lightspeed parallel resource lookup rejected; falling back to sequential lookup", exception);
-            return findFirstResourceSequential(packs, type, location);
-        }
-
-        for (CompletableFuture<IoSupplier<InputStream>> future : futures) {
-            try {
-                IoSupplier<InputStream> supplier = future.get();
-                if (supplier != null) {
-                    return supplier;
-                }
-            } catch (InterruptedException exception) {
-                Thread.currentThread().interrupt();
-                return findFirstResourceSequential(packs, type, location);
-            } catch (ExecutionException exception) {
-                LOGGER.warn("Lightspeed parallel resource lookup failed for {}", location, exception);
-            }
-        }
-        return null;
+        return findFirstResourceSequential(packs, type, location);
     }
 
     public static void disablePersistAndClear() {
@@ -277,12 +234,4 @@ public final class GlobalCache {
         return null;
     }
 
-    private static boolean isSafeForParallelLookup(PackResources packResources) {
-        Class<?> packClass = packResources.getClass();
-        boolean forgeModPathPack = packResources instanceof PathPackResources
-                && (packClass == PathPackResources.class
-                || packClass.getName().startsWith("net.minecraftforge.resource.ResourcePackLoader$"));
-        return (forgeModPathPack || packClass == FilePackResources.class)
-                && !FusionPackCompat.hasOverrides(packResources);
-    }
 }

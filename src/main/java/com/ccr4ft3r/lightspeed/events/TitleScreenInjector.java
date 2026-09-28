@@ -2,11 +2,19 @@ package com.ccr4ft3r.lightspeed.events;
 
 import com.ccr4ft3r.lightspeed.ModConstants;
 import com.ccr4ft3r.lightspeed.cache.GlobalCache;
+import com.ccr4ft3r.lightspeed.client.advice.StartupAdvice;
+import com.ccr4ft3r.lightspeed.client.screen.StartupAdviceScreen;
+import com.ccr4ft3r.lightspeed.client.cache.assets.ClientSnapshotCoordinator;
 import com.ccr4ft3r.lightspeed.compat.bootstrap.BootstrapAgentBridge;
+import com.ccr4ft3r.lightspeed.config.LightspeedConfig;
+import com.ccr4ft3r.lightspeed.startup.installation.BootstrapAgentInstaller;
+import com.ccr4ft3r.lightspeed.startup.metrics.StartupMetrics;
 import com.mojang.logging.LogUtils;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.ScreenEvent;
+import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.eventbus.api.EventPriority;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
@@ -23,6 +31,7 @@ import java.util.List;
 public class TitleScreenInjector {
 
     private static boolean launchComplete = false;
+    private static boolean startupAdviceHandled = false;
 
     @SuppressWarnings({"InstantiationOfUtilityClass", "unchecked"})
     @SubscribeEvent(priority = EventPriority.LOWEST)
@@ -30,6 +39,7 @@ public class TitleScreenInjector {
         if (!(event.getScreen() instanceof TitleScreen) || launchComplete)
             return;
         launchComplete = true;
+        StartupMetrics.mark("title-screen-init");
         try {
             long secondsToStart = ManagementFactory.getRuntimeMXBean().getUptime() / 1000;
             LogUtils.getLogger().info("Lightspeed: Launch took {}s", secondsToStart);
@@ -51,7 +61,9 @@ public class TitleScreenInjector {
                  InvocationTargetException e) {
             LogUtils.getLogger().error("Cannot add launch time to title screen", e);
         }
+        ClientSnapshotCoordinator.persistAndLog();
         BootstrapAgentBridge.persistResourceImage();
+        BootstrapAgentInstaller.startPackCompilerAfterTitle();
         GlobalCache.beginShutdown();
         GlobalCache.EXECUTOR.execute(() -> {
             try {
@@ -60,5 +72,38 @@ public class TitleScreenInjector {
                 GlobalCache.shutdownExecutors();
             }
         });
+    }
+
+    @SubscribeEvent
+    public static void onClientTick(TickEvent.ClientTickEvent event) {
+        if (event.phase != TickEvent.Phase.END || !launchComplete || startupAdviceHandled) {
+            return;
+        }
+
+        Minecraft minecraft = Minecraft.getInstance();
+        if (!(minecraft.screen instanceof TitleScreen titleScreen)) {
+            return;
+        }
+
+        startupAdviceHandled = true;
+        StartupMetrics.mark("title-screen-operable");
+        if (LightspeedConfig.COMMON.suppressStartupRecommendations.get()) {
+            return;
+        }
+
+        boolean manualConfigurationRequired = BootstrapAgentInstaller.manualConfigurationRequired();
+        StartupAdvice.Advice advice = StartupAdvice.select(
+                Runtime.version().feature(),
+                System.getProperty(BootstrapAgentInstaller.ACTIVE_PROPERTY),
+                System.getProperty(BootstrapAgentInstaller.DYNAMIC_PROPERTY),
+                manualConfigurationRequired,
+                BootstrapAgentInstaller.launcherReadyForNextLaunch());
+        if (advice.shouldShow()) {
+            String manualArguments = advice.manualConfigurationRequired()
+                    ? BootstrapAgentInstaller.manualJvmArguments() : "";
+            minecraft.setScreen(new StartupAdviceScreen(
+                    titleScreen, advice.java21Recommended(), advice.agentMissing(),
+                    advice.manualConfigurationRequired(), manualArguments));
+        }
     }
 }

@@ -3,13 +3,13 @@ package com.ccr4ft3r.lightspeed.mixin.resources;
 import com.ccr4ft3r.lightspeed.cache.GlobalCache;
 import com.ccr4ft3r.lightspeed.cache.persistence.CacheFiles;
 import com.ccr4ft3r.lightspeed.cache.resource.ResourcePathIndex;
+import com.ccr4ft3r.lightspeed.cache.resource.ResourcePathValidationCache;
 import com.ccr4ft3r.lightspeed.cache.resource.ResourcePackCacheKey;
 import com.ccr4ft3r.lightspeed.compat.FusionPackCompat;
 import com.ccr4ft3r.lightspeed.compat.bootstrap.BootstrapAgentBridge;
 import com.ccr4ft3r.lightspeed.interfaces.IPackResources;
 import com.ccr4ft3r.lightspeed.interfaces.IPathResourcePack;
 import com.google.common.collect.Maps;
-import net.minecraft.FileUtil;
 import net.minecraft.Util;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.packs.PackResources;
@@ -24,7 +24,6 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
-import java.io.File;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -56,6 +55,8 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
     private volatile Map<PackType, Map<String, ResourcePathIndex>> lightspeed$resourceIndexesByPackType;
     @Unique
     private volatile Map<String, CompletableFuture<List<String>>> lightspeed$resourceListScans;
+    @Unique
+    private volatile ResourcePathValidationCache lightspeed$pathValidationCache;
     @Unique
     private volatile boolean lightspeed$existenceCacheLoadRequested;
     @Unique
@@ -197,9 +198,15 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
             return;
         }
 
-        boolean[] fallbackToVanilla = {false};
-        FileUtil.decomposePath(path).get().ifLeft(parts -> {
-            try {
+        Optional<String> pathError = lightspeed$pathValidationCache().error(path);
+        if (pathError.isPresent()) {
+            LOGGER.error("Invalid path {}: {}", path, pathError.orElseThrow());
+            ci.cancel();
+            return;
+        }
+
+        boolean fallbackToVanilla = false;
+        try {
                 if (lightspeed$bootstrapIndexHandle != BootstrapAgentBridge.UNKNOWN) {
                     String basePrefix = type.getDirectory() + '/' + namespace;
                     List<String> indexed = BootstrapAgentBridge.resourceEntries(
@@ -214,40 +221,42 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
                                 resourceOutput.accept(location, lightspeed$openResource(type, location));
                             }
                         }
+                        ci.cancel();
                         return;
                     }
                 }
                 if (!lightspeed$persistedCacheLoad.isDone()) {
-                    fallbackToVanilla[0] = true;
-                    return;
-                }
-                Path root = resolve(type.getDirectory(), namespace).toAbsolutePath();
-                List<String> cachedPaths = lightspeed$getCachedFilePaths(type, namespace);
-                if (cachedPaths == null) {
-                    CompletableFuture<List<String>> scan = lightspeed$scheduleFilePathScan(type, namespace, root);
-                    cachedPaths = scan == null ? null : scan.getNow(null);
+                    fallbackToVanilla = true;
+                } else {
+                    Path root = resolve(type.getDirectory(), namespace).toAbsolutePath();
+                    List<String> cachedPaths = lightspeed$getCachedFilePaths(type, namespace);
                     if (cachedPaths == null) {
-                        fallbackToVanilla[0] = true;
-                        return;
+                        CompletableFuture<List<String>> scan = lightspeed$scheduleFilePathScan(type, namespace, root);
+                        cachedPaths = scan == null ? null : scan.getNow(null);
+                        if (cachedPaths == null) {
+                            fallbackToVanilla = true;
+                        }
+                    }
+                    if (!fallbackToVanilla) {
+                        ResourcePathIndex index = lightspeed$getResourcePathIndex(type, namespace, cachedPaths);
+                        index.forEachUnder(path, resourcePath -> {
+                            ResourceLocation location = ResourceLocation.tryBuild(namespace, resourcePath);
+                            if (location == null) {
+                                Util.logAndPauseIfInIde(String.format(Locale.ROOT,
+                                        "Invalid path in pack: %s:%s, ignoring", namespace, resourcePath));
+                            } else {
+                                resourceOutput.accept(location, lightspeed$openResource(type, location));
+                            }
+                        });
                     }
                 }
-                ResourcePathIndex index = lightspeed$getResourcePathIndex(type, namespace, cachedPaths);
-                index.forEachUnder(path, resourcePath -> {
-                    ResourceLocation location = ResourceLocation.tryBuild(namespace, resourcePath);
-                    if (location == null) {
-                        Util.logAndPauseIfInIde(String.format(Locale.ROOT, "Invalid path in pack: %s:%s, ignoring", namespace, resourcePath));
-                    } else {
-                        resourceOutput.accept(location, lightspeed$openResource(type, location));
-                    }
-                });
-            } catch (RuntimeException e) {
-                fallbackToVanilla[0] = true;
-                LOGGER.warn("Lightspeed path index lookup failed for {}:{}; falling back to vanilla resource enumeration",
-                        namespace, path, e);
-            }
-        }).ifRight(dataResult -> LOGGER.error("Invalid path {}: {}", path, dataResult.message()));
+        } catch (RuntimeException e) {
+            fallbackToVanilla = true;
+            LOGGER.warn("Lightspeed path index lookup failed for {}:{}; falling back to vanilla resource enumeration",
+                    namespace, path, e);
+        }
 
-        if (!fallbackToVanilla[0]) {
+        if (!fallbackToVanilla) {
             ci.cancel();
         }
     }
@@ -256,10 +265,10 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
     public void lightspeed$persistAndClearCache() {
         if (lightspeed$modFile != null && lightspeed$id != null) {
             if (GlobalCache.shouldCacheResourceExistence) {
-                CacheFiles.persist(lightspeed$getExistenceByResource(), new File(HAS_RESOURCE_CACHE_DIR, lightspeed$id + ".ser"));
+                CacheFiles.persist(lightspeed$getExistenceByResource(), CacheFiles.cacheFile(HAS_RESOURCE_CACHE_DIR, lightspeed$id));
             }
-            CacheFiles.persist(lightspeed$namespaces(), new File(NAMESPACE_CACHE_DIR, lightspeed$id + ".ser"));
-            CacheFiles.persist(lightspeed$relativeFilePaths(), new File(RESOURCE_LIST_CACHE_DIR, lightspeed$id + ".ser"));
+            CacheFiles.persist(lightspeed$namespaces(), CacheFiles.cacheFile(NAMESPACE_CACHE_DIR, lightspeed$id));
+            CacheFiles.persist(lightspeed$relativeFilePaths(), CacheFiles.cacheFile(RESOURCE_LIST_CACHE_DIR, lightspeed$id));
         }
         lightspeed$getExistenceByResource().clear();
         lightspeed$resolvedPaths().clear();
@@ -413,6 +422,21 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
                 if (current == null) {
                     current = Maps.newConcurrentMap();
                     lightspeed$resourceIndexesByPackType = current;
+                }
+            }
+        }
+        return current;
+    }
+
+    @Unique
+    private ResourcePathValidationCache lightspeed$pathValidationCache() {
+        ResourcePathValidationCache current = lightspeed$pathValidationCache;
+        if (current == null) {
+            synchronized (this) {
+                current = lightspeed$pathValidationCache;
+                if (current == null) {
+                    current = new ResourcePathValidationCache();
+                    lightspeed$pathValidationCache = current;
                 }
             }
         }

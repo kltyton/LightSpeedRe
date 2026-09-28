@@ -1,0 +1,16 @@
+{
+  "screen.lightspeed.startup_advice.title": "Lightspeed startup recommendations",
+  "screen.lightspeed.startup_advice.message.java": "If you would like to enable the Java 21 startup optimizations, you may consider using Java 21. The current Java version can still be used.",
+  "screen.lightspeed.startup_advice.message.agent": "The Lightspeed Agent is not active yet. When convenient, you can copy the line below into the launcher's JVM arguments and reopen the launcher. The current game remains available.",
+  "screen.lightspeed.startup_advice.message.agent_restart": "Lightspeed prepared the Agent arguments for the next launch, but could not refresh the current launcher automatically. You can reopen the launcher when convenient; the current game remains available.",
+  "screen.lightspeed.startup_advice.message.java_and_agent": "If you would like to enable the Java 21 optimizations, you may consider switching to Java 21. The Lightspeed Agent is not active yet; when convenient, you can add the line below and reopen the launcher. The current game remains available.",
+  "screen.lightspeed.startup_advice.message.java_and_agent_restart": "If you would like to enable the Java 21 optimizations, you may consider switching to Java 21. The Agent arguments are ready, but the current launcher could not be refreshed automatically; you can reopen it when convenient. The current game remains available.",
+  "screen.lightspeed.startup_advice.launcher_paths": "For manual configuration, you can use these locations:\nPCL2: Version Settings → Settings → Advanced Launch Options → JVM Arguments\nHMCL: Instance/Version Settings → Java → JVM Arguments\nPrism Launcher / MultiMC: Edit Instance → Settings → Java → Java Arguments\nOfficial Launcher: Installations → Edit → More Options → JVM Arguments",
+  "screen.lightspeed.startup_advice.arguments_label": "If needed, add the following JVM arguments while keeping the launcher's existing arguments:",
+  "screen.lightspeed.startup_advice.arguments_unavailable": "The arguments are temporarily unavailable. You can check latest.log later for more details.",
+  "screen.lightspeed.startup_advice.scroll_hint": "Scroll to see more details",
+  "screen.lightspeed.startup_advice.copy": "Copy JVM arguments",
+  "screen.lightspeed.startup_advice.copied": "Copied",
+  "screen.lightspeed.startup_advice.done": "Back",
+  "screen.lightspeed.startup_advice.suppress": "Do not remind me again"
+}

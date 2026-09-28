@@ -1,0 +1,16 @@
+{
+  "screen.lightspeed.startup_advice.title": "Lightspeed 启动建议",
+  "screen.lightspeed.startup_advice.message.java": "如果你希望启用仅限 Java 21 的启动优化，可以考虑使用 Java 21。当前 Java 版本仍可继续使用。",
+  "screen.lightspeed.startup_advice.message.agent": "Lightspeed Agent 目前尚未生效。你可以在方便时复制下方参数并添加到启动器的 JVM 参数中，再重新打开启动器；当前游戏仍可正常使用。",
+  "screen.lightspeed.startup_advice.message.agent_restart": "Lightspeed 已准备好下次启动所需的 Agent 参数，但暂时未能自动刷新当前启动器。你可以在方便时重新打开启动器；当前游戏仍可正常使用。",
+  "screen.lightspeed.startup_advice.message.java_and_agent": "如果你希望启用 Java 21 专属优化，可以考虑改用 Java 21。Lightspeed Agent 目前也尚未生效；你可以在方便时复制下方参数并添加到启动器，再重新打开启动器。当前游戏仍可正常使用。",
+  "screen.lightspeed.startup_advice.message.java_and_agent_restart": "如果你希望启用 Java 21 专属优化，可以考虑改用 Java 21。Agent 参数已经准备好，但暂时未能自动刷新当前启动器；方便时重新打开启动器即可。当前游戏仍可正常使用。",
+  "screen.lightspeed.startup_advice.launcher_paths": "如需手动配置，可以参考以下位置：\nPCL2：版本设置 → 设置 → 高级启动选项 → JVM 参数\nHMCL：实例/版本设置 → Java → JVM 参数\nPrism Launcher / MultiMC：编辑实例 → 设置 → Java → Java 参数\n官方启动器：安装配置 → 编辑 → 更多选项 → JVM 参数",
+  "screen.lightspeed.startup_advice.arguments_label": "如需手动配置，可以追加以下 JVM 参数（建议保留启动器原有参数）：",
+  "screen.lightspeed.startup_advice.arguments_unavailable": "暂时无法生成参数，你可以稍后查看 latest.log 了解详情。",
+  "screen.lightspeed.startup_advice.scroll_hint": "可以滚动查看更多内容",
+  "screen.lightspeed.startup_advice.copy": "复制 JVM 参数",
+  "screen.lightspeed.startup_advice.copied": "已复制",
+  "screen.lightspeed.startup_advice.done": "返回",
+  "screen.lightspeed.startup_advice.suppress": "以后不再提示"
+}

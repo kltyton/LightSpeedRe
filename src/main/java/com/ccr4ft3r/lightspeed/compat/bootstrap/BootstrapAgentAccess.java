@@ -5,8 +5,26 @@ import com.ccr4ft3r.lightspeed.bootstrap.runtime.BootstrapHooks;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Set;
+import java.util.function.Predicate;
+import java.util.function.Consumer;
 
 final class BootstrapAgentAccess implements BootstrapAgentBridge.Access {
+    @Override
+    public void withRegistryFilter(Predicate<?> filter, Object key, Runnable action) {
+        BootstrapHooks.withRegistryFilter(filter, key, action);
+    }
+
+    @Override
+    public void withRegisterEvent(Object event, Object key, Runnable action) {
+        BootstrapHooks.withRegisterEvent(event, key, action);
+    }
+
+    @Override
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    public Consumer<?> keyedRegisterConsumer(Object key, Consumer<?> action) {
+        return BootstrapHooks.keyedRegisterConsumer(key, (Consumer) action);
+    }
+
     @Override
     public int bindResourceIndex(Path path) {
         return BootstrapHooks.bindResourceIndex(path);
@@ -41,4 +59,11 @@ final class BootstrapAgentAccess implements BootstrapAgentBridge.Access {
     public void persistResourceImage() {
         BootstrapHooks.persistResourceImage();
     }
+
+    @Override
+    public void finishStartupHttpWindow() {
+        BootstrapHooks.finishStartupHttpWindow();
+    }
+
+
 }

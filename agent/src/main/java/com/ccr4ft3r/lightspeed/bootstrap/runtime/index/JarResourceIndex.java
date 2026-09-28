@@ -10,22 +10,26 @@ import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 import java.util.BitSet;
 import java.util.HexFormat;
+import java.util.HashSet;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.function.BiPredicate;
 import java.util.jar.JarFile;
 
 final class JarResourceIndex {
-    private static final JarResourceIndex UNSUPPORTED = new JarResourceIndex(null, null, null, -1);
+    private static final JarResourceIndex UNSUPPORTED = new JarResourceIndex(null, null, null, Set.of(), -1);
     private final String[] entries;
     private final Bloom bloom;
     private final String sourceIdentity;
+    private final Set<String> packages;
     private final int classEntries;
 
-    private JarResourceIndex(String[] entries, Bloom bloom, String sourceIdentity, int classEntries) {
+    private JarResourceIndex(String[] entries, Bloom bloom, String sourceIdentity, Set<String> packages,
+                             int classEntries) {
         this.entries = entries;
         this.bloom = bloom;
         this.sourceIdentity = sourceIdentity;
+        this.packages = packages;
         this.classEntries = classEntries;
     }
 
@@ -53,8 +57,19 @@ final class JarResourceIndex {
         String[] entries = names.toArray(String[]::new);
         String identity = registration.paths()[0].toAbsolutePath().normalize() + "\t"
                 + HexFormat.of().formatHex(digest.digest());
-        int classEntries = (int) Arrays.stream(entries).filter(name -> name.endsWith(".class")).count();
-        return new JarResourceIndex(entries, Bloom.create(entries), identity, classEntries);
+        Set<String> packages = new HashSet<>();
+        int classEntries = 0;
+        for (String entry : entries) {
+            if (!entry.endsWith(".class")) {
+                continue;
+            }
+            classEntries++;
+            int separator = entry.lastIndexOf('/');
+            if (separator > 0 && !entry.startsWith("META-INF/")) {
+                packages.add(entry.substring(0, separator).replace('/', '.'));
+            }
+        }
+        return new JarResourceIndex(entries, Bloom.create(entries), identity, Set.copyOf(packages), classEntries);
     }
 
     static JarResourceIndex unsupported() {
@@ -75,6 +90,10 @@ final class JarResourceIndex {
 
     int classEntryCount() {
         return classEntries;
+    }
+
+    Set<String> packages() {
+        return packages;
     }
 
     boolean contains(String name) {

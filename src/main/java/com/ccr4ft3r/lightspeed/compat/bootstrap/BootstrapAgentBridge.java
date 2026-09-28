@@ -8,6 +8,8 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Predicate;
+import java.util.function.Consumer;
 
 public final class BootstrapAgentBridge {
     public static final int UNKNOWN = -1;
@@ -18,7 +20,11 @@ public final class BootstrapAgentBridge {
     private static volatile Access access;
 
     static {
-        if (Boolean.getBoolean("lightspeed.bootstrapAgent.active")) {
+        refresh();
+    }
+
+    public static void refresh() {
+        if (access == null && Boolean.getBoolean("lightspeed.bootstrapAgent.active")) {
             try {
                 Constructor<?> constructor = Class.forName(
                         "com.ccr4ft3r.lightspeed.compat.bootstrap.BootstrapAgentAccess", true,
@@ -36,6 +42,24 @@ public final class BootstrapAgentBridge {
 
     public static boolean isAvailable() {
         return RESOURCE_INDEX_ENABLED && access != null;
+    }
+
+    public static void withRegistryFilter(Predicate<?> filter, Object key, Runnable action) {
+        Access current = access;
+        if (current == null) action.run();
+        else current.withRegistryFilter(filter, key, action);
+    }
+
+    public static void withRegisterEvent(Object event, Object key, Runnable action) {
+        Access current = access;
+        if (current == null) action.run();
+        else current.withRegisterEvent(event, key, action);
+    }
+
+    @SuppressWarnings("unchecked")
+    public static <T> Consumer<T> keyedRegisterConsumer(Object key, Consumer<T> action) {
+        Access current = access;
+        return current == null ? action : (Consumer<T>) current.keyedRegisterConsumer(key, action);
     }
 
     public static int bindResourceIndex(Path path) {
@@ -127,6 +151,12 @@ public final class BootstrapAgentBridge {
         }
     }
 
+    public static void finishStartupHttpWindow() {
+        Access current = access;
+        if (current != null) current.finishStartupHttpWindow();
+    }
+
+
     private static void disable(String operation, Throwable throwable) {
         access = null;
         logFailure(operation, throwable);
@@ -140,6 +170,12 @@ public final class BootstrapAgentBridge {
     }
 
     interface Access {
+        void withRegistryFilter(Predicate<?> filter, Object key, Runnable action);
+
+        void withRegisterEvent(Object event, Object key, Runnable action);
+
+        Consumer<?> keyedRegisterConsumer(Object key, Consumer<?> action);
+
         int bindResourceIndex(Path path);
 
         List<String> resourceEntries(int handle, String basePrefix, String requestedPath);
@@ -153,5 +189,9 @@ public final class BootstrapAgentBridge {
         void recordResourceBytes(int handle, String name, byte[] bytes);
 
         void persistResourceImage();
+
+        void finishStartupHttpWindow();
+
+
     }
 }

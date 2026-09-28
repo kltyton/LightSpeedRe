@@ -1,16 +1,10 @@
 package com.ccr4ft3r.lightspeed.bootstrap.runtime.image;
 
-import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
-import java.io.DataInputStream;
-import java.io.DataOutputStream;
 import java.io.IOException;
-import java.nio.file.AtomicMoveNotSupportedException;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -18,25 +12,24 @@ import java.util.concurrent.atomic.LongAdder;
 import java.util.function.Predicate;
 
 final class StartupByteImage {
-    private static final int MAGIC = 0x4c534249;
-    private static final int VERSION = 1;
     private static final int MAX_ENTRY_BYTES = 32 * 1024 * 1024;
 
-    private final Path file;
-    private final String fingerprint;
+    private final PackImageFile packImage;
     private final long maxBytes;
     private final String threadName;
     private final ConcurrentHashMap<String, byte[]> recorded = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, String> activeSegments = new ConcurrentHashMap<>();
+    private final Set<String> invalidatedSegments = ConcurrentHashMap.newKeySet();
     private final AtomicLong loadedBytes = new AtomicLong();
     private final AtomicLong recordedBytes = new AtomicLong();
+    private final LongAdder totalRecordedBytes = new LongAdder();
     private final LongAdder hits = new LongAdder();
     private final LongAdder misses = new LongAdder();
     private final LongAdder failures = new LongAdder();
-    private volatile CompletableFuture<Map<String, byte[]>> loaded;
+    private volatile CompletableFuture<PackImageFile.Image> loaded;
 
     StartupByteImage(Path file, String fingerprint, long maxBytes, String threadName) {
-        this.file = file;
-        this.fingerprint = fingerprint;
+        this.packImage = new PackImageFile(file, fingerprint, maxBytes, MAX_ENTRY_BYTES);
         this.maxBytes = maxBytes;
         this.threadName = threadName;
     }
@@ -49,13 +42,20 @@ final class StartupByteImage {
         if (key == null) {
             return null;
         }
+        PackImageFile.Image existing;
+        try {
+            existing = loadFuture().join();
+        } catch (RuntimeException exception) {
+            failures.increment();
+            return null;
+        }
+        activateSegment(key, existing);
         byte[] current = recorded.get(key);
-        if (current == null) {
+        if (current == null && !isInvalidated(key)) {
             try {
-                current = loadFuture().join().get(key);
-            } catch (RuntimeException exception) {
+                current = existing.get(key);
+            } catch (IOException exception) {
                 failures.increment();
-                return null;
             }
         }
         if (current == null) {
@@ -71,14 +71,15 @@ final class StartupByteImage {
                 || recorded.containsKey(key)) {
             return;
         }
-        Map<String, byte[]> existing;
+        PackImageFile.Image existing;
         try {
             existing = loadFuture().join();
         } catch (RuntimeException exception) {
             failures.increment();
-            existing = Map.of();
+            existing = PackImageFile.Image.empty();
         }
-        if (existing.containsKey(key)) {
+        activateSegment(key, existing);
+        if (!isInvalidated(key) && existing.containsKey(key)) {
             return;
         }
         long total = recordedBytes.addAndGet(bytes.length);
@@ -89,6 +90,8 @@ final class StartupByteImage {
         byte[] previous = recorded.putIfAbsent(key, bytes);
         if (previous != null) {
             recordedBytes.addAndGet(-bytes.length);
+        } else {
+            totalRecordedBytes.add(bytes.length);
         }
     }
 
@@ -96,54 +99,41 @@ final class StartupByteImage {
         persist(ignored -> true);
     }
 
-    void persist(Predicate<String> retain) {
+    synchronized void persist(Predicate<String> retain) {
         Map<String, byte[]> entries = new HashMap<>();
-        Map<String, byte[]> existing;
+        Map<String, byte[]> recordedSnapshot = new HashMap<>(recorded);
+        PackImageFile.Image existing;
         try {
             existing = loadFuture().join();
-        } catch (RuntimeException exception) {
-            failures.increment();
-            existing = Map.of();
-        }
-        existing.forEach((key, value) -> {
-            if (retain.test(key)) {
-                entries.put(key, value);
-            }
-        });
-        recorded.forEach((key, value) -> {
-            if (retain.test(key)) {
-                entries.put(key, value);
-            }
-        });
-        if (recorded.isEmpty() && entries.size() == existing.size()) {
-            return;
-        }
-        Path temporary = file.resolveSibling(file.getFileName() + ".tmp");
-        try {
-            Files.createDirectories(file.getParent());
-            try (DataOutputStream output = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(temporary)))) {
-                output.writeInt(MAGIC);
-                output.writeInt(VERSION);
-                output.writeUTF(fingerprint);
-                output.writeInt(entries.size());
-                for (Map.Entry<String, byte[]> entry : entries.entrySet()) {
-                    output.writeUTF(entry.getKey());
-                    output.writeInt(entry.getValue().length);
-                    output.write(entry.getValue());
+            existing.forEach((key, value) -> {
+                if (retain.test(key) && !invalidatedSegments.contains(segment(key))) {
+                    entries.put(key, value);
                 }
-            }
-            try {
-                Files.move(temporary, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-            } catch (AtomicMoveNotSupportedException exception) {
-                Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING);
-            }
+            });
         } catch (IOException | RuntimeException exception) {
             failures.increment();
-            try {
-                Files.deleteIfExists(temporary);
-            } catch (IOException cleanupFailure) {
-                failures.increment();
+            existing = PackImageFile.Image.empty();
+        }
+        recordedSnapshot.forEach((key, value) -> {
+            if (retain.test(key)) {
+                entries.put(key, value);
             }
+        });
+        if (recordedSnapshot.isEmpty() && invalidatedSegments.isEmpty() && entries.size() == existing.size()) {
+            return;
+        }
+        try {
+            PackImageFile.Image persisted = packImage.write(entries);
+            loaded = CompletableFuture.completedFuture(persisted);
+            loadedBytes.set(persisted.dataBytes());
+            invalidatedSegments.clear();
+            recordedSnapshot.forEach((key, value) -> {
+                if (recorded.remove(key, value)) {
+                    recordedBytes.addAndGet(-value.length);
+                }
+            });
+        } catch (IOException | RuntimeException exception) {
+            failures.increment();
         }
     }
 
@@ -156,6 +146,10 @@ final class StartupByteImage {
     }
 
     long recordedBytes() {
+        return totalRecordedBytes.sum();
+    }
+
+    long pendingBytes() {
         return recordedBytes.get();
     }
 
@@ -163,8 +157,8 @@ final class StartupByteImage {
         return failures.sum();
     }
 
-    private CompletableFuture<Map<String, byte[]>> loadFuture() {
-        CompletableFuture<Map<String, byte[]>> current = loaded;
+    private CompletableFuture<PackImageFile.Image> loadFuture() {
+        CompletableFuture<PackImageFile.Image> current = loaded;
         if (current != null) {
             return current;
         }
@@ -183,39 +177,65 @@ final class StartupByteImage {
         return current;
     }
 
-    private Map<String, byte[]> load() {
-        if (!Files.isRegularFile(file)) {
-            return Map.of();
-        }
-        try (DataInputStream input = new DataInputStream(new BufferedInputStream(Files.newInputStream(file)))) {
-            if (input.readInt() != MAGIC || input.readInt() != VERSION || !fingerprint.equals(input.readUTF())) {
-                return Map.of();
-            }
-            int count = input.readInt();
-            if (count < 0 || count > 1_000_000) {
-                throw new IOException("invalid startup image entry count " + count);
-            }
-            Map<String, byte[]> entries = new HashMap<>(Math.max(16, count * 2));
-            long total = 0;
-            for (int index = 0; index < count; index++) {
-                String key = input.readUTF();
-                int length = input.readInt();
-                total += length;
-                if (length <= 0 || length > MAX_ENTRY_BYTES || total > maxBytes) {
-                    throw new IOException("invalid startup image entry length " + length);
-                }
-                byte[] bytes = input.readNBytes(length);
-                if (bytes.length != length) {
-                    throw new IOException("truncated startup image entry " + key);
-                }
-                entries.put(key, bytes);
-            }
-            loadedBytes.set(total);
-            return Map.copyOf(entries);
+    private PackImageFile.Image load() {
+        try {
+            PackImageFile.Image image = packImage.load();
+            loadedBytes.set(image.dataBytes());
+            image.forEachKey(this::registerLoadedSegment);
+            return image;
         } catch (IOException | RuntimeException exception) {
             failures.increment();
             loadedBytes.set(0);
-            return Map.of();
+            return PackImageFile.Image.empty();
         }
+    }
+
+    private void activateSegment(String key, PackImageFile.Image existing) {
+        String segment = segment(key);
+        String locator = locator(segment);
+        if (locator == null) {
+            return;
+        }
+        String previous = activeSegments.put(locator, segment);
+        if (previous == null || previous.equals(segment) || !invalidatedSegments.add(previous)) {
+            return;
+        }
+        loadedBytes.addAndGet(-existing.segmentBytes(previous));
+        removeRecordedSegment(previous);
+    }
+
+    private void registerLoadedSegment(String key) {
+        String segment = segment(key);
+        String locator = locator(segment);
+        if (locator != null) {
+            activeSegments.putIfAbsent(locator, segment);
+        }
+    }
+
+    private void removeRecordedSegment(String segment) {
+        String prefix = segment + '\0';
+        recorded.forEach((key, value) -> {
+            if (key.startsWith(prefix) && recorded.remove(key, value)) {
+                recordedBytes.addAndGet(-value.length);
+            }
+        });
+    }
+
+    private boolean isInvalidated(String key) {
+        String segment = segment(key);
+        return segment != null && invalidatedSegments.contains(segment);
+    }
+
+    private static String segment(String key) {
+        int separator = key.indexOf('\0');
+        return separator > 0 ? key.substring(0, separator) : null;
+    }
+
+    private static String locator(String segment) {
+        if (segment == null) {
+            return null;
+        }
+        int separator = segment.lastIndexOf('\t');
+        return separator > 0 ? segment.substring(0, separator) : null;
     }
 }

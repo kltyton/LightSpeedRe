@@ -24,4 +24,13 @@ public final class RuntimeModuleAccess {
         }
         current.redefineModule(source, Set.of(), Map.of(), Map.of(packageName, Set.of(target)), Set.of(), Map.of());
     }
+
+    public static void grantReadAccess(Module source) {
+        Instrumentation current = instrumentation;
+        Module target = RuntimeModuleAccess.class.getModule();
+        if (current == null || source == null || !source.isNamed() || source.canRead(target)) {
+            return;
+        }
+        current.redefineModule(source, Set.of(target), Map.of(), Map.of(), Set.of(), Map.of());
+    }
 }

@@ -5,7 +5,9 @@ import com.ccr4ft3r.lightspeed.bootstrap.runtime.image.StartupResourceImage;
 import java.nio.file.FileSystem;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.lang.module.ModuleReference;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -124,12 +126,49 @@ public final class ResourceMembershipIndex {
         return index.sourceIdentity() + "\0" + relative;
     }
 
+    public static String physicalJarScanKey(Path path) {
+        if (path == null) {
+            return null;
+        }
+        RootRegistration registration = new RootRegistration(path, path, (name, base) -> true,
+                new Path[]{path}, new ConcurrentHashMap<>());
+        JarResourceIndex index = JarResourceIndex.build(registration);
+        return index.isExact() ? index.sourceIdentity() + "\0" : null;
+    }
+
     public static Set<String> activeSourceIdentities() {
         return ROOTS.values().stream()
                 .map(ResourceMembershipIndex::index)
                 .filter(JarResourceIndex::isExact)
                 .map(JarResourceIndex::sourceIdentity)
                 .collect(java.util.stream.Collectors.toUnmodifiableSet());
+    }
+
+    public static Set<String> packages(Path root) {
+        RootRegistration registration = registration(root);
+        if (registration == null) {
+            return null;
+        }
+        JarResourceIndex index = index(registration);
+        return index.isExact() ? new HashSet<>(index.packages()) : null;
+    }
+
+    public static String sourceIdentity(ModuleReference reference) {
+        if (reference == null || reference.location().isEmpty()) {
+            return null;
+        }
+        try {
+            Path path = Path.of(reference.location().orElseThrow());
+            RootRegistration registration = registration(path);
+            if (registration == null) {
+                return null;
+            }
+            JarResourceIndex index = index(registration);
+            return index.isExact() ? index.sourceIdentity() : null;
+        } catch (RuntimeException exception) {
+            FAILURES.increment();
+            return null;
+        }
     }
 
     public static int classEntryCount(Path path) {

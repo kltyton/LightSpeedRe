@@ -3,11 +3,8 @@ package com.ccr4ft3r.lightspeed.bootstrap.runtime.image;
 import com.ccr4ft3r.lightspeed.bootstrap.runtime.index.ResourceMembershipIndex;
 import com.ccr4ft3r.lightspeed.bootstrap.runtime.scan.ScanMetadataCache;
 
-import java.io.File;
-import java.io.IOException;
 import java.lang.module.ModuleReference;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -16,19 +13,18 @@ import java.util.Set;
 
 public final class StartupResourceImage {
     private static final boolean RAW_CLASS_ENABLED =
-            Boolean.parseBoolean(System.getProperty("lightspeed.rawClassImage", "true"));
-    private static final String ENVIRONMENT_FINGERPRINT = fingerprint(false);
-    private static final String COMPLETE_FINGERPRINT = fingerprint(true);
+            Boolean.parseBoolean(System.getProperty("lightspeed.rawClassImage", "false"));
+    private static final String SEGMENTED_FINGERPRINT = fingerprint();
     private static final Path CACHE_DIRECTORY = cacheDirectory();
     private static final StartupByteImage RESOURCES = image(
             "resource-image-v3.bin", "lightspeed.resourceImageMiB", 512, 64, 1024,
-            "Lightspeed-Resource-Image-Load", ENVIRONMENT_FINGERPRINT);
+            "Lightspeed-Resource-Image-Load", SEGMENTED_FINGERPRINT);
     private static final StartupByteImage CLASSES = image(
-            "class-image-v2.bin", "lightspeed.classImageMiB", 64, 16, 256,
-            "Lightspeed-Class-Image-Load", COMPLETE_FINGERPRINT);
+            "class-image-v2.bin", "lightspeed.classImageMiB", classImageDefaultMiB(), 64, 512,
+            "Lightspeed-Class-Image-Load", SEGMENTED_FINGERPRINT);
     private static final StartupByteImage SCANS = image(
             "scan-image-v2.bin", "lightspeed.scanImageMiB", 128, 16, 512,
-            "Lightspeed-Scan-Image-Load", ENVIRONMENT_FINGERPRINT);
+            "Lightspeed-Scan-Image-Load", SEGMENTED_FINGERPRINT);
 
     private StartupResourceImage() {
     }
@@ -53,12 +49,12 @@ public final class StartupResourceImage {
         if (!RAW_CLASS_ENABLED || reference == null || name == null) {
             return null;
         }
-        return CLASSES.get(reference.descriptor().name() + '\0' + name);
+        return CLASSES.get(classKey(reference, name));
     }
 
     public static void recordRawClass(ModuleReference reference, String name, byte[] bytes) {
         if (RAW_CLASS_ENABLED && reference != null && name != null) {
-            CLASSES.record(reference.descriptor().name() + '\0' + name, bytes);
+            CLASSES.record(classKey(reference, name), bytes);
         }
     }
 
@@ -70,11 +66,17 @@ public final class StartupResourceImage {
         SCANS.record(key, bytes);
     }
 
+    public static boolean persistScanMetadata(Set<String> keys) {
+        long before = SCANS.failures();
+        SCANS.persist(keys::contains);
+        return SCANS.failures() == before;
+    }
+
     public static void persist() {
         Set<String> sources = ResourceMembershipIndex.activeSourceIdentities();
         RESOURCES.persist(key -> belongsToSource(key, sources));
         if (RAW_CLASS_ENABLED) {
-            CLASSES.persist();
+            CLASSES.persist(key -> belongsToSource(key, sources));
         }
         Set<String> scanKeys = ScanMetadataCache.activeKeys();
         SCANS.persist(scanKeys::contains);
@@ -130,26 +132,23 @@ public final class StartupResourceImage {
                 : Path.of(configured);
     }
 
-    private static String fingerprint(boolean includeMods) {
+    private static int classImageDefaultMiB() {
+        long maximumHeapMiB = Runtime.getRuntime().maxMemory() / (1024L * 1024L);
+        return (int) Math.max(64L, Math.min(384L, maximumHeapMiB / 32L));
+    }
+
+    private static String classKey(ModuleReference reference, String name) {
+        String source = ResourceMembershipIndex.sourceIdentity(reference);
+        return source == null ? null : source + '\0' + reference.descriptor().name() + '\0' + name;
+    }
+
+    private static String fingerprint() {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            update(digest, "lightspeed-segmented-startup-image-v1");
             update(digest, System.getProperty("java.version", ""));
-            updateRuntimePath(digest, System.getProperty("java.class.path", ""));
-            updateRuntimePath(digest, System.getProperty("jdk.module.path", ""));
-            if (includeMods) {
-                Path mods = Path.of(System.getProperty("user.dir", "."), "mods");
-                if (Files.isDirectory(mods)) {
-                    try (var files = Files.list(mods)) {
-                        for (Path file : files.filter(Files::isRegularFile)
-                                .sorted(java.util.Comparator.comparing(Path::toString)).toList()) {
-                            update(digest, file.getFileName() + "\t" + Files.size(file) + "\t"
-                                    + Files.getLastModifiedTime(file).toMillis());
-                        }
-                    }
-                }
-            }
             return HexFormat.of().formatHex(digest.digest());
-        } catch (NoSuchAlgorithmException | IOException | RuntimeException exception) {
+        } catch (NoSuchAlgorithmException | RuntimeException exception) {
             return "unavailable";
         }
     }
@@ -157,20 +156,6 @@ public final class StartupResourceImage {
     private static boolean belongsToSource(String key, Set<String> sources) {
         int separator = key.indexOf('\0');
         return separator > 0 && sources.contains(key.substring(0, separator));
-    }
-
-    private static void updateRuntimePath(MessageDigest digest, String value) throws IOException {
-        update(digest, value);
-        for (String entry : value.split(java.util.regex.Pattern.quote(File.pathSeparator))) {
-            if (entry.isBlank()) {
-                continue;
-            }
-            Path path = Path.of(entry).toAbsolutePath().normalize();
-            update(digest, path.toString());
-            if (Files.isRegularFile(path)) {
-                update(digest, Files.size(path) + "\t" + Files.getLastModifiedTime(path).toMillis());
-            }
-        }
     }
 
     private static void update(MessageDigest digest, String value) {

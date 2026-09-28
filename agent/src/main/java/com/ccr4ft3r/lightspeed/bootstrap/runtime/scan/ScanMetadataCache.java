@@ -15,6 +15,7 @@ import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -29,6 +30,7 @@ public final class ScanMetadataCache {
     private static final int MAGIC = 0x4c53534d;
     private static final int VERSION = 2;
     private static final int MAX_COLLECTION_SIZE = 100_000;
+    private static final int MAX_STANDALONE_ENTRY_BYTES = 32 * 1024 * 1024;
     private static final boolean ENABLED =
             Boolean.parseBoolean(System.getProperty("lightspeed.scanMetadataCache", "true"));
     private static final LongAdder HITS = new LongAdder();
@@ -188,6 +190,63 @@ public final class ScanMetadataCache {
         return Set.copyOf(ACTIVE_KEYS);
     }
 
+    public static boolean standaloneContains(String key) {
+        if (!ENABLED || !isStandaloneKey(key)) {
+            return false;
+        }
+        ACTIVE_KEYS.add(key);
+        return StartupResourceImage.scanMetadata(key) != null;
+    }
+
+    public static boolean standaloneAvailable() {
+        return ENABLED;
+    }
+
+    public static byte[] standaloneEncode(Object scanData) throws IOException {
+        if (!ENABLED || scanData == null) {
+            throw new IOException("scan metadata cache is unavailable");
+        }
+        try {
+            byte[] encoded = ACCESS.get(scanData.getClass()).encode(scanData);
+            if (encoded.length == 0 || encoded.length > MAX_STANDALONE_ENTRY_BYTES) {
+                throw new IOException("scan metadata exceeds standalone entry bounds");
+            }
+            return encoded;
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError exception) {
+            throw new IOException("unable to encode Forge scan metadata", exception);
+        }
+    }
+
+    public static boolean standaloneRecord(String key, byte[] encoded) {
+        if (!ENABLED || !isStandaloneKey(key) || encoded == null || encoded.length == 0
+                || encoded.length > MAX_STANDALONE_ENTRY_BYTES) {
+            return false;
+        }
+        try {
+            cachedClassCount(encoded);
+            ACTIVE_KEYS.add(key);
+            StartupResourceImage.recordScanMetadata(key, encoded);
+            return Arrays.equals(encoded, StartupResourceImage.scanMetadata(key));
+        } catch (IOException | RuntimeException | LinkageError exception) {
+            FAILURES.increment();
+            logFailure("standalone record", exception);
+            return false;
+        }
+    }
+
+    public static boolean standalonePersist() {
+        if (!ENABLED) {
+            return false;
+        }
+        try {
+            return StartupResourceImage.persistScanMetadata(ACTIVE_KEYS);
+        } catch (RuntimeException | LinkageError exception) {
+            FAILURES.increment();
+            logFailure("standalone persist", exception);
+            return false;
+        }
+    }
+
     private static int cachedClassCount(byte[] encoded) throws IOException {
         try (DataInputStream input = new DataInputStream(new ByteArrayInputStream(encoded))) {
             if (input.readInt() != MAGIC || input.readInt() != VERSION) {
@@ -195,6 +254,10 @@ public final class ScanMetadataCache {
             }
             return readCount(input);
         }
+    }
+
+    private static boolean isStandaloneKey(String key) {
+        return key != null && key.indexOf('\0') > 0;
     }
 
     private static final class ModAccess {

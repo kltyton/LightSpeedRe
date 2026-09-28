@@ -1,6 +1,7 @@
 package com.ccr4ft3r.lightspeed.bootstrap;
 
 import com.ccr4ft3r.lightspeed.bootstrap.runtime.BootstrapHooks;
+import com.ccr4ft3r.lightspeed.bootstrap.runtime.RuntimeModuleAccess;
 import com.ccr4ft3r.lightspeed.bootstrap.runtime.event.EventMethodCache;
 import com.ccr4ft3r.lightspeed.bootstrap.runtime.image.StartupResourceImage;
 import com.ccr4ft3r.lightspeed.bootstrap.runtime.index.ResourceMembershipIndex;
@@ -19,6 +20,7 @@ import org.objectweb.asm.util.CheckClassAdapter;
 import java.io.IOException;
 import java.lang.annotation.ElementType;
 import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.nio.file.FileSystem;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
@@ -29,6 +31,7 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.jar.Attributes;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
@@ -44,6 +47,10 @@ public final class AgentRegressionCheck {
     public static void main(String[] args) throws Exception {
         transformsSupportedLauncherClasses();
         rejectsUnknownClassFingerprint();
+        rejectsUnknownNestedLoaderFingerprint();
+        unknownFingerprintDoesNotGrantModuleReads();
+        supportedFingerprintGrantsModuleRead();
+        jdkOnlyPatchDoesNotGrantModuleRead();
         servicePrefilterIsFailOpen();
         resourceIndexHasNoFalseNegatives();
         resourceImagePersistsRecordedBytes();
@@ -65,10 +72,29 @@ public final class AgentRegressionCheck {
             for (String hookName : target.hookNames()) {
                 require(hasHookCall(transformed, hookName), "transformed class lacks hook " + hookName);
             }
+            if (target.className().equals("cpw/mods/cl/ModuleClassLoader")) {
+                require(hasInvocation(transformed, Opcodes.INVOKESTATIC,
+                                "java/lang/ClassLoader", "getSystemClassLoader"),
+                        "ModuleClassLoader does not bridge Agent hooks through the system loader");
+            }
             if (target.className().equals("net/minecraftforge/eventbus/ModLauncherFactory")) {
                 require(hasInvocation(transformed, Opcodes.INVOKESPECIAL,
                                 "net/minecraftforge/eventbus/ClassLoaderFactory", "createWrapper"),
                         "EventBus wrapper fast path does not call the direct wrapper factory");
+            }
+            if (target.className().equals(
+                    "net/minecraftforge/eventbus/ClassLoaderFactory$ASMClassLoader")) {
+                require(hasInvocation(transformed, Opcodes.INVOKEVIRTUAL,
+                                "net/minecraftforge/eventbus/ClassLoaderFactory$ASMClassLoader",
+                                "findLoadedClass"),
+                        "EventBus ASMClassLoader does not reuse a previously defined wrapper");
+            }
+            if (target.className().equals(
+                    "net/minecraftforge/fml/loading/moddiscovery/BackgroundScanHandler")) {
+                require(hasSynchronizedMethod(transformed, "submitForScanning"),
+                        "parallel scan submission does not protect shared lists");
+                require(hasSynchronizedMethod(transformed, "addCompletedFile"),
+                        "parallel scan completion does not protect shared lists");
             }
             new ClassReader(transformed).accept(new CheckClassAdapter(new ClassWriter(0), true), 0);
         }
@@ -87,6 +113,111 @@ public final class AgentRegressionCheck {
         require(transformed == null, "unknown target fingerprint was transformed");
         require(messages.stream().anyMatch(message -> message.contains("unsupported fingerprint")),
                 "unknown target fingerprint was not reported");
+    }
+
+    private static void rejectsUnknownNestedLoaderFingerprint() throws Exception {
+        Target target = targets().stream()
+                .filter(value -> value.className().equals(
+                        "net/minecraftforge/eventbus/ClassLoaderFactory$ASMClassLoader"))
+                .findFirst().orElseThrow();
+        byte[] changed = readEntry(target.jar(), target.entry());
+        changed[changed.length - 1] ^= 1;
+        List<String> messages = new ArrayList<>();
+        byte[] transformed = new LauncherTransformer(messages::add)
+                .transform(Object.class.getModule(), null, target.className(), null, null, changed);
+        require(transformed == null, "unknown EventBus ASMClassLoader fingerprint was transformed");
+        require(messages.stream().anyMatch(message -> message.contains("unsupported fingerprint")),
+                "unknown EventBus ASMClassLoader fingerprint was not reported");
+    }
+
+    private static void unknownFingerprintDoesNotGrantModuleReads() throws Exception {
+        AtomicInteger redefineCalls = new AtomicInteger();
+        RuntimeModuleAccess.install(instrumentationSpy(redefineCalls, null));
+        try {
+            Target target = targets().stream()
+                    .filter(value -> value.className().equals("cpw/mods/cl/ModuleClassLoader"))
+                    .findFirst().orElseThrow();
+            byte[] changed = readEntry(target.jar(), target.entry());
+            changed[changed.length - 1] ^= 1;
+            byte[] transformed = new LauncherTransformer(message -> {
+            })
+                    .transform(Object.class.getModule(), null, target.className(), null, null, changed);
+            require(transformed == null, "unknown target fingerprint was transformed");
+            require(redefineCalls.get() == 0,
+                    "unknown target fingerprint changed named-module readability");
+        } finally {
+            RuntimeModuleAccess.install(null);
+        }
+    }
+
+    private static void supportedFingerprintGrantsModuleRead() throws Exception {
+        AtomicInteger redefineCalls = new AtomicInteger();
+        @SuppressWarnings("unchecked")
+        Set<Module>[] observedReads = new Set[]{Set.of()};
+        RuntimeModuleAccess.install(instrumentationSpy(redefineCalls, observedReads));
+        try {
+            Target target = targets().stream()
+                    .filter(value -> value.className().equals("cpw/mods/cl/ModuleClassLoader"))
+                    .findFirst().orElseThrow();
+            byte[] transformed = new LauncherTransformer(message -> {
+            })
+                    .transform(Object.class.getModule(), null, target.className(), null, null,
+                            readEntry(target.jar(), target.entry()));
+            require(transformed != null, "supported named-module target was not transformed");
+            require(redefineCalls.get() == 1, "supported target did not grant one module read edge");
+            require(observedReads[0].equals(Set.of(RuntimeModuleAccess.class.getModule())),
+                    "supported target granted the wrong module read edge");
+        } finally {
+            RuntimeModuleAccess.install(null);
+        }
+    }
+
+    private static void jdkOnlyPatchDoesNotGrantModuleRead() throws Exception {
+        AtomicInteger redefineCalls = new AtomicInteger();
+        RuntimeModuleAccess.install(instrumentationSpy(redefineCalls, null));
+        try {
+            Target target = targets().stream()
+                    .filter(value -> value.className().equals(
+                            "net/minecraftforge/eventbus/ClassLoaderFactory$ASMClassLoader"))
+                    .findFirst().orElseThrow();
+            byte[] transformed = new LauncherTransformer(message -> {
+            }).transform(Object.class.getModule(), null, target.className(), null, null,
+                    readEntry(target.jar(), target.entry()));
+            require(transformed != null, "supported JDK-only target was not transformed");
+            require(redefineCalls.get() == 0,
+                    "JDK-only EventBus patch granted an unnecessary Agent module read");
+        } finally {
+            RuntimeModuleAccess.install(null);
+        }
+    }
+
+    private static java.lang.instrument.Instrumentation instrumentationSpy(
+            AtomicInteger redefineCalls, Set<Module>[] observedReads) {
+        return (java.lang.instrument.Instrumentation) Proxy.newProxyInstance(
+                AgentRegressionCheck.class.getClassLoader(),
+                new Class<?>[]{java.lang.instrument.Instrumentation.class},
+                (proxy, method, args) -> {
+                    if (method.getName().equals("redefineModule")) {
+                        redefineCalls.incrementAndGet();
+                        if (observedReads != null) {
+                            @SuppressWarnings("unchecked")
+                            Set<Module> reads = (Set<Module>) args[1];
+                            observedReads[0] = Set.copyOf(reads);
+                        }
+                        return null;
+                    }
+                    Class<?> returnType = method.getReturnType();
+                    if (!returnType.isPrimitive() || returnType == void.class) {
+                        return null;
+                    }
+                    if (returnType == boolean.class) {
+                        return false;
+                    }
+                    if (returnType == long.class) {
+                        return 0L;
+                    }
+                    return 0;
+                });
     }
 
     private static void servicePrefilterIsFailOpen() throws IOException {
@@ -116,7 +247,9 @@ public final class AgentRegressionCheck {
             Path archive = jar(directory.resolve("resources.jar"), Map.of(
                     "present.txt", new byte[]{1},
                     "nested/also-present.txt", new byte[]{2},
-                    "nested-other/not-a-child.txt", new byte[]{3}), false);
+                    "nested-other/not-a-child.txt", new byte[]{3},
+                    "example/first/Test.class", new byte[]{4},
+                    "example/second/Other.class", new byte[]{5}), false);
             long qualificationChecks = ResourceMembershipIndex.qualificationChecks();
             try (FileSystem zip = FileSystems.newFileSystem(archive)) {
                 Path root = zip.getPath("/");
@@ -129,6 +262,9 @@ public final class AgentRegressionCheck {
                 require(BootstrapHooks.resourceEntries(handle, "", "nested")
                                 .equals(List.of("nested/also-present.txt")),
                         "prefix resource listing crossed a path-segment boundary");
+                require(BootstrapHooks.resourcePackages(root)
+                                .equals(Set.of("example.first", "example.second")),
+                        "resource index did not reproduce SecureJar package discovery");
             }
             require(ResourceMembershipIndex.qualificationChecks() == qualificationChecks + 1,
                     "physical JAR qualification repeated for one indexed root");
@@ -138,6 +274,8 @@ public final class AgentRegressionCheck {
             try (FileSystem zip = FileSystems.newFileSystem(multiRelease)) {
                 require(BootstrapHooks.mightContain(zip.getPath("/"), multiRelease, "only-versioned.txt"),
                         "multi-release index did not fail open");
+                require(BootstrapHooks.resourcePackages(zip.getPath("/")) == null,
+                        "multi-release package discovery did not fail open");
             }
             require(BootstrapHooks.mightContain(directory, directory, "anything"), "mutable directory did not fail open");
 
@@ -196,6 +334,10 @@ public final class AgentRegressionCheck {
             Attributes attributes = jar.getManifest().getMainAttributes();
             require("com.ccr4ft3r.lightspeed.bootstrap.LightspeedAgent".equals(attributes.getValue("Premain-Class")),
                     "agent manifest lacks Premain-Class");
+            require("com.ccr4ft3r.lightspeed.bootstrap.LightspeedAgent".equals(attributes.getValue("Agent-Class")),
+                    "agent manifest lacks Agent-Class");
+            require("true".equals(attributes.getValue("Can-Retransform-Classes")),
+                    "agent manifest must allow retransformation");
             require(jar.getEntry("com/ccr4ft3r/lightspeed/bootstrap/runtime/BootstrapHooks.class") != null,
                     "agent runtime hook is missing");
             require(jar.getEntry("com/ccr4ft3r/lightspeed/bootstrap/internal/asm/ClassReader.class") != null,
@@ -203,6 +345,11 @@ public final class AgentRegressionCheck {
             require(jar.getEntry("org/objectweb/asm/ClassReader.class") == null, "unrelocated ASM leaked into agent jar");
             require(jar.getEntry("META-INF/mods.toml") == null && jar.getEntry("META-INF/neoforge.mods.toml") == null,
                     "agent jar must not be discovered as a mod");
+            byte[] entrypoint = jar.getInputStream(jar.getJarEntry(
+                    "com/ccr4ft3r/lightspeed/bootstrap/LightspeedAgent.class")).readAllBytes();
+            require(!new String(entrypoint, java.nio.charset.StandardCharsets.ISO_8859_1)
+                            .contains("appendToBootstrapClassLoaderSearch"),
+                    "Agent still appends its JAR to the bootstrap class path and disables custom-loader CDS");
         }
     }
 
@@ -268,8 +415,12 @@ public final class AgentRegressionCheck {
                         "recorded resource image bytes were not readable");
             }
             StartupResourceImage.persist();
-            require(Files.size(directory.resolve("resource-image-v3.bin")) > expected.length,
+            Path pointer = directory.resolve("resource-image-v3.bin.current");
+            require(Files.size(pointer) > 0,
                     "resource image was not persisted");
+            String generation = Files.readAllLines(pointer).get(0);
+            require(Files.size(directory.resolve(generation)) > expected.length,
+                    "resource image generation was not persisted");
         } finally {
             if (previous == null) {
                 System.clearProperty("lightspeed.bootstrapCacheDir");
@@ -358,15 +509,27 @@ public final class AgentRegressionCheck {
                         "7a94a5ce380ea983a337d5a8e3ea3eb84e88b584fc172c6ab314948967c9083c", "mayProvideTransformerService"),
                 target("lightspeed.target.securejar2", "cpw/mods/jarhandling/impl/Jar",
                         "bba6a4ee9327d364967a3cfec4707d695d5962cb42a20a4b212a26434a5b9055",
-                        "registerResourceRoot", "mightContain"),
+                        "registerResourceRoot", "mightContain", "resourcePackages"),
                 target("lightspeed.target.securejar2", "cpw/mods/cl/ModuleClassLoader",
                         "62e3eaa069098d55f5da70e6dbc2a35a1e622d68804b2af6049583151bcb6f16",
+                        "rawClassBytes", "recordRawClassBytes"),
+                target("lightspeed.target.securejar3", "cpw/mods/cl/ModuleClassLoader",
+                        "1ea195fe3b32c95e7232f49c14750b9245a664e3b66c89e298c31371d8b36376",
                         "rawClassBytes", "recordRawClassBytes"),
                 target("lightspeed.target.forge.production", "net/minecraftforge/fml/loading/moddiscovery/Scanner",
                         "40475b4b77a9709ac07ef64f00aa234aad403c0f82c4e65b8329ee03f379f495",
                         "replayScanMetadata", "recordScanMetadata"),
-                target("lightspeed.target.securejar3", "cpw/mods/jarhandling/impl/Jar",
-                        "ce036690cdf020cafb15d4a3a84a009c6bb50cea8073ea82ada379e5778d0838", "mightContain"),
+                target("lightspeed.target.forge.production",
+                        "net/minecraftforge/fml/loading/moddiscovery/BackgroundScanHandler",
+                        "a6e143da3b8fe5045e61e0c9b469555a69296eff2105e4b936a47f96ba12c613",
+                        "createModScanExecutor"),
+                target("lightspeed.target.forge.development",
+                        "net/minecraftforge/fml/loading/moddiscovery/BackgroundScanHandler",
+                        "a6e143da3b8fe5045e61e0c9b469555a69296eff2105e4b936a47f96ba12c613",
+                        "createModScanExecutor"),
+                target("lightspeed.target.forge.game", "net/minecraftforge/registries/ObjectHolderRegistry",
+                        "7d3f5fb619d52c448b9f2dfccea52c676144fb4de38b0c36df0ee52cdd370ba4",
+                        "applyObjectHolders", "objectHoldersChanged"),
                 target("lightspeed.target.eventbus", "net/minecraftforge/eventbus/EventBus",
                         "85c5db423fac7eb69107993923aa8a1967d21916fd5c9b32d36332700e31e3d0",
                         "declaredEventMethod"),
@@ -382,15 +545,18 @@ public final class AgentRegressionCheck {
                 target("lightspeed.target.eventbus.current", "net/minecraftforge/eventbus/ModLauncherFactory",
                         "b884ef498fbdbfad4ce9b1f010993baf32ea150dc1408070086a70c638ab2806",
                         "canUseDirectEventWrapper"),
-                target("lightspeed.target.modlauncher10", "cpw/mods/modlauncher/ModuleLayerHandler",
-                        "b8095ee7008211f12d8b0c4db4f01fb49eb5f76ce1bb6d41b4e736cfc9b8394f",
-                        "resolveAndBind"),
-                target("lightspeed.target.modlauncher11", "cpw/mods/modlauncher/ModuleLayerHandler",
-                        "c6cd537240737843f9cf13d26736cc9301d6ba6a452565bc6dc7bb90d210f9b4",
-                        "resolveAndBind"),
-                target("lightspeed.target.modlauncher11.legacy", "cpw/mods/modlauncher/ModuleLayerHandler",
-                        "7d7a7736322c9489df70c93bbe2469007468f91c296c927a4319f3fd3a146558",
-                        "resolveAndBind")
+                target("lightspeed.target.eventbus.old",
+                        "net/minecraftforge/eventbus/ClassLoaderFactory$ASMClassLoader",
+                        "f6087d2c3e14c37ff63da95ae74dcee33f4f1983da1662f535e4c562dd0b0ec9"),
+                target("lightspeed.target.eventbus",
+                        "net/minecraftforge/eventbus/ClassLoaderFactory$ASMClassLoader",
+                        "f6087d2c3e14c37ff63da95ae74dcee33f4f1983da1662f535e4c562dd0b0ec9"),
+                target("lightspeed.target.eventbus.mid",
+                        "net/minecraftforge/eventbus/ClassLoaderFactory$ASMClassLoader",
+                        "4e87d4ece3377a908b5a4801b993445bc6dee8231b82ce01226feb7df8b63776"),
+                target("lightspeed.target.eventbus.current",
+                        "net/minecraftforge/eventbus/ClassLoaderFactory$ASMClassLoader",
+                        "e37ab24ca16f279c39b13c78e28ffaba8385f7bf6a94efba68e9c565ff16cb03")
         );
     }
 
@@ -432,6 +598,26 @@ public final class AgentRegressionCheck {
         return found[0];
     }
 
+    private static boolean hasHookOwner(byte[] bytes) {
+        boolean[] found = {false};
+        new ClassReader(bytes).accept(new ClassVisitor(Opcodes.ASM9) {
+            @Override
+            public MethodVisitor visitMethod(int access, String name, String descriptor, String signature,
+                                             String[] exceptions) {
+                return new MethodVisitor(Opcodes.ASM9) {
+                    @Override
+                    public void visitMethodInsn(int opcode, String owner, String name, String descriptor,
+                                                boolean isInterface) {
+                        if (HOOK_OWNER.equals(owner)) {
+                            found[0] = true;
+                        }
+                    }
+                };
+            }
+        }, ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+        return found[0];
+    }
+
     private static boolean hasInvocation(byte[] bytes, int expectedOpcode, String expectedOwner, String expectedName) {
         boolean[] found = {false};
         new ClassReader(bytes).accept(new ClassVisitor(Opcodes.ASM9) {
@@ -449,6 +635,21 @@ public final class AgentRegressionCheck {
                 };
             }
         }, ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+        return found[0];
+    }
+
+    private static boolean hasSynchronizedMethod(byte[] bytes, String methodName) {
+        boolean[] found = {false};
+        new ClassReader(bytes).accept(new ClassVisitor(Opcodes.ASM9) {
+            @Override
+            public MethodVisitor visitMethod(int access, String name, String descriptor, String signature,
+                                             String[] exceptions) {
+                if (name.equals(methodName) && (access & Opcodes.ACC_SYNCHRONIZED) != 0) {
+                    found[0] = true;
+                }
+                return null;
+            }
+        }, ClassReader.SKIP_CODE | ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
         return found[0];
     }
 

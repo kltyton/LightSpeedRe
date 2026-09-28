@@ -12,53 +12,135 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.HexFormat;
+import java.util.ArrayList;
+import java.util.List;
 
 public final class BootstrapAgentInstaller {
     public static final String ACTIVE_PROPERTY = "lightspeed.bootstrapAgent.active";
     public static final String DIGEST_PROPERTY = "lightspeed.bootstrapAgent.digest";
+    public static final String DYNAMIC_PROPERTY = "lightspeed.bootstrapAgent.dynamic";
     public static final String OWNER_PROPERTY = "lightspeed.agent.owner";
 
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final String EMBEDDED_AGENT = "/META-INF/lightspeed/bootstrap-agent.jar";
+    private static final java.util.concurrent.atomic.AtomicBoolean PACK_COMPILER_STARTED =
+            new java.util.concurrent.atomic.AtomicBoolean();
+    private static volatile InstallationState installationState = InstallationState.NOT_ATTEMPTED;
+    private static volatile PackCompilerCommand.Prepared packCompiler;
 
     private BootstrapAgentInstaller() {
     }
 
     public static void installForNextLaunch() {
+        installationState = InstallationState.IN_PROGRESS;
         try {
-            Path owner = locateOwningMod();
-            if (owner == null) {
+            PreparedAgent prepared = prepareEmbeddedAgent();
+            if (prepared == null) {
+                installationState = InstallationState.MANUAL_REQUIRED;
                 LOGGER.debug("Lightspeed embedded bootstrap installation skipped outside a packaged Mod JAR");
                 return;
             }
 
-            byte[] agentBytes = readEmbeddedAgent();
-            String digest = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(agentBytes));
-            if (Boolean.getBoolean(ACTIVE_PROPERTY) && digest.equals(System.getProperty(DIGEST_PROPERTY))) {
-                return;
+            Path gameDirectory = FMLPaths.GAMEDIR.get().toAbsolutePath().normalize();
+            List<String> arguments = launchArguments(gameDirectory, prepared);
+            String preLaunchCommand = null;
+            try {
+                packCompiler = PackCompilerCommand.prepare(
+                        gameDirectory, prepared.agent(), prepared.owner(), prepared.digest());
+                preLaunchCommand = packCompiler.invocation();
+            } catch (Exception exception) {
+                LOGGER.warn("Lightspeed Pack Compiler pre-launch setup is unavailable; runtime scan caching remains active",
+                        exception);
             }
-            Path agent = FMLPaths.GAMEDIR.get()
-                    .resolve(".lightspeed")
-                    .resolve("bootstrap")
-                    .resolve("lightspeed-bootstrap-agent-" + digest.substring(0, 16) + ".jar")
-                    .toAbsolutePath()
-                    .normalize();
-            if (!matches(agent, agentBytes)) {
-                AtomicFileWriter.write(agent, agentBytes);
-            }
-
-            LaunchProfileInstaller.Result result = LaunchProfileInstaller.install(
-                    FMLPaths.GAMEDIR.get().toAbsolutePath().normalize(), owner, agent);
+            LaunchProfileInstaller.Result result = LaunchProfileInstaller.installWithPreLaunch(
+                    gameDirectory, arguments, preLaunchCommand);
             if (result.changed()) {
-                LOGGER.info("Lightspeed installed its embedded bootstrap for the next launch via {}", result.description());
+                installationState = InstallationState.CONFIGURED;
+                LOGGER.info("Lightspeed installed the embedded bootstrap Agent for the next launch via {}",
+                        result.description());
             } else if (result == LaunchProfileInstaller.Result.UNSUPPORTED) {
-                LOGGER.warn("Lightspeed extracted its embedded bootstrap to {}, but this launcher profile could not be updated automatically. Add JVM arguments {}, {}, and {}",
-                        agent, cacheDirectoryArgument(FMLPaths.GAMEDIR.get()), ownerArgument(owner), agentArgument(agent));
+                installationState = InstallationState.MANUAL_REQUIRED;
+                LOGGER.warn("Lightspeed prepared the embedded bootstrap Agent, but this launcher profile was not updated automatically. If desired, add JVM arguments {}",
+                        arguments);
+            } else {
+                installationState = InstallationState.CONFIGURED;
             }
+            LauncherRefreshCoordinator.refreshAfterInstall(result);
         } catch (Exception exception) {
-            LOGGER.warn("Lightspeed could not install its embedded bootstrap; the ordinary Mod optimizations remain active",
+            installationState = InstallationState.MANUAL_REQUIRED;
+            LOGGER.warn("Lightspeed was unable to install its embedded bootstrap automatically; the ordinary Mod optimizations remain active",
                     exception);
         }
+    }
+
+    public static boolean manualConfigurationRequired() {
+        return installationState != InstallationState.CONFIGURED;
+    }
+
+    public static boolean launcherReadyForNextLaunch() {
+        return LauncherRefreshCoordinator.readyForNextLaunch();
+    }
+
+    public static void startPackCompilerAfterTitle() {
+        PackCompilerCommand.Prepared prepared = packCompiler;
+        if (prepared == null || Boolean.getBoolean(ACTIVE_PROPERTY)
+                || !PACK_COMPILER_STARTED.compareAndSet(false, true)) {
+            return;
+        }
+        try {
+            Path gameDirectory = FMLPaths.GAMEDIR.get().toAbsolutePath().normalize();
+            Path log = gameDirectory.resolve("lightspeed-cache").resolve("pack-compiler.log");
+            Files.createDirectories(log.getParent());
+            boolean windows = System.getProperty("os.name", "").startsWith("Windows");
+            ProcessBuilder builder = new ProcessBuilder(windows
+                    ? List.of("cmd.exe", "/d", "/s", "/c", "call", prepared.script().toString())
+                    : List.of("/bin/sh", prepared.script().toString()));
+            builder.directory(gameDirectory.toFile());
+            builder.redirectErrorStream(true);
+            builder.redirectOutput(ProcessBuilder.Redirect.appendTo(log.toFile()));
+            Process process = builder.start();
+            Thread monitor = new Thread(() -> awaitPackCompiler(process),
+                    "Lightspeed-Pack-Compiler-Monitor");
+            monitor.setDaemon(true);
+            monitor.setPriority(Thread.MIN_PRIORITY);
+            monitor.start();
+        } catch (Exception exception) {
+            LOGGER.warn("Lightspeed could not prime the next-launch scan image; Forge runtime scanning remains active",
+                    exception);
+        }
+    }
+
+    public static String manualJvmArguments() {
+        try {
+            PreparedAgent prepared = prepareEmbeddedAgent();
+            if (prepared == null) {
+                return "";
+            }
+            Path gameDirectory = FMLPaths.GAMEDIR.get().toAbsolutePath().normalize();
+            return LaunchProfileInstaller.formatArgumentLine(launchArguments(gameDirectory, prepared));
+        } catch (Exception exception) {
+            LOGGER.warn("Lightspeed manual bootstrap Agent arguments are currently unavailable", exception);
+            return "";
+        }
+    }
+
+    public static PreparedAgent prepareEmbeddedAgent() throws Exception {
+        Path owner = locateOwningMod();
+        if (owner == null) {
+            return null;
+        }
+        byte[] agentBytes = readEmbeddedAgent();
+        String digest = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(agentBytes));
+        Path agent = FMLPaths.GAMEDIR.get()
+                .resolve(".lightspeed")
+                .resolve("bootstrap")
+                .resolve("lightspeed-bootstrap-agent-" + digest.substring(0, 16) + ".jar")
+                .toAbsolutePath()
+                .normalize();
+        if (!matches(agent, agentBytes)) {
+            AtomicFileWriter.write(agent, agentBytes);
+        }
+        return new PreparedAgent(owner, agent, digest);
     }
 
     static String ownerArgument(Path owner) {
@@ -74,7 +156,16 @@ public final class BootstrapAgentInstaller {
                 .resolve("bootstrap").toAbsolutePath().normalize();
     }
 
-    private static Path locateOwningMod() {
+    private static List<String> launchArguments(Path gameDirectory, PreparedAgent prepared) {
+        List<String> arguments = new ArrayList<>();
+        arguments.add(cacheDirectoryArgument(gameDirectory));
+        arguments.add(ownerArgument(prepared.owner()));
+        arguments.add(agentArgument(prepared.agent()));
+        arguments.addAll(StartupThreadBudget.arguments());
+        return List.copyOf(arguments);
+    }
+
+    static Path locateOwningMod() {
         try {
             var modFile = ModList.get().getModFileById(ModConstants.MOD_ID);
             if (modFile == null) {
@@ -102,5 +193,26 @@ public final class BootstrapAgentInstaller {
                 && MessageDigest.isEqual(
                 MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(path)),
                 MessageDigest.getInstance("SHA-256").digest(expected));
+    }
+
+    private static void awaitPackCompiler(Process process) {
+        try {
+            int exitCode = process.waitFor();
+            if (exitCode != 0) {
+                LOGGER.warn("Lightspeed background Pack Compiler exited with code {}", exitCode);
+            }
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    public record PreparedAgent(Path owner, Path agent, String digest) {
+    }
+
+    private enum InstallationState {
+        NOT_ATTEMPTED,
+        IN_PROGRESS,
+        CONFIGURED,
+        MANUAL_REQUIRED
     }
 }

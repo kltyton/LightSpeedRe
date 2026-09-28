@@ -181,6 +181,10 @@ tasks.named('processResources', ProcessResources).configure {
         into 'META-INF/lightspeed'
         rename { 'bootstrap-agent.jar' }
     }
+    from('LICENSE') {
+        into 'META-INF'
+        rename { 'LICENSE-Lightspeed.txt' }
+    }
 }
 
 // Example for how to get properties into the manifest for reading at runtime.
@@ -221,6 +225,61 @@ tasks.register('verifyResourcePathIndex', JavaExec) {
     mainClass = 'com.ccr4ft3r.lightspeed.cache.resource.ResourcePathIndexCheck'
 }
 
+tasks.register('verifyResourcePathValidationCache', JavaExec) {
+    group = 'verification'
+    description = 'Verifies repeated PathPack directory validation is memoized without changing errors.'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    javaLauncher = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+    mainClass = 'com.ccr4ft3r.lightspeed.cache.resource.ResourcePathValidationCacheCheck'
+}
+
+tasks.register('verifyNeutralCacheCodec', JavaExec) {
+    group = 'verification'
+    description = 'Verifies deterministic bounded neutral resource-cache persistence and fail-open.'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    javaLauncher = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+    mainClass = 'com.ccr4ft3r.lightspeed.cache.persistence.NeutralCacheCodecCheck'
+}
+
+tasks.register('verifySnapshotFaultIsolation', JavaExec) {
+    group = 'verification'
+    description = 'Verifies corruption in one persisted asset snapshot cannot invalidate another domain.'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    javaLauncher = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+    mainClass = 'com.ccr4ft3r.lightspeed.cache.assets.SnapshotFaultIsolationCheck'
+}
+
+tasks.register('verifyPixelSnapshotCodec', JavaExec) {
+    group = 'verification'
+    description = 'Runs the dependency-free native pixel snapshot codec regression checks.'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    javaLauncher = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+    mainClass = 'com.ccr4ft3r.lightspeed.client.cache.assets.PixelSnapshotCodecCheck'
+}
+
+tasks.register('verifyShaderProgramIdentity', JavaExec) {
+    group = 'verification'
+    description = 'Verifies shader binary keys cover processed source, attributes, vertex format, and driver identity.'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    javaLauncher = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+    mainClass = 'com.ccr4ft3r.lightspeed.client.cache.assets.ShaderProgramIdentityCheck'
+}
+
 tasks.register('verifyLaunchProfileInstaller', JavaExec) {
     group = 'verification'
     description = 'Runs PCL and version-JSON bootstrap installation regression checks.'
@@ -232,11 +291,73 @@ tasks.register('verifyLaunchProfileInstaller', JavaExec) {
     mainClass = 'com.ccr4ft3r.lightspeed.startup.installation.LaunchProfileInstallerCheck'
 }
 
+tasks.register('verifyPackCompilerCommand', JavaExec) {
+    group = 'verification'
+    description = 'Verifies pre-launch compiler scripts preserve paths and always fail open.'
+    dependsOn tasks.named('testClasses'), embeddedAgentTask
+    classpath = sourceSets.test.runtimeClasspath
+    javaLauncher = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+    mainClass = 'com.ccr4ft3r.lightspeed.startup.installation.PackCompilerCommandCheck'
+    systemProperty 'lightspeed.agent.jar', embeddedAgentTask.get().archiveFile.get().asFile
+}
+
+tasks.register('verifyStartupAdvice', JavaExec) {
+    group = 'verification'
+    description = 'Runs the dependency-free Java and bootstrap Agent recommendation checks.'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    javaLauncher = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+    mainClass = 'com.ccr4ft3r.lightspeed.client.advice.StartupAdviceCheck'
+}
+
+tasks.register('verifyStartupMetrics', JavaExec) {
+    group = 'verification'
+    description = 'Verifies process-relative startup milestones are unique and JFR-ready.'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    javaLauncher = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+    mainClass = 'com.ccr4ft3r.lightspeed.startup.metrics.StartupMetricsCheck'
+}
+
+tasks.register('verifyStartupTaskPlan', JavaExec) {
+    group = 'verification'
+    description = 'Verifies startup task validation, dependency planning, executor routing, and failure isolation.'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    javaLauncher = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+    mainClass = 'com.ccr4ft3r.lightspeed.api.startup.StartupTaskPlanCheck'
+}
+
+tasks.register('verifyLauncherRefresh', JavaExec) {
+    group = 'verification'
+    description = 'Verifies supported launcher processes are refreshed without touching unknown parents.'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    javaLauncher = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+    mainClass = 'com.ccr4ft3r.lightspeed.startup.installation.LauncherRefreshCoordinatorCheck'
+}
+
 tasks.register('verifyDistribution') {
     group = 'verification'
     description = 'Verifies the single release JAR and its embedded bootstrap payload.'
     dependsOn tasks.named('reobfJarJar'), embeddedAgentTask
     doLast {
+        File mixinMappings = layout.buildDirectory.file('tmp/compileJava/compileJava-mappings.tsrg').get().asFile
+        if (!mixinMappings.isFile() || !tasks.named('reobfJarJar').get().extraMappings.files.any {
+            it.canonicalFile == mixinMappings.canonicalFile
+        }) {
+            throw new GradleException('JarJar reobf did not receive generated Mixin shadow mappings')
+        }
         File release = tasks.named('jarJar').get().archiveFile.get().asFile
         List<File> published = fileTree(layout.buildDirectory.dir('libs')) {
             include '*.jar'
@@ -247,7 +368,8 @@ tasks.register('verifyDistribution') {
 
         byte[] embedded
         new java.util.zip.ZipFile(release).withCloseable { zip ->
-            ['META-INF/mods.toml', 'lightspeed.mixins.json', 'META-INF/lightspeed/bootstrap-agent.jar'].each { name ->
+            ['META-INF/mods.toml', 'META-INF/LICENSE-Lightspeed.txt', 'lightspeed.mixins.json', 'lightspeed.refmap.json',
+             'META-INF/lightspeed/bootstrap-agent.jar'].each { name ->
                 if (zip.getEntry(name) == null) {
                     throw new GradleException("release JAR is missing ${name}")
                 }
@@ -289,6 +411,14 @@ tasks.register('verifyDistribution') {
 
 tasks.named('compileJava').configure {
     dependsOn ':agent:compileJava'
+    options.incremental = false
+    outputs.file(layout.buildDirectory.file('tmp/compileJava/compileJava-refmap.json'))
+}
+
+// MixinGradle contributes its generated shadow mappings at execution time.
+// The JarJar reobf task must see them after the annotation processor has run.
+tasks.matching { it.name == 'configureReobfTaskForReobfJarJar' }.configureEach {
+    dependsOn tasks.named('compileJava')
 }
 
 if (embeddedAgentEnabled) {
@@ -298,6 +428,13 @@ if (embeddedAgentEnabled) {
 }
 
 tasks.named('check').configure {
-    dependsOn tasks.named('verifyResourcePathIndex'), tasks.named('verifyLaunchProfileInstaller'),
+    dependsOn tasks.named('verifyResourcePathIndex'), tasks.named('verifyResourcePathValidationCache'),
+            tasks.named('verifyNeutralCacheCodec'),
+            tasks.named('verifySnapshotFaultIsolation'),
+            tasks.named('verifyPixelSnapshotCodec'),
+            tasks.named('verifyShaderProgramIdentity'),
+            tasks.named('verifyLaunchProfileInstaller'), tasks.named('verifyPackCompilerCommand'),
+            tasks.named('verifyStartupAdvice'), tasks.named('verifyStartupMetrics'), tasks.named('verifyStartupTaskPlan'),
+            tasks.named('verifyLauncherRefresh'),
             tasks.named('verifyDistribution'), ':agent:check'
 }

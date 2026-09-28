@@ -22,8 +22,8 @@ public final class LightspeedConfig {
         public final ForgeConfigSpec.BooleanValue asyncPreloadPacks;
         public final ForgeConfigSpec.BooleanValue dedicatedResourceReloadExecutor;
         public final ForgeConfigSpec.BooleanValue parallelResourceLookup;
-        public final ForgeConfigSpec.IntValue parallelLookupMinPacks;
         public final ForgeConfigSpec.BooleanValue cacheResourceExistence;
+        public final ForgeConfigSpec.BooleanValue suppressStartupRecommendations;
         public final ForgeConfigSpec.BooleanValue isolateModdedResourceReloadFailures;
         public final ForgeConfigSpec.ConfigValue<List<? extends String>> isolatedResourceReloadListenerPatterns;
         public final ForgeConfigSpec.BooleanValue connectorCompatibilityMode;
@@ -37,23 +37,24 @@ public final class LightspeedConfig {
                     .comment("Use Lightspeed's bounded startup pool for resource reload preparation; manual reloads after the title screen use Minecraft's live executor.")
                     .define("dedicatedResourceReloadExecutor", true);
             parallelResourceLookup = builder
-                    .comment("Query safe resource-pack segments concurrently while preserving vanilla priority and filter order.")
+                    .comment("Use indexed resource lookup for safe pack segments while preserving vanilla priority and filter order.")
                     .define("parallelResourceLookup", true);
-            parallelLookupMinPacks = builder
-                    .comment("Minimum safe pack segment size before Lightspeed uses parallel resource lookup. Small segments are faster sequentially.")
-                    .defineInRange("parallelLookupMinPacks", 4, 2, 64);
             cacheResourceExistence = builder
                     .comment("Cache per-pack resource existence checks. The persisted cache is loaded lazily so it does not block startup IO.")
                     .define("cacheResourceExistence", true);
+            suppressStartupRecommendations = builder
+                    .comment("Do not show Lightspeed's bootstrap Agent recommendation on startup.")
+                    .define("suppressStartupRecommendations", false);
             builder.pop();
 
             builder.push("compatibility");
             isolateModdedResourceReloadFailures = builder
-                    .comment("Complete failed third-party client resource reload listeners instead of letting one mod crash the whole loading overlay.")
-                    .define("isolateModdedResourceReloadFailures", true);
+                    .comment("Opt in to isolating failures owned by explicitly configured third-party resource reload listener classes.")
+                    .define("isolateModdedResourceReloadFailures", false);
             isolatedResourceReloadListenerPatterns = builder
-                    .comment("Class-name prefixes that may be isolated when resource reload fails. Use * for all non-core mod listeners.")
-                    .defineList("isolatedResourceReloadListenerPatterns", List.of("*"), value -> value instanceof String string && !string.isBlank());
+                    .comment("Explicit class-name prefixes that may be isolated when resource reload fails. Wildcards are rejected so unrelated failures remain visible.")
+                    .defineList("isolatedResourceReloadListenerPatterns", List.of(),
+                            value -> value instanceof String string && !string.isBlank() && !"*".equals(string));
             connectorCompatibilityMode = builder
                     .comment("When Sinytra Connector is installed, avoid startup/resource optimizations that change Fabric resource reload or renderer lookup timing.")
                     .define("connectorCompatibilityMode", true);

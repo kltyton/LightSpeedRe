@@ -16,7 +16,6 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
-import java.io.File;
 import java.io.InputStream;
 import java.util.Map;
 
@@ -91,8 +90,10 @@ public abstract class VanillaPackResourcesMixin implements IPackResources {
     @Override
     public void lightspeed$persistAndClearCache() {
         if (lightspeed$versionId != null) {
-            CacheFiles.persist(lightspeed$existencePerClientResource, new File(HAS_RESOURCE_CACHE_DIR, lightspeed$versionId + "-client.ser"));
-            CacheFiles.persist(lightspeed$existencePerServerResource, new File(HAS_RESOURCE_CACHE_DIR, lightspeed$versionId + "-server.ser"));
+            CacheFiles.persist(lightspeed$existencePerClientResource,
+                    CacheFiles.cacheFile(HAS_RESOURCE_CACHE_DIR, lightspeed$versionId + "-client"));
+            CacheFiles.persist(lightspeed$existencePerServerResource,
+                    CacheFiles.cacheFile(HAS_RESOURCE_CACHE_DIR, lightspeed$versionId + "-server"));
         }
         lightspeed$existencePerClientResource.clear();
         lightspeed$existencePerServerResource.clear();
