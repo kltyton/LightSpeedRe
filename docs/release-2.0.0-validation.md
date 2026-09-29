@@ -13,6 +13,12 @@ Forge 发行文件 `lightspeed-1.20.1-2.0.0.jar` 的 SHA-256 为 `8A567F189CADAB
 
 四次原始标题日志的 `elapsedMs` 依表中顺序为 `58897`、`39279`、`49846`、`32036`。ATM9 的该次客户端正常退出，`exitCode=0`；其余三包在到标题并核对无加载致命错误后关闭。无窗口模拟读取对应真实模组 JAR 的类、模型/方块状态 JSON 和 PNG 输入，但不执行模组构造、Mixin 变换、注册、模型烘焙或 OpenGL，模拟秒数不能代替标题时间。
 
+## 最终 ATM9 的启动阶段
+
+同一次 Forge 47.4.0 日志以新 JVM 的 `processStartEpochMs=1790638432411` 为零点。`Launching target 'forgeclient'` 仅有秒级日志时间，约在第 5.6–6.6 秒；LightSpeed 自身 `mod-construction` 标记为第 12.382 秒，**不代表全部模组构造完成**；首次 `Reloading ResourceManager` 约在第 29.6–30.6 秒；`title-screen-init` 为第 38.771 秒，下一 tick 的 `title-screen-operable` 为第 39.279 秒。由此可将当前墙钟分成早期约 6 秒、Minecraft/Forge 引导至自身构造约 6 秒、构造／注册／状态切换混合段约 17 秒、首次资源重载至标题初始化约 8–9 秒，以及标题尾段 0.508 秒。日志时间分辨率不足的边界只报约数。
+
+旧发行包的一次有效 JFR 在 `E:\.aaabackup\智能体产物\测试结果\LightSpeedRe\20260926-startup\20260928-当前包有效JFR阶段清单.md` 中把注册混合段与资源／模型段各列为约 10.7 秒，并显示类变换、注册回调和模型准备在各段交叠。该 JFR 属于不同的 JAR 与 42.850 秒启动，不能把它的方法样本或区间直接套入本次 39.279 秒结果，也不能把 17 秒混合窗口写成可完整删除的浪费。下一轮优先核查这两段的依赖和可回收墙钟，而非直接增加 Forge 已有的构造 worker。
+
 ## 与用户提供的图片并列
 
 | 整合包 | 图片原版 | 图片旧 LightspeedRe | 图片 Lightload | 本机 LightspeedRe 2.0.0 |
