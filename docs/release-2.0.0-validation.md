@@ -19,6 +19,8 @@ Forge 发行文件 `lightspeed-1.20.1-2.0.0.jar` 的 SHA-256 为 `8A567F189CADAB
 
 旧发行包的一次有效 JFR 在 `E:\.aaabackup\智能体产物\测试结果\LightSpeedRe\20260926-startup\20260928-当前包有效JFR阶段清单.md` 中把注册混合段与资源／模型段各列为约 10.7 秒，并显示类变换、注册回调和模型准备在各段交叠。该 JFR 属于不同的 JAR 与 42.850 秒启动，不能把它的方法样本或区间直接套入本次 39.279 秒结果，也不能把 17 秒混合窗口写成可完整删除的浪费。下一轮优先核查这两段的依赖和可回收墙钟，而非直接增加 Forge 已有的构造 worker。
 
+另一次旧包 57.833 秒方法区间记录显示：`GameData.postRegisterEvents` 为 11.765 秒，其内 73,590 次 `FMLModContainer.acceptEvent` 的同线程包含区间约 11.016 秒；中位调用为 0.0014 毫秒，最慢 100 次合计 7.055 秒，占 64.0%。这 100 次与 `ModuleClassLoader.readerToClass`、`ClassTransformer.transform` 同线程区间分别重叠 2.061 秒、0.447 秒；变换区间通常嵌在类加载区间内，不能把两项相加。Forge 47.4.0 的 `GameData` 按注册表执行 unfreeze → 模组事件 → freeze → ObjectHolder，而 `acceptEvent` 自身主要转发到事件总线。由此可排除继续调几万次空壳派发的毫秒级方案；少数实际重回调及其通用数据路径才可能回收秒级时间。该记录与 2.0.0 发行 JAR 不同，仍不能直接声称当前各方法耗时相同。
+
 ## 与用户提供的图片并列
 
 | 整合包 | 图片原版 | 图片旧 LightspeedRe | 图片 Lightload | 本机 LightspeedRe 2.0.0 |
