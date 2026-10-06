@@ -1,6 +1,7 @@
 package com.ccr4ft3r.lightspeed.mixin.registry;
 
 import com.ccr4ft3r.lightspeed.compat.bootstrap.BootstrapAgentBridge;
+import com.ccr4ft3r.lightspeed.startup.registry.ObjectHolderDispatch;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import com.llamalad7.mixinextras.sugar.Local;
@@ -29,6 +30,7 @@ public abstract class GameDataMixin {
             target = "Lnet/minecraftforge/registries/ObjectHolderRegistry;applyObjectHolders(Ljava/util/function/Predicate;)V"))
     private static void lightspeed$routeRegistryHolders(Predicate<ResourceLocation> filter, Operation<Void> original,
             @Local ResourceKey<?> registryKey) {
-        BootstrapAgentBridge.withRegistryFilter(filter, registryKey.location(), () -> original.call(filter));
+        ObjectHolderDispatch.withRegistryFilter(filter, registryKey.location(),
+                () -> BootstrapAgentBridge.withRegistryFilter(filter, registryKey.location(), () -> original.call(filter)));
     }
 }

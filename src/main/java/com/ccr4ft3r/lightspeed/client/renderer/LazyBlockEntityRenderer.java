@@ -42,6 +42,13 @@ public final class LazyBlockEntityRenderer<T extends BlockEntity> implements Blo
         return delegate().shouldRender(blockEntity, camera);
     }
 
+    public static BlockEntityRenderer<?> unwrap(BlockEntityRenderer<?> renderer) {
+        while (renderer instanceof LazyBlockEntityRenderer<?> lazy) {
+            renderer = lazy.delegate();
+        }
+        return renderer;
+    }
+
     private BlockEntityRenderer<T> delegate() {
         BlockEntityRenderer<T> current = delegate;
         if (current != null) {

@@ -86,9 +86,9 @@ final class PackCompilerCommand {
         if (command == null) {
             return false;
         }
-        String normalized = command.toLowerCase(java.util.Locale.ROOT);
-        return normalized.contains(WINDOWS_SCRIPT) || normalized.contains(UNIX_SCRIPT)
-                || normalized.contains(MAIN_CLASS.toLowerCase(java.util.Locale.ROOT));
+        String normalized = command.trim().replace('\\', '/').toLowerCase(java.util.Locale.ROOT);
+        return normalized.matches("cmd\\.exe /d /s /c call \"[^\"]*/\\.lightspeed/bootstrap/pack-compiler\\.cmd\"")
+                || normalized.matches("sh '[^']*/\\.lightspeed/bootstrap/pack-compiler\\.sh'");
     }
 
     static String windowsScript(List<String> command) {

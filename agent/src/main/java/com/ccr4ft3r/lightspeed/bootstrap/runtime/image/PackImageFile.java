@@ -75,9 +75,13 @@ final class PackImageFile {
             Path generation = logicalFile.resolveSibling(generationName);
             if (Files.isRegularFile(generation)) {
                 if (!digest.equals(sha256(generation))) {
-                    throw new IOException("PackImage generation digest collision");
+                    generationName = logicalFile.getFileName() + "." + temporary.getFileName()
+                            + "." + digest + GENERATION_SUFFIX;
+                    generation = logicalFile.resolveSibling(generationName);
+                    move(temporary, generation);
+                } else {
+                    Files.deleteIfExists(temporary);
                 }
-                Files.deleteIfExists(temporary);
             } else {
                 move(temporary, generation);
             }
@@ -405,6 +409,15 @@ final class PackImageFile {
 
         long dataBytes() {
             return dataBytes;
+        }
+
+        long entryBytes(String key) {
+            byte[] value = heap.get(key);
+            if (value != null) {
+                return value.length;
+            }
+            Slice slice = slices.get(key);
+            return slice == null ? 0 : slice.length();
         }
 
         boolean isMapped() {

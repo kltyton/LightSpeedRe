@@ -19,10 +19,12 @@ public final class LightspeedConfig {
     }
 
     public static final class Common {
+        public final ForgeConfigSpec.BooleanValue installBootstrapAgent;
         public final ForgeConfigSpec.BooleanValue asyncPreloadPacks;
         public final ForgeConfigSpec.BooleanValue dedicatedResourceReloadExecutor;
         public final ForgeConfigSpec.BooleanValue parallelResourceLookup;
         public final ForgeConfigSpec.BooleanValue cacheResourceExistence;
+        public final ForgeConfigSpec.BooleanValue verifyJarHash;
         public final ForgeConfigSpec.BooleanValue suppressStartupRecommendations;
         public final ForgeConfigSpec.BooleanValue isolateModdedResourceReloadFailures;
         public final ForgeConfigSpec.ConfigValue<List<? extends String>> isolatedResourceReloadListenerPatterns;
@@ -30,6 +32,9 @@ public final class LightspeedConfig {
 
         private Common(ForgeConfigSpec.Builder builder) {
             builder.push("startup");
+            installBootstrapAgent = builder
+                    .comment("Explicitly install bootstrap Agent JVM arguments for the next launch. Disabled by default to keep exported modpacks free of machine-specific startup paths. Restart after changing this option.")
+                    .define("installBootstrapAgent", false);
             asyncPreloadPacks = builder
                     .comment("Preload Forge path resource pack indexes on Lightspeed worker threads during startup.")
                     .define("asyncPreloadPacks", true);
@@ -42,6 +47,9 @@ public final class LightspeedConfig {
             cacheResourceExistence = builder
                     .comment("Cache per-pack resource existence checks. The persisted cache is loaded lazily so it does not block startup IO.")
                     .define("cacheResourceExistence", true);
+            verifyJarHash = builder
+                    .comment("Validate persisted per-mod resource caches with the full JAR SHA-256 instead of the default file identity. Reads each JAR once per launch; changing this option requires a restart and rebuilds these caches.")
+                    .define("verifyJarHash", false);
             suppressStartupRecommendations = builder
                     .comment("Do not show Lightspeed's bootstrap Agent recommendation on startup.")
                     .define("suppressStartupRecommendations", false);

@@ -156,6 +156,10 @@ mixin {
 }
 
 tasks.named('processResources', ProcessResources).configure {
+    dependsOn tasks.named('compileJava')
+    from(layout.buildDirectory.file('tmp/compileJava/compileJava-refmap.json')) {
+        rename { "${mod_id}.refmap.json" }
+    }
     var replaceProperties = [
             minecraft_version   : minecraft_version,
             minecraft_version_range: minecraft_version_range,
@@ -208,6 +212,10 @@ tasks.named('jar', Jar).configure {
 
 tasks.named('jarJar').configure {
     archiveClassifier = ''
+}
+
+tasks.matching { it.name == 'reobfJarJar' }.configureEach {
+    extraMappings.from(layout.buildDirectory.file('tmp/compileJava/compileJava-mappings.tsrg'))
 }
 
 tasks.withType(JavaCompile).configureEach {
@@ -377,6 +385,12 @@ tasks.register('verifyDistribution') {
             def manifest = new java.util.jar.Manifest(zip.getInputStream(zip.getEntry('META-INF/MANIFEST.MF')))
             if (manifest.mainAttributes.getValue('Premain-Class') != null) {
                 throw new GradleException('top-level Mod JAR must not declare Premain-Class')
+            }
+            def parser = new groovy.json.JsonSlurper()
+            def generatedRefmap = parser.parse(layout.buildDirectory.file('tmp/compileJava/compileJava-refmap.json').get().asFile)
+            def packagedRefmap = parser.parse(zip.getInputStream(zip.getEntry('lightspeed.refmap.json')))
+            if (packagedRefmap != generatedRefmap) {
+                throw new GradleException('release refmap differs from the current annotation processor output')
             }
             embedded = zip.getInputStream(zip.getEntry('META-INF/lightspeed/bootstrap-agent.jar')).readAllBytes()
         }

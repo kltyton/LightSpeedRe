@@ -2,16 +2,17 @@ package com.ccr4ft3r.lightspeed;
 
 import com.ccr4ft3r.lightspeed.cache.GlobalCache;
 import com.ccr4ft3r.lightspeed.config.LightspeedConfig;
-import com.ccr4ft3r.lightspeed.startup.installation.BootstrapAgentInstaller;
+import com.ccr4ft3r.lightspeed.startup.installation.NativeLaunchProfileCleanup;
 import com.ccr4ft3r.lightspeed.startup.metrics.StartupMetrics;
 import com.mojang.logging.LogUtils;
 import net.minecraftforge.eventbus.api.IEventBus;
 import net.minecraftforge.fml.ModLoadingContext;
-import net.minecraftforge.fml.loading.FMLEnvironment;
 import net.minecraftforge.fml.ModList;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.config.ModConfig;
 import net.minecraftforge.fml.event.config.ModConfigEvent;
+import net.minecraftforge.fml.loading.FMLEnvironment;
+import net.minecraftforge.fml.loading.FMLPaths;
 import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 import org.slf4j.Logger;
 
@@ -28,15 +29,15 @@ public class Main {
         IEventBus modEventBus = FMLJavaModLoadingContext.get().getModEventBus();
         modEventBus.addListener(this::onConfigEvent);
         ModLoadingContext.get().registerConfig(ModConfig.Type.COMMON, LightspeedConfig.SPEC);
-        if (FMLEnvironment.dist.isClient()) {
-            BootstrapAgentInstaller.installForNextLaunch();
-        }
         updateCacheFlags();
     }
 
     private void onConfigEvent(ModConfigEvent event) {
         if (event.getConfig().getSpec() == LightspeedConfig.SPEC) {
             updateCacheFlags();
+            if (event instanceof ModConfigEvent.Loading && FMLEnvironment.dist.isClient()) {
+                NativeLaunchProfileCleanup.removeBootstrapArguments(FMLPaths.GAMEDIR.get());
+            }
         }
     }
 
@@ -50,6 +51,7 @@ public class Main {
             GlobalCache.shouldUseDedicatedResourceReloadExecutor = LightspeedConfig.COMMON.dedicatedResourceReloadExecutor.get();
             GlobalCache.shouldParallelizeResourcePackLookup = LightspeedConfig.COMMON.parallelResourceLookup.get();
             GlobalCache.shouldCacheResourceExistence = LightspeedConfig.COMMON.cacheResourceExistence.get();
+            GlobalCache.shouldVerifyJarHash = LightspeedConfig.COMMON.verifyJarHash.get();
             GlobalCache.shouldIsolateModdedResourceReloadFailures = LightspeedConfig.COMMON.isolateModdedResourceReloadFailures.get();
             GlobalCache.shouldUseConnectorCompatibilityMode = LightspeedConfig.COMMON.connectorCompatibilityMode.get();
             GlobalCache.isolatedResourceReloadListenerPatterns = LightspeedConfig.COMMON.isolatedResourceReloadListenerPatterns.get()

@@ -17,20 +17,22 @@ import java.util.function.BiPredicate;
 import java.util.jar.JarFile;
 
 final class JarResourceIndex {
-    private static final JarResourceIndex UNSUPPORTED = new JarResourceIndex(null, null, null, Set.of(), -1);
+    private static final JarResourceIndex UNSUPPORTED = new JarResourceIndex(null, null, null, Set.of(), -1, Set.of());
     private final String[] entries;
     private final Bloom bloom;
     private final String sourceIdentity;
     private final Set<String> packages;
     private final int classEntries;
+    private final Set<String> directories;
 
     private JarResourceIndex(String[] entries, Bloom bloom, String sourceIdentity, Set<String> packages,
-                             int classEntries) {
+                             int classEntries, Set<String> directories) {
         this.entries = entries;
         this.bloom = bloom;
         this.sourceIdentity = sourceIdentity;
         this.packages = packages;
         this.classEntries = classEntries;
+        this.directories = directories;
     }
 
     static JarResourceIndex build(ResourceMembershipIndex.RootRegistration registration) {
@@ -38,6 +40,7 @@ final class JarResourceIndex {
             return UNSUPPORTED;
         }
         TreeSet<String> names = new TreeSet<>();
+        Set<String> directories = new HashSet<>();
         MessageDigest digest = sha256();
         for (Path path : registration.paths()) {
             if (!isPhysicalJar(path)) {
@@ -50,7 +53,7 @@ final class JarResourceIndex {
             } catch (IOException exception) {
                 return UNSUPPORTED;
             }
-            if (!addJarEntries(path, registration.filter(), names, digest)) {
+            if (!addJarEntries(path, registration.filter(), names, directories, digest)) {
                 return UNSUPPORTED;
             }
         }
@@ -69,7 +72,8 @@ final class JarResourceIndex {
                 packages.add(entry.substring(0, separator).replace('/', '.'));
             }
         }
-        return new JarResourceIndex(entries, Bloom.create(entries), identity, Set.copyOf(packages), classEntries);
+        return new JarResourceIndex(entries, Bloom.create(entries), identity, Set.copyOf(packages), classEntries,
+                Set.copyOf(directories));
     }
 
     static JarResourceIndex unsupported() {
@@ -97,7 +101,18 @@ final class JarResourceIndex {
     }
 
     boolean contains(String name) {
-        return isExact() && bloom.mightContain(name) && Arrays.binarySearch(entries, name) >= 0;
+        if (!isExact()) {
+            return false;
+        }
+        if (name.isEmpty() || bloom.mightContain(name) && Arrays.binarySearch(entries, name) >= 0) {
+            return true;
+        }
+        String directory = name.endsWith("/") ? name : name + '/';
+        if (directories.contains(directory)) {
+            return true;
+        }
+        int position = lowerBound(entries, directory);
+        return position < entries.length && entries[position].startsWith(directory);
     }
 
     JarResourceView view(String rootPrefix, String imageSource) {
@@ -118,14 +133,18 @@ final class JarResourceIndex {
     }
 
     private static boolean addJarEntries(Path path, BiPredicate<String, String> filter, Set<String> names,
-                                         MessageDigest digest) {
+                                         Set<String> directories, MessageDigest digest) {
         try (JarFile jar = new JarFile(path.toFile(), false)) {
             if (jar.isMultiRelease()) {
                 return false;
             }
             String base = ResourceMembershipIndex.normalize(path.toString());
-            jar.stream().filter(entry -> !entry.isDirectory()).forEach(entry -> {
+            jar.stream().forEach(entry -> {
                 String name = ResourceMembershipIndex.normalize(entry.getName());
+                if (entry.isDirectory()) {
+                    directories.add(name);
+                    return;
+                }
                 if (filter == null || filter.test(name, base)) {
                     names.add(name);
                     update(digest, name);

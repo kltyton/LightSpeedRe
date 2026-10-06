@@ -38,6 +38,6 @@ public final class LazyRendererMap<K, V extends EntityRenderer<?>> extends Abstr
 
     @SuppressWarnings("unchecked")
     private V resolve(V renderer) {
-        return renderer instanceof LazyEntityRenderer<?> lazy ? (V) lazy.resolveDelegate() : renderer;
+        return (V) LazyEntityRenderer.unwrap(renderer);
     }
 }

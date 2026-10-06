@@ -249,7 +249,7 @@ public final class BootstrapHooks {
 
     private static void printSummary() {
         ClassDefinitionAttribution.Snapshot attribution = ClassDefinitionAttribution.stopAndSnapshot();
-        StartupResourceImage.persist();
+        StartupResourceImage.persistOnExit();
         System.err.println("[Lightspeed Agent] summary serviceCandidates=" + TransformerServiceScanner.candidates()
                 + " serviceRejected=" + TransformerServiceScanner.rejected()
                 + " resourceQueries=" + ResourceMembershipIndex.queries()

@@ -15,8 +15,8 @@ public abstract class EntityRenderDispatcherMixin {
     @SuppressWarnings("unchecked")
     private <T extends Entity> void lightspeed$resolveLazyRenderer(
             T entity, CallbackInfoReturnable<EntityRenderer<? super T>> cir) {
-        if (cir.getReturnValue() instanceof LazyEntityRenderer<?> lazy) {
-            cir.setReturnValue((EntityRenderer<? super T>) lazy.resolveDelegate());
+        if (cir.getReturnValue() instanceof LazyEntityRenderer<?>) {
+            cir.setReturnValue((EntityRenderer<? super T>) LazyEntityRenderer.unwrap(cir.getReturnValue()));
         }
     }
 }

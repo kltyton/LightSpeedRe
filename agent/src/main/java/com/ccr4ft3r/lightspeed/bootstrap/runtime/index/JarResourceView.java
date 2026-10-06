@@ -78,42 +78,26 @@ final class JarResourceView {
     }
 
     private static final class DirectoryIndex {
-        private final Map<String, List<String>> ranges;
+        private final String[] entries;
+        private final List<String> values;
 
         private DirectoryIndex(String[] entries) {
-            List<String> values = Collections.unmodifiableList(Arrays.asList(entries));
-            Map<String, MutableRange> mutable = new HashMap<>();
-            mutable.put("", new MutableRange(0, entries.length));
-            for (int index = 0; index < entries.length; index++) {
-                String entry = entries[index];
-                for (int separator = entry.indexOf('/'); separator >= 0;
-                     separator = entry.indexOf('/', separator + 1)) {
-                    String directory = entry.substring(0, separator);
-                    MutableRange range = mutable.get(directory);
-                    if (range == null) {
-                        mutable.put(directory, new MutableRange(index, index + 1));
-                    } else {
-                        range.end = index + 1;
-                    }
-                }
-            }
-            Map<String, List<String>> built = new HashMap<>(mutable.size() * 2);
-            mutable.forEach((directory, range) -> built.put(directory, values.subList(range.start, range.end)));
-            this.ranges = Map.copyOf(built);
+            this.entries = entries;
+            this.values = Collections.unmodifiableList(Arrays.asList(entries));
         }
 
         private List<String> entries(String requestedPath) {
-            return ranges.getOrDefault(requestedPath, List.of());
+            if (requestedPath.isEmpty()) {
+                return values;
+            }
+            int start = insertionPoint(requestedPath + '/');
+            int end = insertionPoint(requestedPath + '0');
+            return values.subList(start, end);
         }
-    }
 
-    private static final class MutableRange {
-        private final int start;
-        private int end;
-
-        private MutableRange(int start, int end) {
-            this.start = start;
-            this.end = end;
+        private int insertionPoint(String prefix) {
+            int position = Arrays.binarySearch(entries, prefix);
+            return position < 0 ? -position - 1 : position;
         }
     }
 }

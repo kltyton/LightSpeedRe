@@ -68,6 +68,13 @@ public final class LazyEntityRenderer<T extends Entity> extends EntityRenderer<T
         return delegate();
     }
 
+    public static EntityRenderer<?> unwrap(EntityRenderer<?> renderer) {
+        while (renderer instanceof LazyEntityRenderer<?> lazy) {
+            renderer = lazy.resolveDelegate();
+        }
+        return renderer;
+    }
+
     @SuppressWarnings("unchecked")
     private EntityRenderer<T> delegate() {
         EntityRenderer<T> current = delegate;

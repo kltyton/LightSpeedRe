@@ -2,22 +2,22 @@ package com.ccr4ft3r.lightspeed.events;
 
 import com.ccr4ft3r.lightspeed.ModConstants;
 import com.ccr4ft3r.lightspeed.cache.GlobalCache;
-import com.ccr4ft3r.lightspeed.client.advice.StartupAdvice;
 import com.ccr4ft3r.lightspeed.client.screen.StartupAdviceScreen;
 import com.ccr4ft3r.lightspeed.client.cache.assets.ClientSnapshotCoordinator;
 import com.ccr4ft3r.lightspeed.compat.bootstrap.BootstrapAgentBridge;
 import com.ccr4ft3r.lightspeed.config.LightspeedConfig;
-import com.ccr4ft3r.lightspeed.startup.installation.BootstrapAgentInstaller;
 import com.ccr4ft3r.lightspeed.startup.metrics.StartupMetrics;
 import com.mojang.logging.LogUtils;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.ScreenEvent;
+import net.minecraftforge.client.loading.ClientModLoader;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.eventbus.api.EventPriority;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
+import net.minecraftforge.fml.ModLoader;
 import net.minecraftforge.internal.BrandingControl;
 
 import java.lang.management.ManagementFactory;
@@ -35,9 +35,19 @@ public class TitleScreenInjector {
 
     @SuppressWarnings({"InstantiationOfUtilityClass", "unchecked"})
     @SubscribeEvent(priority = EventPriority.LOWEST)
-    public static void onScreenInit(ScreenEvent.Init event) {
-        if (!(event.getScreen() instanceof TitleScreen) || launchComplete)
+    public static void onScreenInit(ScreenEvent.Init.Post event) {
+        if (!(event.getScreen() instanceof TitleScreen) || launchComplete || !loadingComplete())
             return;
+        finishTitleInit();
+    }
+
+    private static boolean loadingComplete() {
+        return !ClientModLoader.isLoading() && ModLoader.isLoadingStateValid()
+                && StartupMetrics.isInitialReloadComplete();
+    }
+
+    @SuppressWarnings({"InstantiationOfUtilityClass", "unchecked"})
+    private static void finishTitleInit() {
         launchComplete = true;
         StartupMetrics.mark("title-screen-init");
         try {
@@ -63,26 +73,23 @@ public class TitleScreenInjector {
         }
         ClientSnapshotCoordinator.persistAndLog();
         BootstrapAgentBridge.persistResourceImage();
-        BootstrapAgentInstaller.startPackCompilerAfterTitle();
-        GlobalCache.beginShutdown();
-        GlobalCache.EXECUTOR.execute(() -> {
-            try {
-                GlobalCache.disablePersistAndClear();
-            } finally {
-                GlobalCache.shutdownExecutors();
-            }
-        });
+        GlobalCache.finishStartupCaches();
     }
 
     @SubscribeEvent
     public static void onClientTick(TickEvent.ClientTickEvent event) {
-        if (event.phase != TickEvent.Phase.END || !launchComplete || startupAdviceHandled) {
+        if (event.phase != TickEvent.Phase.END || startupAdviceHandled) {
             return;
         }
 
         Minecraft minecraft = Minecraft.getInstance();
-        if (!(minecraft.screen instanceof TitleScreen titleScreen)) {
+        if (!(minecraft.screen instanceof TitleScreen titleScreen) || minecraft.getOverlay() != null
+                || !loadingComplete()) {
             return;
+        }
+
+        if (!launchComplete) {
+            finishTitleInit();
         }
 
         startupAdviceHandled = true;
@@ -91,19 +98,9 @@ public class TitleScreenInjector {
             return;
         }
 
-        boolean manualConfigurationRequired = BootstrapAgentInstaller.manualConfigurationRequired();
-        StartupAdvice.Advice advice = StartupAdvice.select(
-                Runtime.version().feature(),
-                System.getProperty(BootstrapAgentInstaller.ACTIVE_PROPERTY),
-                System.getProperty(BootstrapAgentInstaller.DYNAMIC_PROPERTY),
-                manualConfigurationRequired,
-                BootstrapAgentInstaller.launcherReadyForNextLaunch());
-        if (advice.shouldShow()) {
-            String manualArguments = advice.manualConfigurationRequired()
-                    ? BootstrapAgentInstaller.manualJvmArguments() : "";
+        if (Runtime.version().feature() < 21) {
             minecraft.setScreen(new StartupAdviceScreen(
-                    titleScreen, advice.java21Recommended(), advice.agentMissing(),
-                    advice.manualConfigurationRequired(), manualArguments));
+                    titleScreen, true, false, false, ""));
         }
     }
 }

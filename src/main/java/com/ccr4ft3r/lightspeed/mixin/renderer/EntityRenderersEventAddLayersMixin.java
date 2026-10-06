@@ -2,6 +2,7 @@ package com.ccr4ft3r.lightspeed.mixin.renderer;
 
 import com.ccr4ft3r.lightspeed.client.renderer.LazyEntityRenderer;
 import net.minecraftforge.client.event.EntityRenderersEvent;
+import net.minecraft.client.renderer.entity.EntityRenderer;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Redirect;
@@ -17,6 +18,6 @@ public abstract class EntityRenderersEventAddLayersMixin {
     )
     private Object lightspeed$resolveLazyRenderer(Map<?, ?> renderers, Object key) {
         Object renderer = renderers.get(key);
-        return renderer instanceof LazyEntityRenderer<?> lazy ? lazy.resolveDelegate() : renderer;
+        return renderer instanceof EntityRenderer<?> entityRenderer ? LazyEntityRenderer.unwrap(entityRenderer) : renderer;
     }
 }

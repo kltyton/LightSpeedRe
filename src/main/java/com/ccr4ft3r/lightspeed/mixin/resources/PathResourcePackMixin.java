@@ -205,60 +205,46 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
             return;
         }
 
-        boolean fallbackToVanilla = false;
+        List<String> bootstrapPaths = null;
+        ResourcePathIndex index = null;
         try {
-                if (lightspeed$bootstrapIndexHandle != BootstrapAgentBridge.UNKNOWN) {
-                    String basePrefix = type.getDirectory() + '/' + namespace;
-                    List<String> indexed = BootstrapAgentBridge.resourceEntries(
-                            lightspeed$bootstrapIndexHandle, basePrefix, path);
-                    if (indexed != null) {
-                        for (String resourcePath : indexed) {
-                            ResourceLocation location = ResourceLocation.tryBuild(namespace, resourcePath);
-                            if (location == null) {
-                                Util.logAndPauseIfInIde(String.format(Locale.ROOT,
-                                        "Invalid path in pack: %s:%s, ignoring", namespace, resourcePath));
-                            } else {
-                                resourceOutput.accept(location, lightspeed$openResource(type, location));
-                            }
-                        }
-                        ci.cancel();
-                        return;
-                    }
+            if (lightspeed$bootstrapIndexHandle != BootstrapAgentBridge.UNKNOWN) {
+                String basePrefix = type.getDirectory() + '/' + namespace;
+                bootstrapPaths = BootstrapAgentBridge.resourceEntries(
+                        lightspeed$bootstrapIndexHandle, basePrefix, path);
+            }
+            if (bootstrapPaths == null) {
+                if (!lightspeed$persistedCacheLoad.isDone()) return;
+                Path root = resolve(type.getDirectory(), namespace).toAbsolutePath();
+                List<String> cachedPaths = lightspeed$getCachedFilePaths(type, namespace);
+                if (cachedPaths == null) {
+                    CompletableFuture<List<String>> scan = lightspeed$scheduleFilePathScan(type, namespace, root);
+                    cachedPaths = scan == null ? null : scan.getNow(null);
+                    if (cachedPaths == null) return;
                 }
-                if (!lightspeed$persistedCacheLoad.isDone()) {
-                    fallbackToVanilla = true;
-                } else {
-                    Path root = resolve(type.getDirectory(), namespace).toAbsolutePath();
-                    List<String> cachedPaths = lightspeed$getCachedFilePaths(type, namespace);
-                    if (cachedPaths == null) {
-                        CompletableFuture<List<String>> scan = lightspeed$scheduleFilePathScan(type, namespace, root);
-                        cachedPaths = scan == null ? null : scan.getNow(null);
-                        if (cachedPaths == null) {
-                            fallbackToVanilla = true;
-                        }
-                    }
-                    if (!fallbackToVanilla) {
-                        ResourcePathIndex index = lightspeed$getResourcePathIndex(type, namespace, cachedPaths);
-                        index.forEachUnder(path, resourcePath -> {
-                            ResourceLocation location = ResourceLocation.tryBuild(namespace, resourcePath);
-                            if (location == null) {
-                                Util.logAndPauseIfInIde(String.format(Locale.ROOT,
-                                        "Invalid path in pack: %s:%s, ignoring", namespace, resourcePath));
-                            } else {
-                                resourceOutput.accept(location, lightspeed$openResource(type, location));
-                            }
-                        });
-                    }
-                }
+                index = lightspeed$getResourcePathIndex(type, namespace, cachedPaths);
+            }
         } catch (RuntimeException e) {
-            fallbackToVanilla = true;
             LOGGER.warn("Lightspeed path index lookup failed for {}:{}; falling back to vanilla resource enumeration",
                     namespace, path, e);
+            return;
         }
 
-        if (!fallbackToVanilla) {
-            ci.cancel();
+        java.util.function.Consumer<String> emit = resourcePath -> {
+            ResourceLocation location = ResourceLocation.tryBuild(namespace, resourcePath);
+            if (location == null) {
+                Util.logAndPauseIfInIde(String.format(Locale.ROOT,
+                        "Invalid path in pack: %s:%s, ignoring", namespace, resourcePath));
+            } else {
+                resourceOutput.accept(location, lightspeed$openResource(type, location));
+            }
+        };
+        if (bootstrapPaths != null) {
+            bootstrapPaths.forEach(emit);
+        } else {
+            index.forEachUnder(path, emit);
         }
+        ci.cancel();
     }
 
     @Override
@@ -284,7 +270,7 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
         if (lightspeed$bootstrapIndexHandle == BootstrapAgentBridge.UNKNOWN) {
             lightspeed$bootstrapIndexHandle = BootstrapAgentBridge.bindResourceIndex(modFile.findResource(""));
         }
-        this.lightspeed$id = ResourcePackCacheKey.from(modFile);
+        this.lightspeed$id = ResourcePackCacheKey.from(modFile, GlobalCache.shouldVerifyJarHash);
         lightspeed$setExistenceByResource(lightspeed$id == null
                 ? Maps.newConcurrentMap()
                 : GlobalCache.PERSISTED_EXISTENCES_BY_MOD.computeIfAbsent(lightspeed$id, ignored -> Maps.newConcurrentMap()));
@@ -558,18 +544,18 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
 
     @Unique
     private IoSupplier<InputStream> lightspeed$openResource(PackType type, ResourceLocation location) {
-        PackType effectiveType = lightspeed$effectiveType(type, location);
-        String[] parts = lightspeed$getPathParts(effectiveType, location);
-        Path path = resolve(parts);
-        if (lightspeed$modFile == null || !BootstrapAgentBridge.isAvailable()) {
-            return () -> Files.newInputStream(path);
-        }
-        String name = String.join("/", parts);
-        byte[] cached = BootstrapAgentBridge.resourceBytes(lightspeed$bootstrapIndexHandle, name);
-        if (cached != null) {
-            return () -> new ByteArrayInputStream(cached);
-        }
         return () -> {
+            PackType effectiveType = lightspeed$effectiveType(type, location);
+            String[] parts = lightspeed$getPathParts(effectiveType, location);
+            if (lightspeed$modFile == null || !BootstrapAgentBridge.isAvailable()) {
+                return Files.newInputStream(resolve(parts));
+            }
+            String name = String.join("/", parts);
+            byte[] cached = BootstrapAgentBridge.resourceBytes(lightspeed$bootstrapIndexHandle, name);
+            if (cached != null) {
+                return new ByteArrayInputStream(cached);
+            }
+            Path path = resolve(parts);
             byte[] bytes = Files.readAllBytes(path);
             BootstrapAgentBridge.recordResourceBytes(lightspeed$bootstrapIndexHandle, name, bytes);
             return new ByteArrayInputStream(bytes);

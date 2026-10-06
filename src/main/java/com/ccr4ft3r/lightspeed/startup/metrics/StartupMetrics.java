@@ -1,6 +1,7 @@
 package com.ccr4ft3r.lightspeed.startup.metrics;
 
 import com.ccr4ft3r.lightspeed.compat.bootstrap.BootstrapAgentBridge;
+import com.ccr4ft3r.lightspeed.startup.registry.ObjectHolderDispatch;
 import com.mojang.logging.LogUtils;
 import jdk.jfr.Event;
 import jdk.jfr.Label;
@@ -9,13 +10,32 @@ import org.slf4j.Logger;
 
 import java.lang.management.ManagementFactory;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
 public final class StartupMetrics {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final Set<String> RECORDED = ConcurrentHashMap.newKeySet();
+    private static volatile boolean initialReloadComplete;
 
     private StartupMetrics() {
+    }
+
+    public static void observeInitialReload(CompletableFuture<?> completion) {
+        if (!hasRecorded("title-screen-operable")) {
+            completion.thenRun(() -> {
+                mark("initial-resource-reload-complete");
+                initialReloadComplete = true;
+            });
+        }
+    }
+
+    public static boolean hasRecorded(String milestone) {
+        return RECORDED.contains(milestone);
+    }
+
+    public static boolean isInitialReloadComplete() {
+        return initialReloadComplete;
     }
 
     public static boolean mark(String milestone) {
@@ -23,6 +43,10 @@ public final class StartupMetrics {
             return false;
         }
         long elapsedMillis = elapsedMillis();
+        if ("title-screen-operable".equals(milestone)) {
+            LOGGER.info("Lightspeed ObjectHolder routing: calls={} skipped={} elapsedMillis={}",
+                    ObjectHolderDispatch.calls(), ObjectHolderDispatch.skipped(), ObjectHolderDispatch.elapsedMillis());
+        }
         LOGGER.info("Lightspeed startup milestone: name={} elapsedMs={} processStartEpochMs={}",
                 milestone, elapsedMillis, processStartEpochMillis());
         if ("title-screen-operable".equals(milestone) || "server-started".equals(milestone))
