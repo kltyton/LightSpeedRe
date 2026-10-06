@@ -86,9 +86,13 @@ public final class LauncherTransformer implements ClassFileTransformer {
                             ModTransitionPatch::apply))),
             Map.entry(MIXIN_LAUNCH_PLUGIN, List.of(
                     target("eebe20b521483335da9fdce6b7a52a46581d6727faa207d5c3e41555badc992e",
+                            MixinTargetIndexPatch::launchPlugin),
+                    target("bafd7a04c4b2466648f51702703e25b6a0819fb24c32f302ae36ea821887b7cf",
                             MixinTargetIndexPatch::launchPlugin))),
             Map.entry(MIXIN_EXTENSIONS, List.of(
                     target("2e3e936a493a8852189bf4c0675fe522e43f59831c3be2bca877f9e1dcb701ef",
+                            MixinTargetIndexPatch::generators),
+                    target("bcb88369a2234758fae2a64da38f3b9d1a203f5b19592ef4ee5ef2ecbca5c37a",
                             MixinTargetIndexPatch::generators))),
             Map.entry(KEY_LOOKUP, List.of(
                     targetWithoutAgentRead("8b09e1dfd462ada736e52d0239313d53757107fcd5f49a775543343845a25634",
@@ -98,6 +102,8 @@ public final class LauncherTransformer implements ClassFileTransformer {
                             ModConstructionPatch::apply))),
             Map.entry(CLASS_TRANSFORMER, List.of(
                     target("6f52d32448df4c33fa853625bd86ca09aaeb7cf07f4b14b2acbd369a3b54b50e",
+                            ClassPassThroughPatch::apply),
+                    target("0a83617583182e740b2f12f0efe2d7b66896842fe20a2011751911d752888507",
                             ClassPassThroughPatch::apply))),
             Map.entry(JDK_RESOLVER, List.of(
                     targetWithoutAgentRead("50592f617814a53ad1bb78049a4d3a68bfd7fe07f4499cb881a5c13de64c0208",
@@ -107,9 +113,13 @@ public final class LauncherTransformer implements ClassFileTransformer {
                             HttpClientConnectTimeoutPatch::apply))),
             Map.entry(MIXIN_PROCESSOR, List.of(
                     target("c354f62d30691abf138619853ece6c8f242250384ab77013fab36a3c2b6b427c",
+                            MixinTargetIndexPatch::processor),
+                    target("d9372130e8fce5621ffda053ffebc975c160b1245ac328c5b2be8e5f7d708cd0",
                             MixinTargetIndexPatch::processor))),
             Map.entry(MIXIN_CONFIG, List.of(
                     target("c8e65a2dd439840f831473100adeb2f0420c0a1ae2fb1b7e5e9bea586d725ce3",
+                            MixinTargetIndexPatch::configuration),
+                    target("de67d6dc7a1fdc678ed4dda11d933a1b38a67bed1c908bdef65ba045dd30e04b",
                             MixinTargetIndexPatch::configuration))),
             Map.entry(MIXIN_BYTECODE, List.of(
                     target("4e1778d03277fd62bde5fce2d65932922f8cb710926a0ecb94393f3a7d2dfb47",

@@ -47,6 +47,15 @@ public final class ClassPassThrough {
             Map.entry("net.minecraftforge.fml.common.asm.RuntimeEnumExtender", "7bff6553591fa3121bb831cc84cf9cbf67d2bf2e34b5b397888d811229d42c03"),
             Map.entry("net.minecraftforge.fml.common.asm.ObjectHolderDefinalize", "fb91279833973ea22f9a983347bf4004145374db96111f4f369ae454f17d3e8f"),
             Map.entry("net.minecraftforge.fml.common.asm.CapabilityTokenSubclass", "c69ac1dcd4dcea933a8eb4999e37837a5be611b093023f923b576b01abcc37a9"));
+    private static final Map<String, String> SUPPORTED_CURRENT = Map.ofEntries(
+            Map.entry(ARGS_GENERATOR, "c4afc3021acb9b8c34a92ff8d6a1ef0a7212210044400c845cd96db020e56073"),
+            Map.entry(INNER_GENERATOR, "3bc1564942e50749f076d39ced485ae9a93785cd948f1fd657ee8cd84b1a23f2"),
+            Map.entry(HANDLER, "50b45cbe77009ecf01008533e5cba432fa205ecb4484a7c0f4a9fac43c86ed5c"),
+            Map.entry(TRACKER, "e1610cefc9058376f25143ca1be1ae8bd210a72e3f2528feb3e3ccedb67f41f3"),
+            Map.entry(MIXIN, "f0cfbdd2d82d9bc729f5527a932222e6a6ef53280f5cd0e114a95ecf25b2d1df"),
+            Map.entry(MIXIN_LEGACY, "bafd7a04c4b2466648f51702703e25b6a0819fb24c32f302ae36ea821887b7cf"),
+            Map.entry(EVENT_BUS, "c6aa105da1bbb3b2b8dce1282528f1f3aed7746b7df0dd6fb96b89ca8270b18a"),
+            Map.entry(EVENT_ENGINE, "679c4106e0e8d80d53f55a66521993008048a5d4ed207ab2b9cf68071df914bf"));
     private static final byte[][] ANNOTATIONS = {
             ascii("Lnet/minecraftforge/api/distmarker/OnlyIn;"),
             ascii("Lnet/minecraftforge/api/distmarker/OnlyIns;"),
@@ -62,10 +71,13 @@ public final class ClassPassThrough {
         @Override
         protected Boolean computeValue(Class<?> type) {
             String expected = SUPPORTED.get(type.getName());
-            if (expected == null) return false;
+            String current = SUPPORTED_CURRENT.get(type.getName());
+            if (expected == null && current == null) return false;
             try (InputStream input = type.getResourceAsStream('/' + type.getName().replace('.', '/') + ".class")) {
-                return input != null && expected.equals(HexFormat.of().formatHex(
-                        MessageDigest.getInstance("SHA-256").digest(input.readAllBytes())));
+                if (input == null) return false;
+                String actual = HexFormat.of().formatHex(
+                        MessageDigest.getInstance("SHA-256").digest(input.readAllBytes()));
+                return actual.equals(expected) || actual.equals(current);
             } catch (IOException | NoSuchAlgorithmException exception) {
                 return false;
             }
@@ -179,6 +191,7 @@ public final class ClassPassThrough {
         if (hasTransformers || bytes.length == 0 || !"classloading".equals(reason) || active == null
                 || !audit.getClass().getName().equals("cpw.mods.modlauncher.TransformerAuditTrail")
                 || name.startsWith("net.minecraft.") || name.startsWith("net.minecraftforge.")
+                || name.startsWith("net.neoforged.")
                 || name.startsWith("com.mojang.") || !active.containsNoWork(name)) return false;
 
         Object mixin = null;

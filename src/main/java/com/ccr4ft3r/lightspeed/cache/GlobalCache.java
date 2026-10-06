@@ -24,6 +24,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ForkJoinWorkerThread;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -41,9 +42,12 @@ public class GlobalCache {
     private static volatile CompletableFuture<Void> persistedCacheLoad = CompletableFuture.completedFuture(null);
 
     public static volatile boolean isEnabled = true;
+    /** Reflection ABI for integrations; NeoForge's pack reload lifecycle does not use this flag. */
+    public static volatile boolean shouldAsyncPreloadPacks = false;
     public static volatile boolean shouldCacheWalkedPaths = true;
     public static volatile boolean shouldCacheEmptyNamespaces = true;
     public static volatile boolean shouldCacheResourceExistence = true;
+    public static volatile boolean shouldVerifyJarHash = false;
     public static volatile boolean shouldCacheMaterials = true;
     public static volatile boolean shouldParallelizeResourcePackLookup = true;
     public static volatile boolean shouldUseDedicatedResourceReloadExecutor = true;
@@ -59,6 +63,8 @@ public class GlobalCache {
     public static final int WORKER_COUNT = getWorkerCount();
     private static final AtomicInteger CACHE_THREAD_ID = new AtomicInteger();
     private static final Set<CompletableFuture<?>> BACKGROUND_CACHE_TASKS = Sets.newConcurrentHashSet();
+    private static final Set<CompletableFuture<?>> PERSISTENCE_TASKS = Sets.newConcurrentHashSet();
+    private static volatile CompletableFuture<Void> startupPersistence;
     private static final int CACHE_WORKER_COUNT = getCacheWorkerCount();
     public static final ExecutorService EXECUTOR = Executors.newFixedThreadPool(WORKER_COUNT,
             runnable -> newDaemonThread(runnable, "Lightspeed-", THREAD_ID, Math.max(Thread.MIN_PRIORITY, Thread.NORM_PRIORITY - 1)));
@@ -69,6 +75,11 @@ public class GlobalCache {
             GlobalCache::newReloadWorker,
             (thread, throwable) -> LOGGER.error("Lightspeed resource reload worker failed: {}", thread.getName(), throwable),
             true);
+
+    static {
+        Runtime.getRuntime().addShutdownHook(new Thread(GlobalCache::awaitPersistenceAtExit,
+                "Lightspeed-Cache-Persistence-Exit"));
+    }
 
     public static void add(ICache cache) {
         CACHES.add(cache);
@@ -91,11 +102,12 @@ public class GlobalCache {
         if (id == null || id.isBlank()) {
             return CompletableFuture.completedFuture(null);
         }
-        File file = new File(dir, id + ".ser");
+        File file = CacheUtil.cacheFile(dir, id);
         if (!file.isFile()) {
             return CompletableFuture.completedFuture(null);
         }
-        return executeCacheLogged("load cache file " + file.getName(), () -> targetMap.putAll(CacheUtil.load(file)));
+        return executeCacheLogged("load cache file " + file.getName(), () ->
+                CacheUtil.<K, V>load(file).forEach(targetMap::putIfAbsent));
     }
 
     public static void awaitPersistedCachesLoaded() {
@@ -134,6 +146,62 @@ public class GlobalCache {
         return trackBackgroundTask(future);
     }
 
+    /** Writes next-launch cache data even after startup lookups have been disabled. */
+    public static CompletableFuture<Void> persistCacheAsync(String taskName, Runnable task) {
+        long queued = System.nanoTime();
+        CompletableFuture<Void> future = CompletableFuture.runAsync(task, CACHE_EXECUTOR);
+        PERSISTENCE_TASKS.add(future);
+        LOGGER.info("Lightspeed startup cache persistence queued: name={}", taskName);
+        future.whenComplete((ignored, failure) -> {
+            PERSISTENCE_TASKS.remove(future);
+            if (failure != null) {
+                LOGGER.error("Lightspeed startup cache persistence failed: {}", taskName, failure);
+            } else {
+                LOGGER.info("Lightspeed startup cache persistence complete: name={} elapsedMs={}",
+                        taskName, (System.nanoTime() - queued) / 1_000_000L);
+            }
+        });
+        return trackBackgroundTask(future);
+    }
+
+    public static void finishStartupCaches() {
+        isEnabled = false;
+        CompletableFuture<Void> completion = new CompletableFuture<>();
+        startupPersistence = completion;
+        try {
+            CompletableFuture.runAsync(() -> {
+                try {
+                    disablePersistAndClear();
+                } finally {
+                    shutdownExecutors();
+                }
+            }, EXECUTOR).whenComplete((ignored, failure) -> {
+                if (failure == null) completion.complete(null);
+                else completion.completeExceptionally(failure);
+            });
+        } catch (RejectedExecutionException exception) {
+            completion.completeExceptionally(exception);
+            throw exception;
+        }
+    }
+
+    private static void awaitPersistenceAtExit() {
+        // An interrupted startup must not wait for unfinished reload prerequisites or delete existing caches.
+        CompletableFuture<Void> flush = startupPersistence;
+        if (flush != null) {
+            try {
+                flush.join();
+            } catch (CompletionException exception) {
+                LOGGER.error("Lightspeed cache flush failed before JVM exit", exception.getCause());
+            }
+        }
+        try {
+            CompletableFuture.allOf(PERSISTENCE_TASKS.toArray(new CompletableFuture<?>[0])).join();
+        } catch (CompletionException exception) {
+            LOGGER.error("Lightspeed pending cache persistence failed before JVM exit", exception.getCause());
+        }
+    }
+
     public static <T> CompletableFuture<T> supplyCacheAfterPersistedLoad(String taskName, Supplier<T> task) {
         CompletableFuture<T> future = loadPersistedCachesAsync().thenApplyAsync(ignored -> {
             try {
@@ -170,6 +238,15 @@ public class GlobalCache {
         CacheUtil.getCacheFiles(NAMESPACE_CACHE_DIR).forEach(file -> deleteTasks.add(deleteAsync(file)));
         CacheUtil.getCacheFiles(RESOURCE_LIST_CACHE_DIR).forEach(file -> deleteTasks.add(deleteAsync(file)));
         CompletableFuture.allOf(deleteTasks.toArray(new CompletableFuture[0])).join();
+
+        List<CompletableFuture<Void>> sharedPersistTasks = new ArrayList<>();
+        PERSISTED_EXISTENCES_BY_MOD.forEach((id, cache) -> sharedPersistTasks.add(
+                CompletableFuture.runAsync(() -> CacheUtil.persist(cache, new File(HAS_RESOURCE_CACHE_DIR, id + ".ser")), CACHE_EXECUTOR)));
+        PERSISTED_NAMESPACES_BY_MOD.forEach((id, cache) -> sharedPersistTasks.add(
+                CompletableFuture.runAsync(() -> CacheUtil.persist(cache, new File(NAMESPACE_CACHE_DIR, id + ".ser")), CACHE_EXECUTOR)));
+        PERSISTED_RESOURCE_LISTS_BY_MOD.forEach((id, cache) -> sharedPersistTasks.add(
+                CompletableFuture.runAsync(() -> CacheUtil.persist(cache, new File(RESOURCE_LIST_CACHE_DIR, id + ".ser")), CACHE_EXECUTOR)));
+        CompletableFuture.allOf(sharedPersistTasks.toArray(new CompletableFuture[0])).join();
 
         List<CompletableFuture<Void>> persistTasks = new ArrayList<>();
         CACHES.forEach(cache -> persistTasks.add(runPersistTask(cache)));

@@ -1,6 +1,7 @@
 package com.ccr4ft3r.lightspeed.startup.installation;
 
 import com.ccr4ft3r.lightspeed.ModConstants;
+import com.ccr4ft3r.lightspeed.config.LightspeedConfig;
 import com.ccr4ft3r.lightspeed.cache.persistence.AtomicFileWriter;
 import com.mojang.logging.LogUtils;
 import net.neoforged.fml.loading.FMLPaths;
@@ -31,6 +32,16 @@ public final class BootstrapAgentInstaller {
     public static void installForNextLaunch() {
         installationState = InstallationState.IN_PROGRESS;
         try {
+            Path gameDirectory = FMLPaths.GAMEDIR.get().toAbsolutePath().normalize();
+            if (!LightspeedConfig.COMMON.installBootstrapAgent.get()) {
+                LaunchProfileInstaller.Result result = LaunchProfileInstaller.installWithPreLaunch(
+                        gameDirectory, List.of(), "");
+                installationState = InstallationState.CONFIGURED;
+                if (result.changed()) {
+                    LOGGER.info("Lightspeed removed its saved startup arguments from {}. Reopen the launcher before the next launch if it still uses old arguments.", result.description());
+                }
+                return;
+            }
             PreparedAgent prepared = prepareEmbeddedAgent();
             if (prepared == null) {
                 installationState = InstallationState.MANUAL_REQUIRED;
@@ -38,7 +49,6 @@ public final class BootstrapAgentInstaller {
                 return;
             }
 
-            Path gameDirectory = FMLPaths.GAMEDIR.get().toAbsolutePath().normalize();
             List<String> arguments = launchArguments(gameDirectory, prepared);
             LaunchProfileInstaller.Result result = LaunchProfileInstaller.install(gameDirectory, arguments);
             if (result.changed()) {
@@ -61,11 +71,13 @@ public final class BootstrapAgentInstaller {
     }
 
     public static boolean manualConfigurationRequired() {
-        return installationState != InstallationState.CONFIGURED;
+        return LightspeedConfig.COMMON.installBootstrapAgent.get()
+                && installationState != InstallationState.CONFIGURED;
     }
 
     public static boolean launcherReadyForNextLaunch() {
-        return LauncherRefreshCoordinator.readyForNextLaunch();
+        return !LightspeedConfig.COMMON.installBootstrapAgent.get()
+                || LauncherRefreshCoordinator.readyForNextLaunch();
     }
 
     public static String manualJvmArguments() {

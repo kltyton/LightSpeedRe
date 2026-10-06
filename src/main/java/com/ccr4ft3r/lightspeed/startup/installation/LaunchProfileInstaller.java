@@ -58,9 +58,10 @@ final class LaunchProfileInstaller {
             if (versionJson == null) {
                 return Result.UNSUPPORTED;
             }
+            // PCL concatenates both argument sources, so the Agent belongs in the instance settings only.
             boolean changed = updateBoth(pclSetup,
                     () -> updatePcl(pclSetup, desiredArguments, preLaunchCommand),
-                    versionJson, () -> updateVersionJson(versionJson, desiredArguments));
+                    versionJson, () -> updateVersionJson(versionJson, List.of()));
             return changed ? Result.PCL : Result.PCL_UNCHANGED;
         }
 
@@ -78,7 +79,7 @@ final class LaunchProfileInstaller {
             }
             boolean changed = updateBoth(hmclSettings,
                     () -> updateHmcl(hmclSettings, desiredArguments, preLaunchCommand),
-                    hmclVersionJson, () -> updateVersionJson(hmclVersionJson, desiredArguments));
+                    hmclVersionJson, () -> updateVersionJson(hmclVersionJson, List.of()));
             return changed ? Result.HMCL : Result.HMCL_UNCHANGED;
         }
 
@@ -92,7 +93,7 @@ final class LaunchProfileInstaller {
             boolean changed = updateBoth(officialProfiles,
                     () -> updateOfficialLauncherProfiles(
                             officialProfiles, gameDirectory, resolvedVersionId, desiredArguments),
-                    officialVersionJson, () -> updateVersionJson(officialVersionJson, desiredArguments));
+                    officialVersionJson, () -> updateVersionJson(officialVersionJson, List.of()));
             return changed ? Result.OFFICIAL : Result.OFFICIAL_UNCHANGED;
         }
 
@@ -128,7 +129,7 @@ final class LaunchProfileInstaller {
             }
             found = true;
             String existing = line.substring(PCL_JVM_ARGUMENTS.length());
-            String updated = removeLightspeedArguments(existing);
+            String updated = removeLightspeedArguments(existing, desiredArguments.isEmpty());
             updated = append(updated, quotedArguments);
             String replacement = PCL_JVM_ARGUMENTS + updated;
             changed = !replacement.equals(line);
@@ -136,7 +137,7 @@ final class LaunchProfileInstaller {
             break;
         }
 
-        if (!found) {
+        if (!found && !desiredArguments.isEmpty()) {
             lines.add(PCL_JVM_ARGUMENTS + append("", quotedArguments));
             changed = true;
         }
@@ -180,7 +181,8 @@ final class LaunchProfileInstaller {
             }
             managedCompilerCount = normalized == null ? null
                     : StartupThreadBudget.managedCompilerCount(normalized);
-            if (managedCompilerCount != null || normalized != null && isOwnedAgentArgument(normalized)
+            if (managedCompilerCount != null || normalized != null
+                    && shouldRemoveArgument(normalized, desiredArguments.isEmpty())
                     || hasLegacyArchiveArguments && isXShareAuto(element)
                     || normalized != null && isLegacyArchiveArgument(normalized)) {
                 continue;
@@ -222,14 +224,14 @@ final class LaunchProfileInstaller {
             String line = lines.get(index);
             if (line.startsWith("JvmArgs=")) {
                 foundArguments = true;
-                String updated = append(removeLightspeedArguments(line.substring("JvmArgs=".length())),
+                String updated = append(removeLightspeedArguments(line.substring("JvmArgs=".length()), desiredArguments.isEmpty()),
                         quotedArguments);
                 String replacement = "JvmArgs=" + updated;
                 changed |= !replacement.equals(line);
                 lines.set(index, replacement);
             }
         }
-        if (!foundArguments) {
+        if (!foundArguments && !desiredArguments.isEmpty()) {
             lines.add("JvmArgs=" + append("", quotedArguments));
             changed = true;
         }
@@ -251,7 +253,7 @@ final class LaunchProfileInstaller {
         String existing = root.has("jvmOptions") && root.get("jvmOptions").isJsonPrimitive()
                 && root.getAsJsonPrimitive("jvmOptions").isString()
                 ? root.get("jvmOptions").getAsString() : "";
-        String updated = append(removeLightspeedArguments(existing),
+        String updated = append(removeLightspeedArguments(existing, desiredArguments.isEmpty()),
                 desiredArguments.stream().map(LaunchProfileInstaller::quote).toList());
 
         JsonArray overrides = root.has("overrideProperties") && root.get("overrideProperties").isJsonArray()
@@ -265,23 +267,26 @@ final class LaunchProfileInstaller {
                 && root.getAsJsonPrimitive("preLaunchCommand").isString()
                 ? root.get("preLaunchCommand").getAsString() : "";
         boolean managePreLaunch = preLaunchCommand != null
-                && existingPreLaunch.isBlank();
+                && (existingPreLaunch.isBlank() || isOwnedPreLaunchCommand(existingPreLaunch));
         boolean hasPreLaunchOverride = overrides.asList().stream()
                 .anyMatch(element -> element.isJsonPrimitive()
                         && element.getAsJsonPrimitive().isString()
                         && element.getAsString().equals("preLaunchCommand"));
-        if (existing.equals(updated) && hasJvmOverride
-                && (!managePreLaunch || existingPreLaunch.equals(preLaunchCommand) && hasPreLaunchOverride)) {
+        if (existing.equals(updated) && (desiredArguments.isEmpty() || hasJvmOverride)
+                && (!managePreLaunch || existingPreLaunch.equals(preLaunchCommand)
+                && (preLaunchCommand.isEmpty() || hasPreLaunchOverride))) {
             return false;
         }
 
-        root.addProperty("jvmOptions", updated);
-        if (!hasJvmOverride) {
+        if (!existing.equals(updated) || !desiredArguments.isEmpty()) {
+            root.addProperty("jvmOptions", updated);
+        }
+        if (!desiredArguments.isEmpty() && !hasJvmOverride) {
             overrides.add("jvmOptions");
         }
         if (managePreLaunch) {
             root.addProperty("preLaunchCommand", preLaunchCommand);
-            if (!hasPreLaunchOverride) {
+            if (!preLaunchCommand.isEmpty() && !hasPreLaunchOverride) {
                 overrides.add("preLaunchCommand");
             }
         }
@@ -310,7 +315,7 @@ final class LaunchProfileInstaller {
             String existing = profile.has("javaArgs") && profile.get("javaArgs").isJsonPrimitive()
                     && profile.getAsJsonPrimitive("javaArgs").isString()
                     ? profile.get("javaArgs").getAsString() : "";
-            String updated = append(removeLightspeedArguments(existing),
+            String updated = append(removeLightspeedArguments(existing, desiredArguments.isEmpty()),
                     desiredArguments.stream().map(LaunchProfileInstaller::quote).toList());
             if (!existing.equals(updated)) {
                 profile.addProperty("javaArgs", updated);
@@ -340,7 +345,14 @@ final class LaunchProfileInstaller {
                 break;
             }
         }
-        if (!existing.isBlank()) {
+        if (desiredCommand.isEmpty()) {
+            if (commandIndex < 0 || !isOwnedPreLaunchCommand(existing)) {
+                return false;
+            }
+            lines.set(commandIndex, commandPrefix);
+            return true;
+        }
+        if (!existing.isBlank() && !isOwnedPreLaunchCommand(existing)) {
             return false;
         }
         boolean changed = false;
@@ -372,6 +384,12 @@ final class LaunchProfileInstaller {
             changed = true;
         }
         return changed;
+    }
+
+    private static boolean isOwnedPreLaunchCommand(String command) {
+        String normalized = command.trim().replace('\\', '/').toLowerCase(Locale.ROOT);
+        return normalized.matches("cmd\\.exe /d /s /c call \"[^\"]*/\\.lightspeed/bootstrap/pack-compiler\\.cmd\"")
+                || normalized.matches("sh '[^']*/\\.lightspeed/bootstrap/pack-compiler\\.sh'");
     }
 
     private static Path locateHmclVersionJson(Path gameDirectory, String versionId) {
@@ -616,7 +634,7 @@ final class LaunchProfileInstaller {
         return null;
     }
 
-    private static String removeLightspeedArguments(String arguments) {
+    private static String removeLightspeedArguments(String arguments, boolean preserveWorkers) {
         List<String> tokens = tokenize(arguments);
         boolean hasLegacyArchiveArguments = tokens.stream()
                 .map(LaunchProfileInstaller::unquote)
@@ -635,14 +653,14 @@ final class LaunchProfileInstaller {
             if (managedCompilerCount != null) {
                 continue;
             }
-            if (isOwnedAgentArgument(normalized)
+            if (shouldRemoveArgument(normalized, preserveWorkers)
                     || isLegacyArchiveArgument(normalized)
                     || hasLegacyArchiveArguments && normalized.equals("-xshare:auto")) {
                 continue;
             }
             retained.add(token);
         }
-        return String.join(" ", retained);
+        return retained.size() == tokens.size() ? arguments : String.join(" ", retained);
     }
 
     private static String unquote(String value) {
@@ -676,6 +694,9 @@ final class LaunchProfileInstaller {
     }
 
     private static String append(String existing, List<String> arguments) {
+        if (arguments.isEmpty()) {
+            return existing;
+        }
         String suffix = String.join(" ", arguments);
         return existing.isBlank() ? suffix : existing + ' ' + suffix;
     }
@@ -699,6 +720,11 @@ final class LaunchProfileInstaller {
     private static boolean isXShareAuto(JsonElement element) {
         return element.isJsonPrimitive() && element.getAsJsonPrimitive().isString()
                 && element.getAsString().equalsIgnoreCase("-Xshare:auto");
+    }
+
+    private static boolean shouldRemoveArgument(String value, boolean preserveWorkers) {
+        return isOwnedAgentArgument(value)
+                && !(preserveWorkers && value.startsWith("-dlightspeed.workers="));
     }
 
     private static boolean isOwnedAgentArgument(String value) {
@@ -741,7 +767,7 @@ final class LaunchProfileInstaller {
     }
 
     enum Result {
-        PCL("PCL per-instance and version JSON JVM arguments", true, LauncherFamily.PCL),
+        PCL("PCL per-instance JVM arguments and version JSON cleanup", true, LauncherFamily.PCL),
         PCL_UNCHANGED("existing PCL JVM arguments", false, LauncherFamily.PCL),
         PRISM("Prism Launcher or MultiMC instance JVM arguments", true, LauncherFamily.PRISM),
         PRISM_UNCHANGED("existing Prism Launcher or MultiMC JVM arguments", false, LauncherFamily.PRISM),

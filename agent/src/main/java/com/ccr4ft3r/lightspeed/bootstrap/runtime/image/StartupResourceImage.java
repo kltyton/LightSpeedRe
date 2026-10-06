@@ -82,6 +82,14 @@ public final class StartupResourceImage {
         SCANS.persist(scanKeys::contains);
     }
 
+    public static void persistOnExit() {
+        RESOURCES.persist();
+        if (RAW_CLASS_ENABLED) {
+            CLASSES.persist();
+        }
+        SCANS.persist();
+    }
+
     public static long hits() {
         return RESOURCES.hits();
     }

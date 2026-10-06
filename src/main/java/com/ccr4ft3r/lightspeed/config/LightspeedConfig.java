@@ -19,15 +19,20 @@ public final class LightspeedConfig {
     }
 
     public static final class Common {
+        public final ModConfigSpec.BooleanValue installBootstrapAgent;
         public final ModConfigSpec.BooleanValue dedicatedResourceReloadExecutor;
         public final ModConfigSpec.BooleanValue parallelResourceLookup;
         public final ModConfigSpec.BooleanValue cacheResourceExistence;
+        public final ModConfigSpec.BooleanValue verifyJarHash;
         public final ModConfigSpec.BooleanValue isolateModdedResourceReloadFailures;
         public final ModConfigSpec.ConfigValue<List<? extends String>> isolatedResourceReloadListenerPatterns;
         public final ModConfigSpec.BooleanValue connectorCompatibilityMode;
 
         private Common(ModConfigSpec.Builder builder) {
             builder.push("startup");
+            installBootstrapAgent = builder
+                    .comment("Explicitly install bootstrap Agent JVM arguments for the next launch. Disabled by default to keep exported modpacks free of machine-specific startup paths. Restart after changing this option.")
+                    .define("installBootstrapAgent", false);
             dedicatedResourceReloadExecutor = builder
                     .comment("Use a dedicated work-stealing pool for resource reload preparation instead of competing for the shared Minecraft worker pool.")
                     .define("dedicatedResourceReloadExecutor", true);
@@ -37,6 +42,9 @@ public final class LightspeedConfig {
             cacheResourceExistence = builder
                     .comment("Cache per-pack resource existence checks. The persisted cache is loaded lazily so it does not block startup IO.")
                     .define("cacheResourceExistence", true);
+            verifyJarHash = builder
+                    .comment("Validate persisted per-mod resource caches with the full JAR SHA-256 instead of the default module/version/file-name identity. Reads each JAR once per launch; changing this option requires a restart and rebuilds these caches.")
+                    .define("verifyJarHash", false);
             builder.pop();
 
             builder.push("compatibility");

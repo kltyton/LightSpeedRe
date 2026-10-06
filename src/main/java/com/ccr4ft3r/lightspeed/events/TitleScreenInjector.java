@@ -39,7 +39,8 @@ public class TitleScreenInjector {
     }
 
     private static boolean ready() {
-        return !ClientModLoader.isLoading() && !ModLoader.hasErrors();
+        return !ClientModLoader.isLoading() && !ModLoader.hasErrors()
+                && StartupMetrics.isInitialReloadComplete();
     }
 
     private static void finishTitleInit() {
@@ -67,24 +68,19 @@ public class TitleScreenInjector {
             LogUtils.getLogger().error("Cannot add launch time to title screen", e);
         }
         BootstrapAgentBridge.persistResourceImage();
-        GlobalCache.EXECUTOR.execute(() -> {
-            try {
-                GlobalCache.disablePersistAndClear();
-            } finally {
-                GlobalCache.shutdownExecutors();
-            }
-        });
+        GlobalCache.finishStartupCaches();
     }
 
     @SubscribeEvent
     public static void onClientTick(ClientTickEvent.Post event) {
-        if (!(Minecraft.getInstance().screen instanceof TitleScreen)) {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (!(minecraft.screen instanceof TitleScreen) || !ready()) {
             return;
         }
         if (!launchComplete && ready()) {
             finishTitleInit();
         }
-        if (launchComplete) {
+        if (launchComplete && minecraft.getOverlay() == null) {
             StartupMetrics.mark("title-screen-operable");
         }
     }

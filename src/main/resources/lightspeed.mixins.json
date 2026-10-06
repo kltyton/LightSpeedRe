@@ -1,8 +1,12 @@
 {
   "required": true,
+  "plugin": "com.ccr4ft3r.lightspeed.compat.mixin.LightspeedMixinPlugin",
   "package": "com.ccr4ft3r.lightspeed.mixin",
   "compatibilityLevel": "JAVA_21",
   "client": [
+    "compat.LightLoadArchivePersistenceMixin",
+    "compat.ModernFixAuditMixin",
+    "client.NeoForgeLoadingOverlayMixin",
     "MinecraftMainMixin",
     "resources.MinecraftReloadExecutorMixin",
     "misc.KeyValueConditionMixin",
@@ -15,6 +19,7 @@
     "renderer.EntityRenderersMixin"
   ],
   "mixins": [
+    "compat.LightLoadCacheFlagsMixin",
     "misc.ResourceLocationMixin",
     "misc.ResourcePackLoaderMixin",
     "misc.StateDefinitonMixin",

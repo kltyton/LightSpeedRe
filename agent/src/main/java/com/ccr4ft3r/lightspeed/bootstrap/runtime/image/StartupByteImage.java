@@ -20,6 +20,7 @@ final class StartupByteImage {
     private final ConcurrentHashMap<String, byte[]> recorded = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, String> activeSegments = new ConcurrentHashMap<>();
     private final Set<String> invalidatedSegments = ConcurrentHashMap.newKeySet();
+    private final ConcurrentHashMap<String, Long> invalidatedEntries = new ConcurrentHashMap<>();
     private final AtomicLong loadedBytes = new AtomicLong();
     private final AtomicLong recordedBytes = new AtomicLong();
     private final LongAdder totalRecordedBytes = new LongAdder();
@@ -49,13 +50,14 @@ final class StartupByteImage {
             failures.increment();
             return null;
         }
-        activateSegment(key, existing);
+        activateSegment(key);
         byte[] current = recorded.get(key);
         if (current == null && !isInvalidated(key)) {
             try {
                 current = existing.get(key);
             } catch (IOException exception) {
                 failures.increment();
+                invalidateEntry(existing, key);
             }
         }
         if (current == null) {
@@ -78,7 +80,7 @@ final class StartupByteImage {
             failures.increment();
             existing = PackImageFile.Image.empty();
         }
-        activateSegment(key, existing);
+        activateSegment(key);
         if (!isInvalidated(key) && existing.containsKey(key)) {
             return;
         }
@@ -105,12 +107,18 @@ final class StartupByteImage {
         PackImageFile.Image existing;
         try {
             existing = loadFuture().join();
-            existing.forEach((key, value) -> {
-                if (retain.test(key) && !invalidatedSegments.contains(segment(key))) {
-                    entries.put(key, value);
+            PackImageFile.Image image = existing;
+            image.forEachKey(key -> {
+                if (retain.test(key) && !isInvalidated(key)) {
+                    try {
+                        entries.put(key, image.get(key));
+                    } catch (IOException exception) {
+                        failures.increment();
+                        invalidateEntry(image, key);
+                    }
                 }
             });
-        } catch (IOException | RuntimeException exception) {
+        } catch (RuntimeException exception) {
             failures.increment();
             existing = PackImageFile.Image.empty();
         }
@@ -119,7 +127,8 @@ final class StartupByteImage {
                 entries.put(key, value);
             }
         });
-        if (recordedSnapshot.isEmpty() && invalidatedSegments.isEmpty() && entries.size() == existing.size()) {
+        if (recordedSnapshot.isEmpty() && invalidatedSegments.isEmpty() && invalidatedEntries.isEmpty()
+                && entries.size() == existing.size()) {
             return;
         }
         try {
@@ -127,6 +136,7 @@ final class StartupByteImage {
             loaded = CompletableFuture.completedFuture(persisted);
             loadedBytes.set(persisted.dataBytes());
             invalidatedSegments.clear();
+            invalidatedEntries.clear();
             recordedSnapshot.forEach((key, value) -> {
                 if (recorded.remove(key, value)) {
                     recordedBytes.addAndGet(-value.length);
@@ -190,18 +200,26 @@ final class StartupByteImage {
         }
     }
 
-    private void activateSegment(String key, PackImageFile.Image existing) {
+    private void activateSegment(String key) {
         String segment = segment(key);
         String locator = locator(segment);
         if (locator == null) {
             return;
         }
         String previous = activeSegments.put(locator, segment);
-        if (previous == null || previous.equals(segment) || !invalidatedSegments.add(previous)) {
+        if (previous == null || previous.equals(segment)) {
             return;
         }
-        loadedBytes.addAndGet(-existing.segmentBytes(previous));
-        removeRecordedSegment(previous);
+        synchronized (this) {
+            if (!invalidatedSegments.add(previous)) {
+                return;
+            }
+            long invalidBytes = invalidatedEntries.entrySet().stream()
+                    .filter(entry -> previous.equals(segment(entry.getKey())))
+                    .mapToLong(Map.Entry::getValue).sum();
+            loadedBytes.addAndGet(-(loadFuture().join().segmentBytes(previous) - invalidBytes));
+            removeRecordedSegment(previous);
+        }
     }
 
     private void registerLoadedSegment(String key) {
@@ -223,7 +241,21 @@ final class StartupByteImage {
 
     private boolean isInvalidated(String key) {
         String segment = segment(key);
-        return segment != null && invalidatedSegments.contains(segment);
+        return invalidatedEntries.containsKey(key)
+                || segment != null && invalidatedSegments.contains(segment);
+    }
+
+    private synchronized void invalidateEntry(PackImageFile.Image image, String key) {
+        if (loaded == null || loaded.getNow(null) != image) {
+            return;
+        }
+        long bytes = image.entryBytes(key);
+        if (invalidatedEntries.putIfAbsent(key, bytes) == null) {
+            String segment = segment(key);
+            if (segment == null || !invalidatedSegments.contains(segment)) {
+                loadedBytes.addAndGet(-bytes);
+            }
+        }
     }
 
     private static String segment(String key) {
