@@ -8,6 +8,8 @@
     "compat.LazyyyyyRendererFactoryMixin",
     "compat.LazyyyyyLayerDispatchMixin",
     "compat.ModernFixAuditMixin",
+    "compat.SupplementariesSignModelMixin",
+    "renderer.BlockEntityRenderDispatcherAccessor",
     "client.ForgeLoadingOverlayMixin",
     "client.KeyMappingRegistryMixin",
     "client.InputKeyRegistryMixin",

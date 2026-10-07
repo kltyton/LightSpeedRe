@@ -1,7 +1,6 @@
 package com.ccr4ft3r.lightspeed.client.renderer;
 
 import com.mojang.blaze3d.vertex.PoseStack;
-import com.mojang.logging.LogUtils;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
 import net.minecraft.client.renderer.blockentity.BlockEntityRendererProvider;
@@ -60,14 +59,13 @@ public final class LazyBlockEntityRenderer<T extends BlockEntity> implements Blo
                 try {
                     current = provider.create(context);
                 } catch (RuntimeException exception) {
-                    LogUtils.getLogger().warn(
-                            "Lazy block-entity renderer {} failed during first use; using no-op renderer",
-                            rendererId, exception);
-                    current = (blockEntity, partialTick, pose, buffers, packedLight, packedOverlay) -> { };
+                    throw new IllegalStateException("Failed to initialize block-entity renderer " + rendererId,
+                            exception);
                 }
                 delegate = current;
             }
             return current;
         }
     }
+
 }
