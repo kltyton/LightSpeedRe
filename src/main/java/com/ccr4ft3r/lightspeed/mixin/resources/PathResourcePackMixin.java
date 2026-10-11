@@ -6,8 +6,10 @@ import com.ccr4ft3r.lightspeed.compat.FusionPackCompat;
 import com.ccr4ft3r.lightspeed.interfaces.IPackResources;
 import com.ccr4ft3r.lightspeed.interfaces.IPathResourcePack;
 import com.google.common.collect.Maps;
+import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
+import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
+import com.llamalad7.mixinextras.sugar.Local;
 import net.minecraft.FileUtil;
-import net.minecraft.Util;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.packs.PackLocationInfo;
 import net.minecraft.server.packs.PackResources;
@@ -33,15 +35,16 @@ import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static com.ccr4ft3r.lightspeed.util.CacheUtil.HAS_RESOURCE_CACHE_DIR;
 
+/** Caches resource discovery and summarizes invalid filenames during cached and direct enumeration. */
 @Mixin(value = PathPackResources.class)
 public abstract class PathResourcePackMixin implements IPathResourcePack, IPackResources {
 
@@ -138,6 +141,8 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
         boolean[] fallbackToVanilla = {false};
         FileUtil.decomposePath(path).ifSuccess(parts -> {
             List<ResourceLocation> locations = new java.util.ArrayList<>();
+            int invalidPathCount = 0;
+            String firstInvalidPath = null;
             try {
                 Path namespaceRoot = lightspeed$resolve(type.getDirectory(), namespace).toAbsolutePath();
                 List<String> cachedPaths = lightspeed$getCachedFilePaths(type, namespace);
@@ -160,7 +165,9 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
                     String resourcePath = cachedPath.replace(candidate.getFileSystem().getSeparator(), "/");
                     ResourceLocation location = ResourceLocation.tryBuild(namespace, resourcePath);
                     if (location == null) {
-                        Util.logAndPauseIfInIde(String.format(Locale.ROOT, "Invalid path in pack: %s:%s, ignoring", namespace, resourcePath));
+                        if (invalidPathCount++ == 0) {
+                            firstInvalidPath = resourcePath;
+                        }
                     } else {
                         locations.add(location);
                     }
@@ -170,6 +177,10 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
                 LOGGER.warn("Lightspeed path index lookup failed for {}:{}; falling back to vanilla resource enumeration",
                         namespace, path, e);
                 return;
+            }
+            if (invalidPathCount > 0) {
+                LOGGER.warn("Ignoring {} invalid resource paths in {}:{} (first: {})",
+                        invalidPathCount, namespace, path, firstInvalidPath);
             }
             for (ResourceLocation location : locations) {
                 resourceOutput.accept(location, lightspeed$openResource(type, location));
@@ -191,6 +202,30 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
         lightspeed$resolvedPaths().clear();
         lightspeed$resourcePathSets().clear();
         lightspeed$scanFutures().clear();
+    }
+
+    @WrapOperation(method = "listPath", at = @At(value = "INVOKE",
+            target = "Ljava/util/stream/Stream;forEach(Ljava/util/function/Consumer;)V"))
+    private static void lightspeed$summarizeInvalidPaths(
+            Stream<Path> paths, Consumer<Path> output, Operation<Void> original,
+            @Local(argsOnly = true) String namespace, @Local(argsOnly = true) Path namespaceRoot) {
+        int[] invalidCount = {0};
+        String[] firstInvalidPath = {null};
+        original.call(paths, (Consumer<Path>) candidate -> {
+            String resourcePath = namespaceRoot.relativize(candidate).toString()
+                    .replace(candidate.getFileSystem().getSeparator(), "/");
+            if (ResourceLocation.tryBuild(namespace, resourcePath) == null) {
+                if (invalidCount[0]++ == 0) {
+                    firstInvalidPath[0] = resourcePath;
+                }
+            } else {
+                output.accept(candidate);
+            }
+        });
+        if (invalidCount[0] > 0) {
+            LOGGER.warn("Ignoring {} invalid resource paths under {} (first: {}:{})",
+                    invalidCount[0], namespaceRoot, namespace, firstInvalidPath[0]);
+        }
     }
 
     @Override
