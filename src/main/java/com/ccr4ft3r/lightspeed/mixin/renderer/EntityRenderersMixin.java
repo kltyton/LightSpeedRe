@@ -103,9 +103,8 @@ public abstract class EntityRenderersMixin {
 
     private static void lightspeed$logFallback(String rendererId, EntityRendererProvider<?> provider, RuntimeException failure) {
         if (LOGGED_FAILURES.add(rendererId)) {
-            LOGGER.warn("Lightspeed replaced failed entity renderer {} from {} with the vanilla no-op renderer: {}",
-                    rendererId, provider.getClass().getName(), failure.toString());
-            LOGGER.debug("Entity renderer fallback details for {}", rendererId, failure);
+            LOGGER.warn("Lightspeed replaced failed entity renderer {} from {} with the vanilla no-op renderer",
+                    rendererId, provider.getClass().getName(), failure);
         }
     }
 }
