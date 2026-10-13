@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.0.3
+
+### English
+
+- Fix invisible boats and chest boats with Jasione and initialization-time boat enum extensions (#19). Model-layer creation reads the live boat types instead of a stale enum snapshot. The reporter confirmed the fix in the affected modpack without clearing the cache again.
+- Summarize invalid resource paths during cached and direct pack scans (#18), preserving valid resources.
+- Remove the temporary model-layer diagnostic logging.
+
+### 中文
+
+- 修复共装 Jasione 与初始化期间扩展船枚举的模组时，船和箱船不可见的问题（#19）。模型层创建读取实际船型，报告者已在原整合包确认恢复，无需再次清理缓存。
+- 汇总缓存扫描和直接扫描中的无效资源路径告警（#18），保留合法资源。
+- 移除临时模型层诊断日志。
+
 ## 2.0.0
 
 ### 中文

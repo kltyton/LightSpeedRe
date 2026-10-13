@@ -16,7 +16,8 @@
     "model.MultiPartMixin",
     "model.MultivariantMixin",
     "renderer.ClientHooksMixin",
-    "renderer.EntityRenderersMixin"
+    "renderer.EntityRenderersMixin",
+    "renderer.LayerDefinitionsMixin"
   ],
   "mixins": [
     "compat.LightLoadCacheFlagsMixin",
