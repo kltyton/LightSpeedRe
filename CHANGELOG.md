@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.0.3
+
+### English
+
+- Fix entity renderer factory callbacks when Sinytra Connector and Fabric Rendering API are installed. Callbacks receive the actual renderer; other installations retain lazy entity renderer creation.
+- Prevent duplicate refmap entries during packaging.
+
+### 中文
+
+- 修复共装 Sinytra Connector 与 Fabric Rendering API 时实体渲染器工厂回调的类型转换问题。回调获得实际渲染器，其它环境保留实体渲染器延迟创建。
+- 修复打包时 refmap 重复的问题。
+
 ## 2.0.0
 
 ### 中文

@@ -195,6 +195,10 @@ tasks.named('processResources', ProcessResources).configure {
 tasks.named('jar', Jar).configure {
     archiveClassifier = 'slim'
     destinationDirectory = layout.buildDirectory.dir('intermediates')
+    // MixinGradle also contributes the refmap already copied for the runtime classpath.
+    filesMatching("${mod_id}.refmap.json") {
+        duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    }
     manifest {
         attributes([
                 "Specification-Title"     : mod_id,
