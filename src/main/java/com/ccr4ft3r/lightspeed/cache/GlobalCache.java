@@ -42,7 +42,6 @@ public final class GlobalCache {
     public static volatile boolean shouldParallelizeResourcePackLookup = true;
     public static volatile boolean shouldUseDedicatedResourceReloadExecutor = true;
     public static volatile boolean shouldIsolateModdedResourceReloadFailures = false;
-    public static volatile boolean shouldUseConnectorCompatibilityMode = true;
     public static volatile List<String> isolatedResourceReloadListenerPatterns = List.of();
 
     public static final Map<CharSequence, List<String>> SPLITTED_STRINGS_BY_SEQUENCE = Maps.newConcurrentMap();

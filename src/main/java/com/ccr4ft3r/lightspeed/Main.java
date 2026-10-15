@@ -21,7 +21,6 @@ import java.util.List;
 @Mod(ModConstants.MOD_ID)
 public class Main {
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static boolean loggedConnectorCompatibilityMode;
 
     @SuppressWarnings("removal")
     public Main() {
@@ -53,7 +52,6 @@ public class Main {
             GlobalCache.shouldCacheResourceExistence = LightspeedConfig.COMMON.cacheResourceExistence.get();
             GlobalCache.shouldVerifyJarHash = LightspeedConfig.COMMON.verifyJarHash.get();
             GlobalCache.shouldIsolateModdedResourceReloadFailures = LightspeedConfig.COMMON.isolateModdedResourceReloadFailures.get();
-            GlobalCache.shouldUseConnectorCompatibilityMode = LightspeedConfig.COMMON.connectorCompatibilityMode.get();
             GlobalCache.isolatedResourceReloadListenerPatterns = LightspeedConfig.COMMON.isolatedResourceReloadListenerPatterns.get()
                     .stream()
                     .map(String::valueOf)
@@ -67,20 +65,6 @@ public class Main {
             // Forge has not attached the TOML yet; failure isolation remains opt-in.
             GlobalCache.shouldIsolateModdedResourceReloadFailures = false;
             GlobalCache.isolatedResourceReloadListenerPatterns = List.of();
-        }
-
-        if (GlobalCache.shouldUseConnectorCompatibilityMode && ModList.get().isLoaded(ModConstants.CONNECTOR_ID)) {
-            GlobalCache.shouldAsyncPreloadPacks = false;
-            GlobalCache.shouldUseDedicatedResourceReloadExecutor = false;
-            GlobalCache.shouldParallelizeResourcePackLookup = false;
-            GlobalCache.shouldCacheWalkedPaths = false;
-            GlobalCache.shouldCacheEmptyNamespaces = false;
-            GlobalCache.shouldCacheResourceExistence = false;
-            GlobalCache.shouldIsolateModdedResourceReloadFailures = false;
-            if (!loggedConnectorCompatibilityMode) {
-                LOGGER.warn("Lightspeed Sinytra Connector compatibility mode is active; resource-pack parallelism, path caches, and reload failure isolation are disabled");
-                loggedConnectorCompatibilityMode = true;
-            }
         }
 
         if (ModList.get().isLoaded(ModConstants.SOPHISTICATED_STORAGE_ID) && ModList.get().isLoaded(ModConstants.JSON_THINGS_ID)) {
