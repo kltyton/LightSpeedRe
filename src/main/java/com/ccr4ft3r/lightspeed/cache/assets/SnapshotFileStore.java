@@ -9,7 +9,7 @@ import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.util.Comparator;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.LongAdder;
@@ -29,6 +29,7 @@ public final class SnapshotFileStore {
     private volatile boolean loaded;
     private volatile boolean dirty;
     private long totalBytes;
+    private long revision;
 
     public SnapshotFileStore(Path file, int magic, int version, int maxEntries,
                              int maxEntryBytes, long maxTotalBytes) {
@@ -51,26 +52,34 @@ public final class SnapshotFileStore {
         return value.clone();
     }
 
-    public synchronized boolean put(String key, byte[] value) {
+    public boolean put(String key, byte[] value) {
         ensureLoaded();
         if (key == null || key.isBlank() || value == null || value.length > maxEntryBytes) {
             return false;
         }
-        byte[] previous = entries.get(key);
-        long nextTotal = totalBytes - (previous == null ? 0 : previous.length) + value.length;
-        if ((previous == null && entries.size() >= maxEntries) || nextTotal > maxTotalBytes) {
-            return false;
+        synchronized (entries) {
+            byte[] previous = entries.get(key);
+            long nextTotal = totalBytes - (previous == null ? 0 : previous.length) + value.length;
+            if ((previous == null && entries.size() >= maxEntries) || nextTotal > maxTotalBytes) {
+                return false;
+            }
+            entries.put(key, value.clone());
+            totalBytes = nextTotal;
+            revision++;
+            dirty = true;
         }
-        entries.put(key, value.clone());
-        totalBytes = nextTotal;
-        dirty = true;
         return true;
     }
 
     public synchronized void persist() {
-        ensureLoaded();
-        if (!dirty) {
-            return;
+        Map<String, byte[]> snapshot;
+        long snapshotRevision;
+        synchronized (entries) {
+            if (!dirty) {
+                return;
+            }
+            snapshot = new HashMap<>(entries);
+            snapshotRevision = revision;
         }
         Path parent = file.toAbsolutePath().getParent();
         if (parent == null) {
@@ -85,8 +94,8 @@ public final class SnapshotFileStore {
                     new BufferedOutputStream(Files.newOutputStream(temporary)))) {
                 output.writeInt(magic);
                 output.writeInt(version);
-                output.writeInt(entries.size());
-                for (Map.Entry<String, byte[]> entry : entries.entrySet().stream()
+                output.writeInt(snapshot.size());
+                for (Map.Entry<String, byte[]> entry : snapshot.entrySet().stream()
                         .sorted(Map.Entry.comparingByKey()).toList()) {
                     output.writeUTF(entry.getKey());
                     output.writeInt(entry.getValue().length);
@@ -94,7 +103,11 @@ public final class SnapshotFileStore {
                 }
             }
             moveIntoPlace(temporary, file);
-            dirty = false;
+            synchronized (entries) {
+                if (revision == snapshotRevision) {
+                    dirty = false;
+                }
+            }
         } catch (IOException | RuntimeException exception) {
             failures.increment();
         } finally {
