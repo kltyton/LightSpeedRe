@@ -1,6 +1,7 @@
 {
   "required": true,
   "package": "com.ccr4ft3r.lightspeed.mixin",
+  "plugin": "com.ccr4ft3r.lightspeed.mixin.registry.RegistryMixinPlugin",
   "compatibilityLevel": "JAVA_17",
   "refmap": "lightspeed.refmap.json",
   "client": [
@@ -9,6 +10,7 @@
     "compat.LazyyyyyLayerDispatchMixin",
     "compat.ModernFixAuditMixin",
     "compat.SupplementariesSignModelMixin",
+    "compat.NetMusicItemRendererMixin",
     "renderer.BlockEntityRenderDispatcherAccessor",
     "client.ForgeLoadingOverlayMixin",
     "client.KeyMappingRegistryMixin",

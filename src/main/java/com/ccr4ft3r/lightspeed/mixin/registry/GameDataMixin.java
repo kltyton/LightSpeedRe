@@ -26,8 +26,8 @@ public abstract class GameDataMixin {
                 () -> original.call(loader, event));
     }
 
-    @WrapOperation(method = "postRegisterEvents", at = @At(value = "INVOKE",
-            target = "Lnet/minecraftforge/registries/ObjectHolderRegistry;applyObjectHolders(Ljava/util/function/Predicate;)V"))
+    @WrapOperation(method = "postRegisterEvents", require = 0, at = @At(value = "INVOKE",
+             target = "Lnet/minecraftforge/registries/ObjectHolderRegistry;applyObjectHolders(Ljava/util/function/Predicate;)V"))
     private static void lightspeed$routeRegistryHolders(Predicate<ResourceLocation> filter, Operation<Void> original,
             @Local ResourceKey<?> registryKey) {
         ObjectHolderDispatch.withRegistryFilter(filter, registryKey.location(),
