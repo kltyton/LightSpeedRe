@@ -1,0 +1,16 @@
+apply from: file('../../gradle/target-conventions/base.gradle')
+
+neoForge {
+    version = loader_version
+    runs {
+        client { client() }
+        server { server(); programArgument '--nogui' }
+        data {
+            if ((java_version as int) >= 25) { clientData() } else { data() }
+            programArguments.addAll('--mod', mod_id, '--all', '--output', file('src/generated/resources').absolutePath,
+                    *project.ext.templeDatagenExistingArgs)
+        }
+    }
+    mods { "${mod_id}" { sourceSet sourceSets.main } }
+}
+apply from: file('../../gradle/target-conventions/publish.gradle')

@@ -101,6 +101,9 @@ $RECYCLE.BIN/
 *.lnk
 
 .gradle
+.temple/
+run-data/
+repo/
 build/
 
 # Ignore Gradle GUI config

@@ -1,0 +1,17 @@
+apply from: file('../../gradle/target-conventions/base.gradle')
+
+legacyForge {
+    version = "${minecraft_version}-${loader_version}"
+    validateAccessTransformers = true
+    runs {
+        client { client() }
+        server { server(); programArgument '--nogui' }
+        data {
+            data()
+            programArguments.addAll('--mod', mod_id, '--all', '--output', file('src/generated/resources').absolutePath,
+                    *project.ext.templeDatagenExistingArgs)
+        }
+    }
+    mods { "${mod_id}" { sourceSet sourceSets.main } }
+}
+apply from: file('../../gradle/target-conventions/publish.gradle')

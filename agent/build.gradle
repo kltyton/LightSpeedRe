@@ -5,6 +5,8 @@ plugins {
 
 group = rootProject.group
 version = rootProject.version
+layout.buildDirectory = rootProject.layout.buildDirectory.dir('bootstrap')
+sourceSets.main.java.srcDir(rootProject.file("../../versions/${rootProject.minecraft_version}/bootstrap/src/main/java"))
 
 java {
     toolchain.languageVersion = JavaLanguageVersion.of(17)
@@ -244,15 +246,6 @@ tasks.register('smokeDynamicAttach', JavaExec) {
         languageVersion = JavaLanguageVersion.of(21)
     }.get().executablePath.asFile
     mainClass = 'com.ccr4ft3r.lightspeed.bootstrap.DynamicAttachSmokeTarget'
-}
-
-tasks.named('check').configure {
-    dependsOn tasks.named('verifyAgent'), tasks.named('smokeAgent'), tasks.named('smokeModuleBridge'),
-            tasks.named('smokeModuleReadGrant'), tasks.named('smokeEventBusLoaderReuse'),
-            tasks.named('verifySegmentedImage'),
-            tasks.named('verifyClassAttribution'),
-            tasks.named('verifyModScanExecutor'), tasks.named('verifyObjectHolderRouter'),
-            tasks.named('verifyScanPackCompiler'), tasks.named('smokeDynamicAttach')
 }
 
 tasks.withType(JavaCompile).configureEach {

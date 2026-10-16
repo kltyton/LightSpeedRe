@@ -1,0 +1,100 @@
+import groovy.json.JsonOutput
+
+def templeRoot = file('../..')
+def shared = new Properties()
+templeRoot.toPath().resolve('gradle.properties').toFile().withReader('UTF-8') { shared.load(it) }
+shared.each { key, value ->
+    if (!project.hasProperty(key.toString())) {
+        ext.set(key.toString(), value.toString())
+    }
+}
+if (!(mod_id ==~ /[a-z][a-z0-9_]{1,63}/) || !(mod_group_id ==~ /[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+/)) {
+    throw new GradleException('Invalid mod_id or mod_group_id in root gradle.properties')
+}
+group = mod_group_id
+ext.mod_version = "${minecraft_version}-${shared.getProperty('mod_version')}"
+version = mod_version
+def javaPackage = findProperty('mod_java_package') ?: mod_group_id
+base.archivesName = "${mod_id}-${loader}-${minecraft_version}"
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(java_version as int)
+    withSourcesJar()
+}
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = java_version as int
+}
+
+def layers = shared_sources.split(',').collect { name ->
+    def directory = new File(templeRoot, name.trim()).canonicalFile
+    if (directory == templeRoot.canonicalFile || !directory.toPath().startsWith(templeRoot.canonicalFile.toPath()) ||
+            directory.toPath().startsWith(new File(templeRoot, 'targets').canonicalFile.toPath())) {
+        throw new GradleException("Invalid shared source layer: ${name}")
+    }
+    directory
+}
+def resourceLayers = [file('src/main/resources')] + layers.reverse().collect { new File(it, 'src/main/resources') }
+project.ext.templeDatagenExistingArgs = resourceLayers.findAll { it.isDirectory() }.reverse()
+        .collectMany { ['--existing', it.absolutePath] } as String[]
+sourceSets {
+    main {
+        java.srcDirs(layers.collect { new File(it, 'src/main/java') })
+        resources.setSrcDirs([resourceLayers.first(), file('src/generated/resources')] + resourceLayers.drop(1))
+    }
+    test {
+        java.srcDirs(layers.collect { new File(it, 'src/test/java') })
+        resources.srcDirs(layers.collect { new File(it, 'src/test/resources') })
+    }
+}
+def constantsDirectory = layout.buildDirectory.dir('generated/sources/temple')
+def generateConstants = tasks.register('generateTempleConstants') {
+    inputs.properties([mod_id: mod_id, mod_java_package: javaPackage])
+    outputs.dir(constantsDirectory)
+    doLast {
+        def destination = constantsDirectory.get().file(javaPackage.replace('.', '/') + '/BuildInfo.java').asFile
+        destination.parentFile.mkdirs()
+        destination.setText("package ${javaPackage};\n\npublic final class BuildInfo {\n" +
+                "    public static final String MOD_ID = ${JsonOutput.toJson(mod_id)};\n" +
+                "    private BuildInfo() {}\n}\n", 'UTF-8')
+    }
+}
+sourceSets.main.java.srcDir(constantsDirectory)
+tasks.named('compileJava') { dependsOn generateConstants }
+tasks.named('sourcesJar', Jar) {
+    destinationDirectory = layout.buildDirectory.dir('intermediates')
+    dependsOn generateConstants
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+tasks.named('processResources', ProcessResources) {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    def raw = [mod_id: mod_id, mod_name: mod_name, mod_license: mod_license, mod_version: mod_version,
+               mod_authors: mod_authors, mod_description: mod_description, mod_group_id: mod_group_id,
+               minecraft_version: minecraft_version, minecraft_version_range: minecraft_version_range,
+               loader_version: loader_version, loader_version_range: loader_version_range,
+               fml_version_range: findProperty('fml_version_range') ?: '',
+               java_version: java_version]
+    if (loader == 'forge') {
+        raw.forge_version = forge_version
+        raw.forge_version_range = forge_version_range
+    }
+    def escaped = raw.collectEntries { key, value ->
+        def encoded = JsonOutput.toJson(value.toString())
+        [(key): encoded.substring(1, encoded.length() - 1)]
+    }
+    inputs.properties(raw)
+    filesMatching(['fabric.mod.json', 'META-INF/mods.toml', 'META-INF/neoforge.mods.toml']) {
+        expand escaped
+    }
+}
+tasks.named('jar', Jar) {
+    from(templeRoot.toPath().resolve('LICENSE').toFile()) { rename { "LICENSE_${mod_id}" } }
+}
+repositories { mavenCentral() }
+def localJars = fileTree(dir: file('libs'), include: ['*.jar'], exclude: ['*-sources.jar', '*-javadoc.jar'])
+dependencies {
+    if (loader == 'fabric' && (java_version as int) < 25) {
+        modImplementation localJars
+    } else {
+        implementation localJars
+    }
+}

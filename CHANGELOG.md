@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.0.4 (NeoForge 1.21.1)
+
+- Preserve configured resource caches and parallel loading with Connector or Continuity.
+- Preserve renderer and model layer failures instead of substituting empty renderers or skipping layer definitions.
+- Require explicit listener class prefixes for opt-in resource reload failure isolation.
+
+- 共装 Connector 或 Continuity 时保留资源缓存和并行加载配置。
+- 保留渲染器和模型层提供方错误，不再替换为空渲染器或跳过模型层定义。
+- 资源重载失败隔离默认关闭，启用时需要明确指定监听器类名前缀。
+
 ## 2.0.4
 
 ### English

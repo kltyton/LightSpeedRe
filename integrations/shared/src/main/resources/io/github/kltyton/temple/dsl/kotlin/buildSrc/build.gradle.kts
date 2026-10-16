@@ -1,0 +1,20 @@
+plugins {
+    groovy
+    `java-gradle-plugin`
+}
+sourceSets.main {
+    java.srcDir("../integrations/shared/src/main/java")
+    resources.srcDir("../integrations/shared/src/main/resources")
+}
+dependencies { implementation(localGroovy()) }
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+tasks.withType<GroovyCompile>().configureEach { groovyOptions.encoding = "UTF-8" }
+gradlePlugin {
+    plugins.create("temple") {
+        id = "io.github.kltyton.temple"
+        implementationClass = "io.github.kltyton.temple.gradle.TemplePlugin"
+    }
+}

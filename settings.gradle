@@ -1,17 +1,33 @@
-pluginManagement {
-    repositories {
-        gradlePluginPortal()
-        maven {
-            name = 'MinecraftForge'
-            url = 'https://maven.minecraftforge.net/'
-        }
-        mavenCentral()
+pluginManagement { repositories { gradlePluginPortal(); mavenCentral() } }
+plugins { id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0' }
+
+def identity = new Properties()
+file('gradle.properties').withReader('UTF-8') { identity.load(it) }
+rootProject.name = identity.getProperty('mod_name', 'KltytonTemple')
+def wrapperRoots = [file('gradle/wrapper')]
+file('targets').listFiles()?.findAll { it.isDirectory() }?.each { wrapperRoots.add(new File(it, 'gradle/wrapper')) }
+wrapperRoots.each { directory ->
+    def encoded = new File(directory, 'kltyton-wrapper.base64')
+    def wrapper = new File(directory, 'gradle-wrapper.jar')
+    if (encoded.isFile() && !wrapper.exists()) {
+        wrapper.bytes = Base64.decoder.decode(encoded.getText('UTF-8').trim())
     }
 }
-
-plugins {
-    id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0'
+def targets = file('targets').listFiles()?.findAll { it.isDirectory() }?.sort { it.name } ?: []
+if (targets.empty) { throw new GradleException('No target directories found') }
+def active = file('.temple/active-target')
+def selected = active.exists() ? active.getText('UTF-8').trim() : identity.getProperty('temple_default_target')
+def target = targets.find { it.name == selected } ?: targets.first()
+def packageName = identity.getProperty('mod_java_package', identity.getProperty('mod_group_id'))
+if (!(packageName ==~ /[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+/) ||
+        !(identity.getProperty('mod_id', '') ==~ /[a-z][a-z0-9_]{1,63}/)) {
+    throw new GradleException('Invalid mod identity')
 }
-
-rootProject.name = 'lightspeed'
-include 'agent'
+targets.each { directory ->
+def constants = new File(directory, "build/generated/sources/temple/${packageName.replace('.', '/')}/BuildInfo.java")
+constants.parentFile.mkdirs()
+constants.setText("package ${packageName};\n\npublic final class BuildInfo {\n" +
+        "    public static final String MOD_ID = \"${identity.getProperty('mod_id')}\";\n" +
+        "    private BuildInfo() {}\n}\n", 'UTF-8')
+}
+// Targets are linked as independent IDEA Gradle projects, each with its own Wrapper.
