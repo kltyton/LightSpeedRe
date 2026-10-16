@@ -1,4 +1,5 @@
 {
+  "lightspeed.startup_time": "Lightspeed：JVM 启动至主菜单 %s 秒",
   "screen.lightspeed.startup_advice.title": "Lightspeed 启动建议",
   "screen.lightspeed.startup_advice.message.java": "如果你希望启用仅限 Java 21 的启动优化，可以考虑使用 Java 21。当前 Java 版本仍可继续使用。",
   "screen.lightspeed.startup_advice.message.agent": "Lightspeed Agent 目前尚未生效。你可以在方便时复制下方参数并添加到启动器的 JVM 参数中，再重新打开启动器；当前游戏仍可正常使用。",

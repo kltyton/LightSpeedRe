@@ -2,6 +2,14 @@ import groovy.json.JsonOutput
 import java.util.Properties
 
 val templeRoot = file("../..").canonicalFile
+val outputVariant = providers.gradleProperty("lightspeed.outputVariant").orNull
+if (outputVariant != null) {
+    require(Regex("[a-z0-9][a-z0-9-]{0,47}").matches(outputVariant)) { "Invalid lightspeed.outputVariant" }
+    layout.buildDirectory.set(layout.projectDirectory.dir("build/candidates/$outputVariant"))
+    subprojects {
+        layout.buildDirectory.set(rootProject.layout.buildDirectory.dir("projects/$name"))
+    }
+}
 val shared = Properties().apply { templeRoot.resolve("gradle.properties").reader(Charsets.UTF_8).use { load(it) } }
 shared.forEach { key, value -> if (!project.hasProperty(key.toString())) extra[key.toString()] = value.toString() }
 fun setting(name: String) = project.property(name).toString()
@@ -29,11 +37,12 @@ val layers = setting("shared_sources").split(',').map { name ->
     directory
 }
 val resourceLayers = listOf(file("src/main/resources")) + layers.reversed().map { it.resolve("src/main/resources") }
+val javaLayers = listOf(file("src/main/java")) + layers.reversed().map { it.resolve("src/main/java") }
 extra["templeDatagenExistingArgs"] = resourceLayers.filter { it.isDirectory }.asReversed()
         .flatMap { listOf("--existing", it.absolutePath) }.toTypedArray()
 extensions.configure<SourceSetContainer> {
     named("main") {
-        java.srcDirs(layers.map { it.resolve("src/main/java") })
+        java.setSrcDirs(javaLayers)
         resources.setSrcDirs(listOf(resourceLayers.first(), file("src/generated/resources")) + resourceLayers.drop(1))
     }
     named("test") {

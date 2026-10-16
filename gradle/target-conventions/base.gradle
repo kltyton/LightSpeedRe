@@ -1,6 +1,16 @@
 import groovy.json.JsonOutput
 
 def templeRoot = file('../..')
+def outputVariant = providers.gradleProperty('lightspeed.outputVariant').orNull
+if (outputVariant != null) {
+    if (!(outputVariant ==~ /[a-z0-9][a-z0-9-]{0,47}/)) {
+        throw new GradleException('Invalid lightspeed.outputVariant')
+    }
+    layout.buildDirectory = layout.projectDirectory.dir("build/candidates/${outputVariant}")
+    subprojects { child ->
+        child.layout.buildDirectory = rootProject.layout.buildDirectory.dir("projects/${child.name}")
+    }
+}
 def shared = new Properties()
 templeRoot.toPath().resolve('gradle.properties').toFile().withReader('UTF-8') { shared.load(it) }
 shared.each { key, value ->
@@ -34,11 +44,12 @@ def layers = shared_sources.split(',').collect { name ->
     directory
 }
 def resourceLayers = [file('src/main/resources')] + layers.reverse().collect { new File(it, 'src/main/resources') }
+def javaLayers = [file('src/main/java')] + layers.reverse().collect { new File(it, 'src/main/java') }
 project.ext.templeDatagenExistingArgs = resourceLayers.findAll { it.isDirectory() }.reverse()
         .collectMany { ['--existing', it.absolutePath] } as String[]
 sourceSets {
     main {
-        java.srcDirs(layers.collect { new File(it, 'src/main/java') })
+        java.setSrcDirs(javaLayers)
         resources.setSrcDirs([resourceLayers.first(), file('src/generated/resources')] + resourceLayers.drop(1))
     }
     test {

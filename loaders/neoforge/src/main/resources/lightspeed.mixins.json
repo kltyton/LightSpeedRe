@@ -1,0 +1,35 @@
+{
+  "required": true,
+  "plugin": "com.ccr4ft3r.lightspeed.compat.mixin.LightspeedMixinPlugin",
+  "package": "com.ccr4ft3r.lightspeed.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "compat.LightLoadArchivePersistenceMixin",
+    "compat.ModernFixAuditMixin",
+    "client.NeoForgeLoadingOverlayMixin",
+    "MinecraftMainMixin",
+    "resources.MinecraftReloadExecutorMixin",
+    "misc.KeyValueConditionMixin",
+    "misc.MaterialMixin",
+    "misc.SelectorMixin",
+    "model.BlockModelMixin",
+    "model.MultiPartMixin",
+    "model.MultivariantMixin",
+    "renderer.LayerDefinitionsMixin"
+  ],
+  "mixins": [
+    "compat.LightLoadCacheFlagsMixin",
+    "misc.ResourceLocationMixin",
+    "misc.ResourcePackLoaderMixin",
+    "misc.StateDefinitonMixin",
+    "resources.AbstractPackResourcesMixin",
+    "resources.FallbackResourceManagerMixin",
+    "resources.FallbackResourceManagerPackEntryAccessor",
+    "resources.ZipPackIndexMixin",
+    "resources.PathResourcePackMixin",
+    "resources.SharedZipFileAccessAccessor",
+    "resources.SimpleReloadInstanceMixin",
+    "resources.VanillaPackResourcesMixin"
+  ],
+  "minVersion": "0.8"
+}

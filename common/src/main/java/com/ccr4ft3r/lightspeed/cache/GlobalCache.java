@@ -6,7 +6,6 @@ import com.ccr4ft3r.lightspeed.platform.StartupCachePlatform;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 import com.mojang.logging.LogUtils;
-import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.packs.PackResources;
 import net.minecraft.server.packs.PackType;
 import net.minecraft.server.packs.resources.IoSupplier;
@@ -31,6 +30,7 @@ import java.util.concurrent.TimeoutException;
 
 import static com.ccr4ft3r.lightspeed.cache.persistence.CacheFiles.*;
 import java.util.function.Supplier;
+import java.util.function.Function;
 
 public final class GlobalCache {
     private static final Logger LOGGER = LogUtils.getLogger();
@@ -186,9 +186,15 @@ public final class GlobalCache {
         return StartupCachePlatform.resourceReloadExecutor(fallback);
     }
 
-    public static IoSupplier<InputStream> findFirstResource(List<PackResources> packs, PackType type,
-                                                             ResourceLocation location) {
-        return findFirstResourceSequential(packs, type, location);
+    public static IoSupplier<InputStream> findFirstResource(List<PackResources> packs,
+            Function<PackResources, IoSupplier<InputStream>> lookup) {
+        for (PackResources pack : packs) {
+            IoSupplier<InputStream> supplier = lookup.apply(pack);
+            if (supplier != null) {
+                return supplier;
+            }
+        }
+        return null;
     }
 
     public static void disablePersistAndClear() {
@@ -274,17 +280,6 @@ public final class GlobalCache {
                 LOGGER.warn("Lightspeed cache task failed before persist", exception.getCause());
             }
         }
-    }
-
-    private static IoSupplier<InputStream> findFirstResourceSequential(List<PackResources> packs, PackType type,
-                                                                        ResourceLocation location) {
-        for (PackResources pack : packs) {
-            IoSupplier<InputStream> supplier = pack.getResource(type, location);
-            if (supplier != null) {
-                return supplier;
-            }
-        }
-        return null;
     }
 
     public static CompletableFuture<Void> loadPersistedCachesAsync() {

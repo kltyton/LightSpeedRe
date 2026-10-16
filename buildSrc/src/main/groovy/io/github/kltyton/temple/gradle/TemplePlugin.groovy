@@ -155,7 +155,13 @@ final class TemplePlugin implements Plugin<Project> {
             classpath = project.files(new File(target.directory, 'gradle/wrapper/gradle-wrapper.jar'))
             mainClass.set('org.gradle.wrapper.GradleWrapperMain')
             workingDir target.directory
-            args ":${action}", '--console=plain', '--no-daemon'
+            boolean distributionClient = action == 'runClient' &&
+                    project.findProperty('lightspeed.distributionRun') == 'true'
+            args ":${distributionClient ? 'runDistributionClient' : action}", '--console=plain', '--no-daemon'
+            ['lightspeed.distributionRun', 'lightspeed.runDirectory', 'lightspeed.outputVariant'].each { key ->
+                def value = project.findProperty(key)
+                if (value != null) args "-P${key}=${value}"
+            }
             doFirst {
                 File wrapper = new File(target.directory, 'gradle/wrapper/gradle-wrapper.jar')
                 if (!wrapper.isFile()) { throw new IllegalArgumentException('先点击 temple > setupProject 初始化 Wrapper') }

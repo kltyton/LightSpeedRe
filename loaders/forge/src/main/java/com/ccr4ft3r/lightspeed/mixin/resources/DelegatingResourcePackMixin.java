@@ -40,7 +40,8 @@ public abstract class DelegatingResourcePackMixin {
     public void getResourceHeadInjected(PackType type, ResourceLocation location, CallbackInfoReturnable<IoSupplier<InputStream>> cir) {
         if (!GlobalCache.isEnabled || !GlobalCache.shouldParallelizeResourcePackLookup)
             return;
-        IoSupplier<InputStream> result = GlobalCache.findFirstResource(getCandidatePacks(type, location), type, location);
+        IoSupplier<InputStream> result = GlobalCache.findFirstResource(getCandidatePacks(type, location),
+                pack -> pack.getResource(type, location));
         cir.setReturnValue(result);
     }
 }

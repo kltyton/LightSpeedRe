@@ -7,6 +7,7 @@ import com.ccr4ft3r.lightspeed.startup.metrics.StartupMetrics;
 import com.mojang.logging.LogUtils;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.TitleScreen;
+import net.minecraft.network.chat.Component;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.EventPriority;
 import net.neoforged.bus.api.SubscribeEvent;
@@ -18,19 +19,15 @@ import net.neoforged.neoforge.client.event.ScreenEvent;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
 import net.neoforged.neoforge.internal.BrandingControl;
 
-import java.lang.management.ManagementFactory;
-import java.lang.reflect.Field;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.Locale;
 
 @EventBusSubscriber(modid = ModConstants.MOD_ID, value = Dist.CLIENT)
 public class TitleScreenInjector {
 
     private static boolean launchComplete = false;
+    private static Component launchTime;
+    private static int brandingLines;
 
-    @SuppressWarnings({"InstantiationOfUtilityClass", "unchecked"})
     @SubscribeEvent(priority = EventPriority.LOWEST)
     public static void onScreenInit(ScreenEvent.Init.Post event) {
         if (!(event.getScreen() instanceof TitleScreen) || launchComplete || !ready())
@@ -46,27 +43,6 @@ public class TitleScreenInjector {
     private static void finishTitleInit() {
         launchComplete = true;
         StartupMetrics.mark("title-screen-init");
-        try {
-            long secondsToStart = ManagementFactory.getRuntimeMXBean().getUptime() / 1000;
-            LogUtils.getLogger().info("Lightspeed: Launch took {}s", secondsToStart);
-            BrandingControl brandingControl = new BrandingControl();
-
-            Field f = BrandingControl.class.getDeclaredField("brandings");
-            f.setAccessible(true);
-            Method computeBranding = BrandingControl.class.getDeclaredMethod("computeBranding");
-            computeBranding.setAccessible(true);
-            computeBranding.invoke(null);
-
-            List<String> brandings = new ArrayList<>((List<String>) f.get(brandingControl));
-            if (brandings.size() > 1) {
-                List<String> newBrandings = new ArrayList<>(brandings);
-                f.set(brandingControl, newBrandings);
-                newBrandings.add("Lightspeed: Launch took " + secondsToStart + "s");
-            }
-        } catch (NoSuchFieldException | NoSuchMethodException | IllegalAccessException |
-                 InvocationTargetException e) {
-            LogUtils.getLogger().error("Cannot add launch time to title screen", e);
-        }
         BootstrapAgentBridge.persistResourceImage();
         GlobalCache.finishStartupCaches();
     }
@@ -80,8 +56,20 @@ public class TitleScreenInjector {
         if (!launchComplete && ready()) {
             finishTitleInit();
         }
-        if (launchComplete && minecraft.getOverlay() == null) {
-            StartupMetrics.mark("title-screen-operable");
+        if (launchComplete && minecraft.getOverlay() == null && StartupMetrics.mark("title-screen-operable")) {
+            String seconds = String.format(Locale.ROOT, "%.3f", StartupMetrics.completedStartupMillis() / 1000.0);
+            launchTime = Component.translatable("lightspeed.startup_time", seconds);
+            BrandingControl.forEachLine(true, false, (index, line) -> brandingLines = index + 1);
+            LogUtils.getLogger().info("Lightspeed: Launch took {}s (JVM start to title-screen-operable)", seconds);
+        }
+    }
+
+    @SubscribeEvent
+    public static void onScreenRender(ScreenEvent.Render.Post event) {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (launchTime != null && event.getScreen() instanceof TitleScreen && minecraft.getOverlay() == null) {
+            event.getGuiGraphics().drawString(minecraft.font, launchTime, 2,
+                    event.getScreen().height - 10 - brandingLines * 10, 0xFFFFFFFF);
         }
     }
 }

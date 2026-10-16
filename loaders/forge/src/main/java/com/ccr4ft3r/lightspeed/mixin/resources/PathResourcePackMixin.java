@@ -242,7 +242,7 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
         if (bootstrapPaths != null) {
             bootstrapPaths.forEach(emit);
         } else {
-            index.forEachUnder(path, emit);
+            index.forEachAtOrUnder(path, emit);
         }
         ci.cancel();
     }

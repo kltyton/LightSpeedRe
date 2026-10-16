@@ -4,14 +4,14 @@ import com.ccr4ft3r.lightspeed.cache.GlobalCache;
 import com.ccr4ft3r.lightspeed.cache.persistence.CacheFiles;
 import com.ccr4ft3r.lightspeed.interfaces.IPackResources;
 import com.google.common.collect.Maps;
-import net.minecraft.SharedConstants;
-import net.minecraft.resources.ResourceLocation;
+import com.ccr4ft3r.lightspeed.platform.LoaderEnvironment;
 import net.minecraft.server.packs.PackType;
 import net.minecraft.server.packs.VanillaPackResources;
 import net.minecraft.server.packs.resources.IoSupplier;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Coerce;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
@@ -39,7 +39,7 @@ public abstract class VanillaPackResourcesMixin implements IPackResources {
             return;
 
         GlobalCache.add(this);
-        lightspeed$versionId = SharedConstants.getCurrentVersion().getId();
+        lightspeed$versionId = LoaderEnvironment.gameVersion();
 
         lightspeed$existencePerClientResource = PERSISTED_EXISTENCES_BY_MOD.computeIfAbsent(
                 lightspeed$versionId + "-client", k -> Maps.newConcurrentMap());
@@ -50,7 +50,7 @@ public abstract class VanillaPackResourcesMixin implements IPackResources {
     }
 
     @Inject(method = "getResource", at = @At("HEAD"), cancellable = true)
-    public void getResourceHeadInjected(PackType packType, ResourceLocation location, CallbackInfoReturnable<IoSupplier<InputStream>> cir) {
+    public void getResourceHeadInjected(PackType packType, @Coerce Object location, CallbackInfoReturnable<IoSupplier<InputStream>> cir) {
         if (!GlobalCache.isEnabled || !GlobalCache.shouldCacheResourceExistence)
             return;
 
@@ -62,7 +62,7 @@ public abstract class VanillaPackResourcesMixin implements IPackResources {
     }
 
     @Inject(method = "getResource", at = @At("RETURN"))
-    public void getResourceReturnInjected(PackType packType, ResourceLocation location, CallbackInfoReturnable<IoSupplier<InputStream>> cir) {
+    public void getResourceReturnInjected(PackType packType, @Coerce Object location, CallbackInfoReturnable<IoSupplier<InputStream>> cir) {
         if (!GlobalCache.isEnabled || !GlobalCache.shouldCacheResourceExistence)
             return;
 

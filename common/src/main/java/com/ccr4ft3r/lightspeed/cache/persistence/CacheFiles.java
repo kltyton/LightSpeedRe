@@ -1,7 +1,6 @@
 package com.ccr4ft3r.lightspeed.cache.persistence;
 
 import com.mojang.logging.LogUtils;
-import net.minecraft.SharedConstants;
 import com.ccr4ft3r.lightspeed.platform.LoaderEnvironment;
 import org.slf4j.Logger;
 
@@ -42,7 +41,7 @@ public final class CacheFiles {
 
     private static String gameVersion() {
         try {
-            return SharedConstants.getCurrentVersion().getId();
+            return LoaderEnvironment.gameVersion();
         } catch (IllegalStateException exception) {
             return "uninitialized";
         }

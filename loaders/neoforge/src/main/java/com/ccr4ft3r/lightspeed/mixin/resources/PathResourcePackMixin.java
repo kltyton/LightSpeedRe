@@ -2,6 +2,7 @@ package com.ccr4ft3r.lightspeed.mixin.resources;
 
 import com.ccr4ft3r.lightspeed.cache.GlobalCache;
 import com.ccr4ft3r.lightspeed.cache.resource.ResourcePackCacheKey;
+import com.ccr4ft3r.lightspeed.cache.resource.OrderedResourcePathIndex;
 import com.ccr4ft3r.lightspeed.compat.FusionPackCompat;
 import com.ccr4ft3r.lightspeed.interfaces.IPackResources;
 import com.ccr4ft3r.lightspeed.interfaces.IPathResourcePack;
@@ -59,6 +60,8 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
     private Map<PackType, Map<String, List<String>>> lightspeed$relativeFilePathsByPackType;
     @Unique
     private Map<PackType, Map<String, Set<String>>> lightspeed$indexedResourcePathsByPackType;
+    @Unique
+    private final Map<PackType, Map<String, OrderedResourcePathIndex>> lightspeed$listingIndexes = Maps.newConcurrentMap();
     @Unique
     private Map<String, CompletableFuture<List<String>>> lightspeed$resourceListScans;
     @Unique
@@ -141,8 +144,8 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
         boolean[] fallbackToVanilla = {false};
         FileUtil.decomposePath(path).ifSuccess(parts -> {
             List<ResourceLocation> locations = new java.util.ArrayList<>();
-            int invalidPathCount = 0;
-            String firstInvalidPath = null;
+            int[] invalidPathCount = {0};
+            String[] firstInvalidPath = {null};
             try {
                 Path namespaceRoot = lightspeed$resolve(type.getDirectory(), namespace).toAbsolutePath();
                 List<String> cachedPaths = lightspeed$getCachedFilePaths(type, namespace);
@@ -155,32 +158,29 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
                     }
                 }
 
-                Path requestedRoot = FileUtil.resolvePath(namespaceRoot, parts);
-                for (String cachedPath : cachedPaths) {
-                    Path candidate = namespaceRoot.resolve(cachedPath);
-                    if (!candidate.startsWith(requestedRoot)) {
-                        continue;
-                    }
-
-                    String resourcePath = cachedPath.replace(candidate.getFileSystem().getSeparator(), "/");
+                List<String> paths = cachedPaths;
+                OrderedResourcePathIndex index = lightspeed$listingIndexes
+                        .computeIfAbsent(type, ignored -> Maps.newConcurrentMap())
+                        .computeIfAbsent(namespace, ignored -> OrderedResourcePathIndex.from(paths));
+                index.forEachAtOrUnder(String.join("/", parts), resourcePath -> {
                     ResourceLocation location = ResourceLocation.tryBuild(namespace, resourcePath);
                     if (location == null) {
-                        if (invalidPathCount++ == 0) {
-                            firstInvalidPath = resourcePath;
+                        if (invalidPathCount[0]++ == 0) {
+                            firstInvalidPath[0] = resourcePath;
                         }
                     } else {
                         locations.add(location);
                     }
-                }
+                });
             } catch (RuntimeException e) {
                 fallbackToVanilla[0] = true;
                 LOGGER.warn("Lightspeed path index lookup failed for {}:{}; falling back to vanilla resource enumeration",
                         namespace, path, e);
                 return;
             }
-            if (invalidPathCount > 0) {
+            if (invalidPathCount[0] > 0) {
                 LOGGER.warn("Ignoring {} invalid resource paths in {}:{} (first: {})",
-                        invalidPathCount, namespace, path, firstInvalidPath);
+                        invalidPathCount[0], namespace, path, firstInvalidPath[0]);
             }
             for (ResourceLocation location : locations) {
                 resourceOutput.accept(location, lightspeed$openResource(type, location));
@@ -201,6 +201,7 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
         }
         lightspeed$resolvedPaths().clear();
         lightspeed$resourcePathSets().clear();
+        lightspeed$listingIndexes.clear();
         lightspeed$scanFutures().clear();
     }
 

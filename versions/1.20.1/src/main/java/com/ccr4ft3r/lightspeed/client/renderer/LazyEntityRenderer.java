@@ -2,13 +2,11 @@ package com.ccr4ft3r.lightspeed.client.renderer;
 
 import com.ccr4ft3r.lightspeed.mixin.client.EntityRendererAccessor;
 import com.mojang.blaze3d.vertex.PoseStack;
-import com.mojang.logging.LogUtils;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.culling.Frustum;
 import net.minecraft.client.renderer.entity.EntityRenderer;
 import net.minecraft.client.renderer.entity.EntityRendererProvider;
-import net.minecraft.client.renderer.entity.NoopRenderer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.Entity;
@@ -87,9 +85,7 @@ public final class LazyEntityRenderer<T extends Entity> extends EntityRenderer<T
                 try {
                     current = (EntityRenderer<T>) provider.create(context);
                 } catch (RuntimeException exception) {
-                    LogUtils.getLogger().warn("Lazy renderer {} failed during first use; using no-op renderer",
-                            rendererId, exception);
-                    current = (EntityRenderer<T>) new NoopRenderer<Entity>(context);
+                    throw new IllegalStateException("Failed to initialize entity renderer " + rendererId, exception);
                 }
                 EntityRendererAccessor access = (EntityRendererAccessor) (Object) current;
                 this.shadowRadius = access.lightspeed$shadowRadius();

@@ -1,4 +1,5 @@
 {
+  "lightspeed.startup_time": "Lightspeed: JVM to menu %s s",
   "screen.lightspeed.startup_advice.title": "Lightspeed startup recommendations",
   "screen.lightspeed.startup_advice.message.java": "If you would like to enable the Java 21 startup optimizations, you may consider using Java 21. The current Java version can still be used.",
   "screen.lightspeed.startup_advice.message.agent": "The Lightspeed Agent is not active yet. When convenient, you can copy the line below into the launcher's JVM arguments and reopen the launcher. The current game remains available.",
