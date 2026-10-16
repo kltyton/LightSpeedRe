@@ -1,0 +1,10 @@
+plugins {
+    id 'fabric-loom' version '1.10.5'
+    id 'me.modmuss50.mod-publish-plugin' version '2.1.1'
+}
+ext.lightspeedProductionRunType = net.fabricmc.loom.task.prod.ClientProductionRunTask
+apply from: file('../../gradle/target-conventions/fabric.gradle')
+
+dependencies {
+    compileOnly 'com.google.code.findbugs:jsr305:3.0.2'
+}

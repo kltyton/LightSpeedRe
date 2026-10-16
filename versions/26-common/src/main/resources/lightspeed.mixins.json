@@ -1,0 +1,24 @@
+{
+  "required": true,
+  "package": "com.ccr4ft3r.lightspeed.mixin",
+  "compatibilityLevel": "JAVA_25",
+  "client": [
+    "MinecraftMainMixin",
+    "client.LoadingOverlayMixin",
+    "resources.MinecraftReloadExecutorMixin",
+    "misc.MaterialMixin"
+  ],
+  "mixins": [
+    "misc.ResourceLocationMixin",
+    "misc.StateDefinitonMixin",
+    "resources.AbstractPackResourcesMixin",
+    "resources.FallbackResourceManagerMixin",
+    "resources.FallbackResourceManagerPackEntryAccessor",
+    "resources.ZipPackIndexMixin",
+    "resources.SharedZipFileAccessAccessor",
+    "resources.PathPackIndexMixin",
+    "resources.SimpleReloadInstanceMixin",
+    "resources.VanillaPackResourcesMixin"
+  ],
+  "minVersion": "0.8"
+}

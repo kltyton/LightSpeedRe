@@ -1,4 +1,5 @@
 apply from: file('../../gradle/target-conventions/base.gradle')
+base.archivesName = "${mod_id}-${loader}"
 
 neoForge {
     version = loader_version
@@ -13,4 +14,17 @@ neoForge {
     }
     mods { "${mod_id}" { sourceSet sourceSets.main } }
 }
+if (providers.gradleProperty('lightspeed.distributionRun').orNull == 'true') {
+    def distributionRuntime = sourceSets.create('distributionRuntime')
+    neoForge.addModdingDependenciesTo(distributionRuntime)
+    neoForge.runs.create('distributionClient') {
+        client()
+        sourceSet = distributionRuntime
+        loadedMods.set([])
+        gameDirectory = file(providers.gradleProperty('lightspeed.runDirectory').get())
+        jvmArguments.addAll('-Xms512m', '-Xmx4G', "-Djava.io.tmpdir=${System.getProperty('java.io.tmpdir')}")
+        programArguments.addAll('--username', 'StartupCheck')
+    }
+}
+tasks.register('verifyDistribution')
 apply from: file('../../gradle/target-conventions/publish.gradle')

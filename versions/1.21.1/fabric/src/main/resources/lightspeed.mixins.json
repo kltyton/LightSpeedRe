@@ -1,0 +1,32 @@
+{
+  "required": true,
+  "package": "com.ccr4ft3r.lightspeed.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "refmap": "lightspeed.refmap.json",
+  "client": [
+    "client.LoadingOverlayMixin",
+    "compat.ModernFixAuditMixin",
+    "resources.MinecraftReloadExecutorMixin",
+    "misc.KeyValueConditionMixin",
+    "misc.MaterialMixin",
+    "misc.SelectorMixin",
+    "model.BlockModelMixin",
+    "model.MultiPartMixin",
+    "model.MultivariantMixin",
+    "renderer.LayerDefinitionsMixin"
+  ],
+  "mixins": [
+    "misc.ResourceLocationMixin",
+    "misc.StateDefinitonMixin",
+    "resources.AbstractPackResourcesMixin",
+    "resources.FallbackResourceManagerMixin",
+    "resources.FallbackResourceManagerPackEntryAccessor",
+    "resources.ZipPackIndexMixin",
+    "resources.SharedZipFileAccessAccessor",
+    "resources.PathPackIndexMixin",
+    "resources.FabricModPackMixin",
+    "resources.SimpleReloadInstanceMixin",
+    "resources.VanillaPackResourcesMixin"
+  ],
+  "minVersion": "0.8"
+}

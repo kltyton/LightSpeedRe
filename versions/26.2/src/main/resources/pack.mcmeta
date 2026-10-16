@@ -1,0 +1,13 @@
+{
+  "pack": {
+    "description": "Lightspeed resources",
+    "min_format": [
+      88,
+      0
+    ],
+    "max_format": [
+      107,
+      1
+    ]
+  }
+}

@@ -1,6 +1,11 @@
 apply from: file('../../gradle/target-conventions/base.gradle')
+base.archivesName = "${mod_id}-${loader}"
+
+def extrasVersion = (java_version as int) >= 25 ? '0.5.5' : '0.4.1'
 
 dependencies {
+    compileOnly "io.github.llamalad7:mixinextras-common:${extrasVersion}"
+    annotationProcessor "io.github.llamalad7:mixinextras-common:${extrasVersion}"
     minecraft "com.mojang:minecraft:${minecraft_version}"
     if ((java_version as int) < 25) {
         mappings loom.officialMojangMappings()
@@ -11,10 +16,28 @@ dependencies {
         implementation "net.fabricmc.fabric-api:fabric-api:${fabric_api_version}"
     }
 }
+if ((java_version as int) < 25) {
+    loom.mixin.defaultRefmapName = 'lightspeed.refmap.json'
+}
+if (providers.gradleProperty('lightspeed.distributionRun').orNull == 'true') {
+    tasks.register('runDistributionClient', lightspeedProductionRunType) {
+        // Load release JARs from the instance's mods directory.
+        mods.setFrom([])
+        runDir = file(providers.gradleProperty('lightspeed.runDirectory').get())
+        javaLauncher = javaToolchains.launcherFor {
+            languageVersion = JavaLanguageVersion.of(java_version as int)
+        }
+        jvmArgs.addAll('-Xms512m', '-Xmx4G', "-Djava.io.tmpdir=${System.getProperty('java.io.tmpdir')}")
+        programArgs.addAll('--username', 'StartupCheck', '--accessToken', '0',
+                '--version', minecraft_version, '--userType', 'legacy')
+        useXVFB = false
+    }
+}
 fabricApi.configureDataGeneration {
     modId = mod_id
     createSourceSet = false
     outputDirectory = file('src/generated/resources')
     client = true
 }
+tasks.register('verifyDistribution')
 apply from: file('../../gradle/target-conventions/publish.gradle')
