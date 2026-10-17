@@ -6,7 +6,12 @@ minecraft {
     runs {
         configureEach {
             workingDirectory project.file('run')
-            mods { "${mod_id}" { source sourceSets.main } }
+            mods {
+                "${mod_id}" {
+                    source sourceSets.main
+                    source project(':common').sourceSets.main
+                }
+            }
         }
         client {}
         server { args '--nogui' }

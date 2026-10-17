@@ -28,7 +28,7 @@ final class ProjectCreation {
         output.mkdirs()
         files.each { File source ->
             String relative = base.relativize(source.toPath()).toString().replace('\\', '/')
-            boolean gameSource = relative.tokenize('/')[0] in ['common', 'versions', 'loaders', 'targets']
+            boolean gameSource = relative.tokenize('/')[0] in ['common', 'targets']
             if (gameSource) { relative = relative.replace(oldPackage.replace('.', '/'), newPackage.replace('.', '/')) }
             File target = new File(output, relative)
             target.parentFile.mkdirs()
@@ -37,6 +37,11 @@ final class ProjectCreation {
             } else { ProjectFiles.copy(source, target) }
         }
         identity.each { key, value -> old.setProperty(key.toString(), value.toString()) }
+        if (old.containsKey('mod_java_package')) { old.setProperty('mod_java_package', newPackage) }
+        String oldEntry = old.getProperty('mod_entry_class')
+        if (oldEntry?.startsWith(oldPackage + '.')) {
+            old.setProperty('mod_entry_class', newPackage + oldEntry.substring(oldPackage.length()))
+        }
         old.remove('publish_curseforge_project_id')
         old.remove('publish_modrinth_project_id')
         old.setProperty('temple_default_target', selected.first())
@@ -70,7 +75,6 @@ final class ProjectCreation {
         values.putAll(changes)
         values.setProperty('loader', blueprint.loader)
         values.setProperty('minecraft_version_range', "[${minecraft}]")
-        values.setProperty('shared_sources', blueprint.properties.getProperty('shared_sources').replace(blueprint.minecraft, minecraft))
         ['loader_version', 'java_version', 'gradle_java_version'].each { key ->
             if (!values.getProperty(key)) { throw new IllegalArgumentException("Missing ${key}") }
         }

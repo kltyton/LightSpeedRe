@@ -44,11 +44,6 @@ final class TemplePlugin implements Plugin<Project> {
                 project.logger.lifecycle(json)
             }
         }
-        project.tasks.register('prepareIde') {
-            group = 'temple'
-            description = '准备全部目标的身份源码。'
-            doLast { targets.each { ProjectFiles.prepareIdentity(root, it) } }
-        }
         project.tasks.register('setupTargetWrappers') {
             group = 'temple'
             description = '初次创建工程后安装各目标 Wrapper，保留各自 Gradle 版本。'
@@ -64,8 +59,8 @@ final class TemplePlugin implements Plugin<Project> {
         }
         project.tasks.register('setupProject') {
             group = 'temple'
-            description = '新建工程的 Wrapper 与身份源码初始化，不构建游戏。'
-            dependsOn 'setupTargetWrappers', 'prepareIde'
+            description = '初始化新建工程的目标 Wrapper，不构建游戏。'
+            dependsOn 'setupTargetWrappers'
         }
         project.tasks.register('selectTarget') {
             group = 'temple'
@@ -96,10 +91,10 @@ final class TemplePlugin implements Plugin<Project> {
             }
             project.tasks.register("select_${suffix}") {
                 group = category
-                description = "将 ${target.id} 设为根级任务的默认目标。"
+                description = "选择 ${target.id} 的构建与 common 编辑环境。"
                 doLast {
                     ProjectFiles.select(root, target)
-                    project.logger.lifecycle("默认目标：${target.id}；全部目标仍作为独立 Gradle 工程导入。")
+                    project.logger.lifecycle("当前目标：${target.id}；重新加载 Gradle 模型以切换 common 编辑环境，全部目标保持独立关联。")
                 }
             }
             project.tasks.register("verify_${suffix}") {
@@ -167,7 +162,7 @@ final class TemplePlugin implements Plugin<Project> {
                 if (!wrapper.isFile()) { throw new IllegalArgumentException('先点击 temple > setupProject 初始化 Wrapper') }
                 def runtime = toolchains.launcherFor { languageVersion = JavaLanguageVersion.of(target.gradleJavaVersion) }.get()
                 def compiler = toolchains.launcherFor { languageVersion = JavaLanguageVersion.of(target.javaVersion) }.get()
-                args "-Dorg.gradle.java.installations.paths=${runtime.metadata.installationPath.asFile},${compiler.metadata.installationPath.asFile}"
+                args "-Porg.gradle.java.installations.paths=${runtime.metadata.installationPath.asFile},${compiler.metadata.installationPath.asFile}"
                 String temp = System.getProperty('java.io.tmpdir')
                 args "-Djava.io.tmpdir=${temp}"
                 environment 'TEMP', temp

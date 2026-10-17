@@ -1,0 +1,93 @@
+import groovy.json.JsonOutput
+import org.gradle.api.artifacts.ProjectDependency
+
+plugins { id 'java-library' }
+
+def commonRoot = buildFile.canonicalFile.parentFile
+def templeRoot = commonRoot.parentFile
+def identity = new Properties()
+new File(templeRoot, 'gradle.properties').withReader('UTF-8') { identity.load(it) }
+def loader = rootProject.property('loader').toString()
+def minecraft = rootProject.property('minecraft_version').toString()
+def targetId = "${loader}-${minecraft}"
+def selection = new File(templeRoot, '.temple/active-target')
+def active = (selection.isFile() ? selection.getText('UTF-8').trim() : identity.getProperty('temple_default_target')) == targetId
+def variant = providers.gradleProperty('lightspeed.outputVariant').orNull
+layout.buildDirectory.set(new File(commonRoot, "build/${targetId}" + (variant == null ? '' : "/candidates/${variant}")))
+group = identity.getProperty('mod_group_id')
+version = identity.getProperty('mod_version')
+base.archivesName = "${identity.getProperty('mod_id')}-common-${targetId}"
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(rootProject.property('java_version') as int)
+    withSourcesJar()
+}
+repositories { mavenCentral() }
+
+boolean identifiers = (rootProject.property('java_version') as int) >= 25
+def layers = [new File(commonRoot, 'src/main'),
+              new File(commonRoot, 'src/compat/minecraft/' + (identifiers ? 'identifier' : 'resource-location'))]
+if (minecraft != '1.20.1') layers.add(new File(commonRoot, 'src/compat/minecraft/zip-overlays'))
+layers.add(new File(commonRoot, "src/compat/minecraft/${minecraft}"))
+if (loader == 'forge' || (loader == 'neoforge' && minecraft == '1.21.1')) {
+    layers.add(new File(commonRoot, 'src/compat/fml-bootstrap'))
+}
+layers.add(new File(commonRoot, "src/compat/${loader}"))
+if (loader == 'fabric') {
+    layers.add(new File(commonRoot, 'src/compat/fabric/' + (identifiers ? 'identifier' : 'resource-location')))
+} else if (loader == 'neoforge' && identifiers) {
+    layers.add(new File(commonRoot, 'src/compat/neoforge/identifier'))
+}
+layers.add(new File(commonRoot, "src/compat/${loader}/${minecraft}"))
+layers = layers.findAll { it.isDirectory() }
+def javaDirectories = layers.collect { new File(it, 'java') }.findAll { it.isDirectory() }
+def resourceDirectories = layers.reverse().collect { new File(it, 'resources') }.findAll { it.isDirectory() }
+def testJava = [new File(commonRoot, 'src/test/java')] + layers.collect { new File(it, 'test/java') }
+def testResources = [new File(commonRoot, 'src/test/resources')] + layers.collect { new File(it, 'test/resources') }
+def packageName = identity.getProperty('mod_java_package', identity.getProperty('mod_group_id'))
+def constants = new File(layout.buildDirectory.get().asFile, 'generated/sources/temple')
+def constantFile = new File(constants, "${packageName.replace('.', '/')}/BuildInfo.java")
+def constantText = "package ${packageName};\n\npublic final class BuildInfo {\n" +
+        "    public static final String MOD_ID = ${JsonOutput.toJson(identity.getProperty('mod_id'))};\n" +
+        "    private BuildInfo() {}\n}\n"
+if (!constantFile.isFile() || constantFile.getText('UTF-8') != constantText) {
+    constantFile.parentFile.mkdirs()
+    constantFile.setText(constantText, 'UTF-8')
+}
+sourceSets {
+    main {
+        java.setSrcDirs(active ? javaDirectories + [constants] : [])
+        resources.setSrcDirs(active ? resourceDirectories : [])
+    }
+    test {
+        java.setSrcDirs(active ? testJava : [])
+        resources.setSrcDirs(active ? testResources : [])
+    }
+}
+tasks.named('compileJava', JavaCompile) { source javaDirectories, constants }
+tasks.named('compileTestJava', JavaCompile) { source testJava }
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = rootProject.property('java_version') as int
+}
+tasks.named('processResources', ProcessResources) {
+    from resourceDirectories
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+tasks.named('processTestResources', ProcessResources) { from testResources }
+tasks.named('sourcesJar', Jar) {
+    from javaDirectories
+    from constants
+    from resourceDirectories
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+def commonPath = path
+def commonSourceSets = sourceSets
+rootProject.afterEvaluate {
+    def sdk = rootProject.configurations.compileClasspath.copyRecursive { dependency ->
+        !(dependency instanceof ProjectDependency && dependency.path == commonPath)
+    }
+    commonSourceSets.main.compileClasspath += sdk
+    commonSourceSets.test.compileClasspath += sdk
+}
+ext.templeResourceDirectories = resourceDirectories
+ext.templeSourceDirectories = javaDirectories + [constants]

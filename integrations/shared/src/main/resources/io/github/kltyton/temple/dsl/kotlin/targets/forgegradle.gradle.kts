@@ -14,7 +14,10 @@ extensions.configure<UserDevExtension> {
     runs {
         configureEach {
             workingDirectory(file("run"))
-            mods.create(mod_id) { source(sourceSets.main.get()) }
+            mods.create(mod_id) {
+                source(sourceSets.main.get())
+                source(project(":common").extensions.getByType<SourceSetContainer>().named("main").get())
+            }
         }
         create("client")
         create("server") { args("--nogui") }

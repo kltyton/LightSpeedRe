@@ -10,6 +10,7 @@ import net.minecraft.server.packs.resources.IoSupplier;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -291,12 +292,21 @@ public final class PackPathIndex implements ICache {
             URI uri = root.toUri();
             URI archive = uri;
             if ("jar".equals(uri.getScheme())) {
-                String nested = uri.getRawSchemeSpecificPart();
+                String nested = uri.getSchemeSpecificPart();
                 int separator = nested.indexOf("!/");
                 if (separator < 0) {
                     return null;
                 }
-                archive = URI.create(nested.substring(0, separator));
+                String fileUri = nested.substring(0, separator);
+                if (!fileUri.startsWith("file:")) {
+                    return null;
+                }
+                try {
+                    // A jar URI is opaque; its decoded file path needs hierarchical quoting.
+                    archive = new URI("file", null, fileUri.substring("file:".length()), null);
+                } catch (URISyntaxException exception) {
+                    throw new IllegalArgumentException("Invalid resource pack archive path: " + root, exception);
+                }
             }
             if (!"file".equals(archive.getScheme())) {
                 return null;

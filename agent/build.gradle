@@ -6,7 +6,32 @@ plugins {
 group = rootProject.group
 version = rootProject.version
 layout.buildDirectory = rootProject.layout.buildDirectory.dir('bootstrap')
-sourceSets.main.java.srcDir(rootProject.file("../../versions/${rootProject.minecraft_version}/bootstrap/src/main/java"))
+def agentRoot = buildFile.canonicalFile.parentFile
+def commonRoot = new File(agentRoot.parentFile, 'common')
+def selection = new File(agentRoot.parentFile, '.temple/active-target')
+def identity = new Properties()
+new File(agentRoot.parentFile, 'gradle.properties').withReader('UTF-8') { identity.load(it) }
+def targetId = "${rootProject.loader}-${rootProject.minecraft_version}"
+def active = (selection.isFile() ? selection.getText('UTF-8').trim() : identity.getProperty('temple_default_target')) == targetId
+def mainJava = [new File(commonRoot, 'src/compat/bootstrap/main/java'),
+                new File(commonRoot, "src/compat/bootstrap/${rootProject.minecraft_version}/java")]
+def mainResources = new File(commonRoot, 'src/compat/bootstrap/main/resources')
+def testJava = new File(commonRoot, 'src/compat/bootstrap/test/java')
+def testResources = new File(commonRoot, 'src/compat/bootstrap/test/resources')
+sourceSets {
+    main {
+        java.setSrcDirs(active ? mainJava : [])
+        resources.setSrcDirs(active ? [mainResources] : [])
+    }
+    test {
+        java.setSrcDirs(active ? [testJava] : [])
+        resources.setSrcDirs(active ? [testResources] : [])
+    }
+}
+tasks.named('compileJava', JavaCompile) { source mainJava }
+tasks.named('compileTestJava', JavaCompile) { source testJava }
+tasks.named('processResources', ProcessResources) { from mainResources; duplicatesStrategy = DuplicatesStrategy.EXCLUDE }
+tasks.named('processTestResources', ProcessResources) { from testResources }
 
 java {
     toolchain.languageVersion = JavaLanguageVersion.of(17)

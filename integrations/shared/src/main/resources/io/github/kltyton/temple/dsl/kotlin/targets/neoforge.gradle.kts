@@ -19,6 +19,9 @@ extensions.configure<NeoForgeExtension> {
                     *(project.extra["templeDatagenExistingArgs"] as Array<String>))
         }
     }
-    mods.create(mod_id) { sourceSet(project.extensions.getByType<SourceSetContainer>().getByName("main")) }
+    mods.create(mod_id) {
+        sourceSet(project.extensions.getByType<SourceSetContainer>().getByName("main"))
+        sourceSet(project(":common").extensions.getByType<SourceSetContainer>().getByName("main"))
+    }
 }
 apply(from = file("../../gradle/target-conventions/publish.gradle.kts"))

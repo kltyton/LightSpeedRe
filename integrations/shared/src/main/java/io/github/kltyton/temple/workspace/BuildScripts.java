@@ -22,7 +22,7 @@ public final class BuildScripts {
 
     public static void createProject(Path root) throws IOException {
         if (dsl(root) != Dsl.KOTLIN) return;
-        for (String file : List.of("build.gradle.kts", "settings.gradle.kts", "buildSrc/build.gradle.kts",
+        for (String file : List.of("build.gradle.kts", "settings.gradle.kts", "buildSrc/build.gradle.kts", "common/build.gradle.kts",
                 "gradle/target-conventions/base.gradle.kts", "gradle/target-conventions/publish.gradle.kts")) {
             install(root.resolve(file), file);
             Files.deleteIfExists(root.resolve(file.substring(0, file.length() - 4)));

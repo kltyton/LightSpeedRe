@@ -21,6 +21,9 @@ extensions.configure<LegacyForgeExtension> {
                     *(project.extra["templeDatagenExistingArgs"] as Array<String>))
         }
     }
-    mods.create(mod_id) { sourceSet(sourceSets.main.get()) }
+    mods.create(mod_id) {
+        sourceSet(sourceSets.main.get())
+        sourceSet(project(":common").extensions.getByType<SourceSetContainer>().named("main").get())
+    }
 }
 apply(from = file("../../gradle/target-conventions/publish.gradle.kts"))

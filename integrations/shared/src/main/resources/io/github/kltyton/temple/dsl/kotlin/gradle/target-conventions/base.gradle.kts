@@ -14,7 +14,6 @@ val shared = Properties().apply { templeRoot.resolve("gradle.properties").reader
 shared.forEach { key, value -> if (!project.hasProperty(key.toString())) extra[key.toString()] = value.toString() }
 fun setting(name: String) = project.property(name).toString()
 val modId = setting("mod_id")
-val javaPackage = project.findProperty("mod_java_package")?.toString() ?: setting("mod_group_id")
 require(Regex("[a-z][a-z0-9_]{1,63}").matches(modId) &&
         Regex("[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+").matches(setting("mod_group_id"))) { "Invalid mod identity" }
 group = setting("mod_group_id")
@@ -30,51 +29,55 @@ tasks.withType<JavaCompile>().configureEach {
     options.encoding = "UTF-8"
     options.release.set(javaVersion)
 }
-val layers = setting("shared_sources").split(',').map { name ->
-    val directory = templeRoot.resolve(name.trim()).canonicalFile
-    require(directory != templeRoot && directory.toPath().startsWith(templeRoot.toPath()) &&
-            !directory.toPath().startsWith(templeRoot.resolve("targets").toPath())) { "Invalid shared source layer: $name" }
-    directory
-}
-val resourceLayers = listOf(file("src/main/resources")) + layers.reversed().map { it.resolve("src/main/resources") }
-val javaLayers = listOf(file("src/main/java")) + layers.reversed().map { it.resolve("src/main/java") }
+evaluationDependsOn(":common")
+val commonProject = project(":common")
+dependencies { add("implementation", project(":common")) }
+@Suppress("UNCHECKED_CAST")
+val commonResources = commonProject.extra["templeResourceDirectories"] as List<File>
+@Suppress("UNCHECKED_CAST")
+val commonSources = commonProject.extra["templeSourceDirectories"] as List<File>
+val resourceLayers = listOf(file("src/main/resources")) + commonResources
 extra["templeDatagenExistingArgs"] = resourceLayers.filter { it.isDirectory }.asReversed()
         .flatMap { listOf("--existing", it.absolutePath) }.toTypedArray()
 extensions.configure<SourceSetContainer> {
     named("main") {
-        java.setSrcDirs(javaLayers)
-        resources.setSrcDirs(listOf(resourceLayers.first(), file("src/generated/resources")) + resourceLayers.drop(1))
+        java.setSrcDirs(emptyList<File>())
+        resources.setSrcDirs(listOf(resourceLayers.first(), file("src/generated/resources")))
     }
     named("test") {
-        java.srcDirs(layers.map { it.resolve("src/test/java") })
-        resources.srcDirs(layers.map { it.resolve("src/test/resources") })
+        java.setSrcDirs(emptyList<File>())
+        resources.setSrcDirs(emptyList<File>())
+        runtimeClasspath += commonProject.extensions.getByType<SourceSetContainer>().named("test").get().output
     }
 }
-val constantsDirectory = layout.buildDirectory.dir("generated/sources/temple")
-val generateConstants = tasks.register("generateTempleConstants") {
-    inputs.properties(mapOf("mod_id" to modId, "mod_java_package" to javaPackage))
-    outputs.dir(constantsDirectory)
-    doLast {
-        val destination = constantsDirectory.get().file(javaPackage.replace('.', '/') + "/BuildInfo.java").asFile
-        destination.parentFile.mkdirs()
-        destination.writeText("package $javaPackage;\n\npublic final class BuildInfo {\n" +
-                "    public static final String MOD_ID = ${JsonOutput.toJson(modId)};\n" +
-                "    private BuildInfo() {}\n}\n", Charsets.UTF_8)
-    }
+extensions.getByType<SourceSetContainer>().named("main").get().output.classesDirs.setFrom(emptyList<File>())
+extensions.getByType<SourceSetContainer>().named("test").get().output.classesDirs.setFrom(emptyList<File>())
+tasks.named<JavaCompile>("compileJava") { enabled = false }
+tasks.named<JavaCompile>("compileTestJava") { enabled = false }
+tasks.named("testClasses") { dependsOn(commonProject.tasks.named("testClasses")) }
+tasks.named<Jar>("sourcesJar") {
+    from(commonSources, commonResources)
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }
-extensions.getByType<SourceSetContainer>().named("main") { java.srcDir(constantsDirectory) }
-tasks.named("compileJava") { dependsOn(generateConstants) }
-tasks.named<Jar>("sourcesJar") { dependsOn(generateConstants); duplicatesStrategy = DuplicatesStrategy.EXCLUDE }
 tasks.named<ProcessResources>("processResources") {
+    from(commonResources)
+    dependsOn(commonProject.tasks.named("compileJava"))
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     val raw = listOf("mod_id", "mod_name", "mod_license", "mod_version", "mod_authors", "mod_description",
             "mod_group_id", "minecraft_version", "minecraft_version_range", "loader_version", "loader_version_range",
-            "java_version").associateWith { setting(it) } + ("fml_version_range" to (project.findProperty("fml_version_range")?.toString() ?: ""))
+            "java_version").associateWith { setting(it) } + mapOf(
+            "fml_version_range" to (project.findProperty("fml_version_range")?.toString() ?: ""),
+            "mod_java_package" to (project.findProperty("mod_java_package")?.toString() ?: setting("mod_group_id")))
     val escaped = raw.mapValues { JsonOutput.toJson(it.value).let { json -> json.substring(1, json.length - 1) } }
     inputs.properties(raw)
     filesMatching(listOf("fabric.mod.json", "META-INF/mods.toml", "META-INF/neoforge.mods.toml")) { expand(escaped) }
 }
-tasks.named<Jar>("jar") { from(templeRoot.resolve("LICENSE")) { rename { "LICENSE_$modId" } } }
+tasks.named<Jar>("jar") {
+    from(commonProject.extensions.getByType<SourceSetContainer>().named("main").map { it.output })
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    from(templeRoot.resolve("LICENSE")) { rename { "LICENSE_$modId" } }
+}
 repositories { mavenCentral() }
 val localJars = fileTree("libs") { include("*.jar"); exclude("*-sources.jar", "*-javadoc.jar") }
 dependencies { add(if (loader == "fabric" && javaVersion < 25) "modImplementation" else "implementation", localJars) }
+apply(from = file("../../gradle/target-conventions/mixin-compilation.gradle"))

@@ -14,16 +14,18 @@ final class MinecraftTemplates {
         assets.mkdirs()
         Set<String> blueprints = TargetPlan.BLUEPRINTS as Set
         List<Map<String, Object>> files = []
+        Set<File> exportedAssets = [] as Set
         ProjectFiles.projectFiles(root).each { File source ->
             String relative = root.toPath().relativize(source.toPath()).toString().replace('\\', '/')
             if (relative == 'gradle.properties' || source.name.endsWith('.jar')) { return }
             String destination = relative
             String content = source.getText('UTF-8')
-            if (source.name.endsWith('.java') && relative.tokenize('/')[0] in ['common', 'versions', 'loaders', 'targets']) {
+            if (source.name.endsWith('.java') && relative.tokenize('/')[0] in ['common', 'targets']) {
                 destination = relative.replace(original.replace('.', '/'), '${BUILD_COORDS.groupId.replace(".", "/")}')
                 content = literalParts(content, original, '${BUILD_COORDS.groupId}')
             } else { content = literal(content) }
             File asset = new File(assets, relative + '.ft')
+            exportedAssets.add(asset)
             asset.parentFile.mkdirs()
             asset.setText(content, 'UTF-8')
             Map<String, Object> descriptor = [:]
@@ -45,9 +47,11 @@ final class MinecraftTemplates {
                 'mod_authors=${AUTHORS}\nmod_version=${BUILD_COORDS.version}\nmod_license=${LICENSE}\n' +
                 'mod_description=${DESCRIPTION}\ntemple_idea_project=true\ntemple_build_dsl=${BUILD_DSL}\n'
         new File(assets, 'project.properties.ft').setText(properties, 'UTF-8')
+        exportedAssets.add(new File(assets, 'project.properties.ft'))
         files.add([template: 'assets/project.properties.ft', destination: 'gradle.properties', reformat: false])
         File wrapper = new File(root, 'gradle/wrapper/gradle-wrapper.jar')
         new File(assets, 'wrapper.base64.ft').setText(wrapper.bytes.encodeBase64().toString(), 'UTF-8')
+        exportedAssets.add(new File(assets, 'wrapper.base64.ft'))
         files.add([template: 'assets/wrapper.base64.ft', destination: 'gradle/wrapper/kltyton-wrapper.base64', reformat: false])
         targets.each { target ->
             String condition = "\$TARGET_PLAN.contains('\"blueprint\":\"${target.id}\"')"
@@ -74,6 +78,16 @@ final class MinecraftTemplates {
                          [type:'run_gradle_tasks', tasks:['setupProject']]]
         ]
         new File(output, '.mcdev.template.json').setText(JsonOutput.prettyPrint(JsonOutput.toJson(descriptor)), 'UTF-8')
+        assets.eachFileRecurse { File asset ->
+            if (asset.isFile() && asset.name.endsWith('.ft') && !exportedAssets.contains(asset) && !asset.delete()) {
+                throw new IOException("Could not remove obsolete template asset: ${asset}")
+            }
+        }
+        List<File> emptyCandidates = []
+        assets.eachDirRecurse { emptyCandidates.add(it) }
+        emptyCandidates.sort { -it.absolutePath.length() }.each {
+            if (it.list().length == 0 && !it.delete()) throw new IOException("Could not remove empty template directory: ${it}")
+        }
     }
 
     private static String literal(String text) {

@@ -17,10 +17,3 @@ wrapperRoots.forEach { directory ->
 val packageName = identity.getProperty("mod_java_package", identity.getProperty("mod_group_id"))
 require(packageName != null && Regex("[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+").matches(packageName) &&
         Regex("[a-z][a-z0-9_]{1,63}").matches(identity.getProperty("mod_id", ""))) { "Invalid mod identity" }
-targets.forEach { directory ->
-    val constants = directory.resolve("build/generated/sources/temple/${packageName.replace('.', '/')}/BuildInfo.java")
-    constants.parentFile.mkdirs()
-    constants.writeText("package $packageName;\n\npublic final class BuildInfo {\n" +
-            "    public static final String MOD_ID = \"${identity.getProperty("mod_id")}\";\n" +
-            "    private BuildInfo() {}\n}\n", Charsets.UTF_8)
-}

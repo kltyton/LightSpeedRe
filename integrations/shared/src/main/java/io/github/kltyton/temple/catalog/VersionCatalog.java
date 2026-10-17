@@ -140,7 +140,7 @@ public final class VersionCatalog {
     }
 
     private CompletableFuture<String> download(String url) {
-        HttpRequest request = HttpRequest.newBuilder(URI.create(url)).header("User-Agent", "KltytonTemple/1.2.0 (github.com/kltyton/KltytonTemple)")
+        HttpRequest request = HttpRequest.newBuilder(URI.create(url)).header("User-Agent", "KltytonTemple/1.4.0 (github.com/kltyton/KltytonTemple)")
                 .timeout(Duration.ofSeconds(30)).GET().build();
         return http.sendAsync(request, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
             if (response.statusCode() != 200)

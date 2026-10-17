@@ -234,9 +234,6 @@ public final class TargetSelectionPanel extends JPanel {
                     javaVersion = get();
                     ready = true;
                     updateLoader();
-                    toolchain.setText("Java " + javaVersion + " · Gradle "
-                            + (javaVersion >= 25 ? "9.x" : "8.14.4"));
-                    toolchain.setToolTipText(null);
                     setStatus("releases", data.minecraftVersions().size());
                 } catch (Exception error) {
                     ready = false;
@@ -263,6 +260,15 @@ public final class TargetSelectionPanel extends JPanel {
         api.setEnabled("fabric".equals(platform));
         updateChoiceLabels();
         updateReady();
+        if (ready) {
+            toolchain.setText("Java " + javaVersion + " · Gradle " + wrapperVersion(platform, mc));
+            toolchain.setToolTipText(null);
+        }
+    }
+
+    private String wrapperVersion(String platform, String mc) {
+        if ("fabric".equals(platform) && (javaVersion >= 25 || VersionCatalog.compare(mc, "1.21.4") > 0)) return "9.7.1";
+        return javaVersion >= 25 ? "9.5.1" : "8.14.4";
     }
 
     private void updateChoiceLabels() {
@@ -297,10 +303,9 @@ public final class TargetSelectionPanel extends JPanel {
         row.put("java_version", Integer.toString(javaVersion));
         row.put("gradle_java_version", Integer.toString(javaVersion >= 25 ? 25 : 21));
         row.put("blueprint", TargetPlan.blueprint(platform, mc, javaVersion));
-        row.put("wrapper_version", javaVersion >= 25 ? ("fabric".equals(platform) ? "9.7.1" : "9.5.1") : "8.14.4");
+        row.put("wrapper_version", wrapperVersion(platform, mc));
         if ("fabric".equals(platform) && VersionCatalog.compare(mc, "1.21.4") > 0) {
             row.put("loom_version", "1.18.2");
-            row.put("wrapper_version", "9.7.1");
         }
         if ("fabric".equals(platform)) row.put("fabric_api_version", api.getSelectedItem().toString());
         if ("forge".equals(platform) && VersionCatalog.compare(mc, "1.20.1") > 0) row.put("forgegradle_version", "6.0.54");

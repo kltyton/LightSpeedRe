@@ -21,3 +21,12 @@ pluginManagement {
 }
 val identity = Properties().apply { file("../../gradle.properties").reader(Charsets.UTF_8).use { load(it) } }
 rootProject.name = identity.getProperty("mod_name") + "-" + rootDir.name
+
+include(":common")
+val selection = file("../../.temple/active-target")
+val activeTarget = if (selection.isFile) selection.readText(Charsets.UTF_8).trim() else identity.getProperty("temple_default_target")
+val active = activeTarget == rootDir.name
+val commonContext = if (active) file("../../common") else file("../../common/.gradle/contexts/${rootDir.name}")
+commonContext.mkdirs()
+project(":common").projectDir = commonContext
+project(":common").buildFileName = if (active) "build.gradle.kts" else "../../../build.gradle.kts"

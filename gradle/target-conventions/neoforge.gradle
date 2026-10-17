@@ -12,7 +12,12 @@ neoForge {
                     *project.ext.templeDatagenExistingArgs)
         }
     }
-    mods { "${mod_id}" { sourceSet sourceSets.main } }
+    mods {
+        "${mod_id}" {
+            sourceSet sourceSets.main
+            sourceSet project(':common').sourceSets.main
+        }
+    }
 }
 if (providers.gradleProperty('lightspeed.distributionRun').orNull == 'true') {
     def distributionRuntime = sourceSets.create('distributionRuntime')

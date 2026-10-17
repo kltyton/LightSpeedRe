@@ -81,11 +81,25 @@ neoForge {
     mods {
         "${mod_id}" {
             sourceSet(sourceSets.main)
+            sourceSet(project(':common').sourceSets.main)
         }
     }
 }
 
 sourceSets.main.resources { srcDir 'src/generated/resources' }
+
+if (providers.gradleProperty('lightspeed.distributionRun').orNull == 'true') {
+    def distributionRuntime = sourceSets.create('distributionRuntime')
+    neoForge.addModdingDependenciesTo(distributionRuntime)
+    neoForge.runs.create('distributionClient') {
+        client()
+        sourceSet = distributionRuntime
+        loadedMods.set([])
+        gameDirectory = file(providers.gradleProperty('lightspeed.runDirectory').get())
+        jvmArguments.addAll('-Xms512m', '-Xmx4G', "-Djava.io.tmpdir=${System.getProperty('java.io.tmpdir')}")
+        programArguments.addAll('--username', 'StartupCheck')
+    }
+}
 
 var generateModMetadata = tasks.register("generateModMetadata", ProcessResources) {
     var replaceProperties = [
@@ -103,8 +117,8 @@ var generateModMetadata = tasks.register("generateModMetadata", ProcessResources
     ]
     inputs.properties replaceProperties
     expand replaceProperties
-    from "../../loaders/neoforge/src/main/templates"
-    into "build/generated/sources/modMetadata"
+    from "../../common/src/compat/neoforge/1.21.1/templates"
+    into layout.buildDirectory.dir('generated/sources/modMetadata')
 }
 
 sourceSets.main.resources.srcDir generateModMetadata

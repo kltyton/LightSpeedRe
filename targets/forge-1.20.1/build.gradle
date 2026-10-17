@@ -74,6 +74,7 @@ minecraft {
             mods {
                 "${mod_id}" {
                     source sourceSets.main
+                    source project(':common').sourceSets.main
                 }
             }
         }
@@ -112,7 +113,13 @@ if (providers.gradleProperty('lightspeed.distributionRun').orNull == 'true') {
     configurations.create('lightspeedDistribution')
     repositories.flatDir { dirs layout.buildDirectory.dir('libs') }
     dependencies.add('lightspeedDistribution', fg.deobf("${mod_group_id}:${mod_id}:${version}"))
-    distributionRuntime.runtimeClasspath = configurations.runtimeClasspath + distributionRuntime.output
+    def releaseRuntime = files()
+    afterEvaluate {
+        releaseRuntime.from(configurations.runtimeClasspath.copyRecursive { dependency ->
+            !(dependency instanceof org.gradle.api.artifacts.ProjectDependency && dependency.path == ':common')
+        })
+    }
+    distributionRuntime.runtimeClasspath = releaseRuntime + distributionRuntime.output
     minecraft.runs.client {
         mods.clear()
         sources = [distributionRuntime]
@@ -240,6 +247,9 @@ tasks.named('jar', Jar).configure {
 
 tasks.named('jarJar').configure {
     archiveClassifier = ''
+    from project(':common').sourceSets.main.output
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    from(file('../../LICENSE')) { rename { "LICENSE_${mod_id}" } }
 }
 
 tasks.matching { it.name == 'reobfJarJar' }.configureEach {

@@ -7,3 +7,13 @@ pluginManagement {
     }
 }
 rootProject.name = 'lightspeed-fabric-26.2'
+def identity = new Properties()
+file('../../gradle.properties').withReader('UTF-8') { identity.load(it) }
+def selection = file('../../.temple/active-target')
+def activeTarget = selection.isFile() ? selection.getText('UTF-8').trim() : identity.getProperty('temple_default_target')
+def active = activeTarget == rootDir.name
+include ':common'
+def commonContext = active ? file('../../common') : file("../../common/.gradle/contexts/${rootDir.name}")
+commonContext.mkdirs()
+project(':common').projectDir = commonContext
+project(':common').buildFileName = active ? 'build.gradle' : '../../../build.gradle'

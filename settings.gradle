@@ -23,11 +23,4 @@ if (!(packageName ==~ /[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+/) ||
         !(identity.getProperty('mod_id', '') ==~ /[a-z][a-z0-9_]{1,63}/)) {
     throw new GradleException('Invalid mod identity')
 }
-targets.each { directory ->
-def constants = new File(directory, "build/generated/sources/temple/${packageName.replace('.', '/')}/BuildInfo.java")
-constants.parentFile.mkdirs()
-constants.setText("package ${packageName};\n\npublic final class BuildInfo {\n" +
-        "    public static final String MOD_ID = \"${identity.getProperty('mod_id')}\";\n" +
-        "    private BuildInfo() {}\n}\n", 'UTF-8')
-}
 // Targets are linked as independent IDEA Gradle projects, each with its own Wrapper.

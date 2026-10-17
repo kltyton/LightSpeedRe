@@ -19,6 +19,12 @@ dependencies {
 if ((java_version as int) < 25) {
     loom.mixin.defaultRefmapName = 'lightspeed.refmap.json'
 }
+loom.mods {
+    "${mod_id}" {
+        sourceSet sourceSets.main
+        sourceSet project(':common').sourceSets.main
+    }
+}
 if (providers.gradleProperty('lightspeed.distributionRun').orNull == 'true') {
     tasks.register('runDistributionClient', lightspeedProductionRunType) {
         // Load release JARs from the instance's mods directory.

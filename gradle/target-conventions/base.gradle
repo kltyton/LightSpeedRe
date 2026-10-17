@@ -35,48 +35,38 @@ tasks.withType(JavaCompile).configureEach {
     options.release = java_version as int
 }
 
-def layers = shared_sources.split(',').collect { name ->
-    def directory = new File(templeRoot, name.trim()).canonicalFile
-    if (directory == templeRoot.canonicalFile || !directory.toPath().startsWith(templeRoot.canonicalFile.toPath()) ||
-            directory.toPath().startsWith(new File(templeRoot, 'targets').canonicalFile.toPath())) {
-        throw new GradleException("Invalid shared source layer: ${name}")
-    }
-    directory
-}
-def resourceLayers = [file('src/main/resources')] + layers.reverse().collect { new File(it, 'src/main/resources') }
-def javaLayers = [file('src/main/java')] + layers.reverse().collect { new File(it, 'src/main/java') }
+evaluationDependsOn(':common')
+def common = project(':common')
+dependencies { implementation project(':common') }
+def resourceLayers = [file('src/main/resources')] + common.templeResourceDirectories
 project.ext.templeDatagenExistingArgs = resourceLayers.findAll { it.isDirectory() }.reverse()
         .collectMany { ['--existing', it.absolutePath] } as String[]
 sourceSets {
     main {
-        java.setSrcDirs(javaLayers)
-        resources.setSrcDirs([resourceLayers.first(), file('src/generated/resources')] + resourceLayers.drop(1))
+        java.setSrcDirs([])
+        resources.setSrcDirs([resourceLayers.first(), file('src/generated/resources')])
     }
     test {
-        java.srcDirs(layers.collect { new File(it, 'src/test/java') })
-        resources.srcDirs(layers.collect { new File(it, 'src/test/resources') })
+        java.setSrcDirs([])
+        resources.setSrcDirs([])
+        runtimeClasspath += common.sourceSets.test.output
     }
 }
-def constantsDirectory = layout.buildDirectory.dir('generated/sources/temple')
-def generateConstants = tasks.register('generateTempleConstants') {
-    inputs.properties([mod_id: mod_id, mod_java_package: javaPackage])
-    outputs.dir(constantsDirectory)
-    doLast {
-        def destination = constantsDirectory.get().file(javaPackage.replace('.', '/') + '/BuildInfo.java').asFile
-        destination.parentFile.mkdirs()
-        destination.setText("package ${javaPackage};\n\npublic final class BuildInfo {\n" +
-                "    public static final String MOD_ID = ${JsonOutput.toJson(mod_id)};\n" +
-                "    private BuildInfo() {}\n}\n", 'UTF-8')
-    }
-}
-sourceSets.main.java.srcDir(constantsDirectory)
-tasks.named('compileJava') { dependsOn generateConstants }
+// Compilation belongs to :common; native plugins still own remapping and launch tasks.
+sourceSets.main.output.classesDirs.setFrom([])
+sourceSets.test.output.classesDirs.setFrom([])
+tasks.named('compileJava') { enabled = false }
+tasks.named('compileTestJava') { enabled = false }
+tasks.named('testClasses') { dependsOn common.tasks.named('testClasses') }
 tasks.named('sourcesJar', Jar) {
     destinationDirectory = layout.buildDirectory.dir('intermediates')
-    dependsOn generateConstants
+    from common.templeSourceDirectories
+    from common.templeResourceDirectories
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }
 tasks.named('processResources', ProcessResources) {
+    from common.templeResourceDirectories
+    dependsOn common.tasks.named('compileJava')
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     def raw = [mod_id: mod_id, mod_name: mod_name, mod_license: mod_license, mod_version: mod_version,
                mod_authors: mod_authors, mod_description: mod_description, mod_group_id: mod_group_id,
@@ -98,6 +88,8 @@ tasks.named('processResources', ProcessResources) {
     }
 }
 tasks.named('jar', Jar) {
+    from common.sourceSets.main.output
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     from(templeRoot.toPath().resolve('LICENSE').toFile()) { rename { "LICENSE_${mod_id}" } }
 }
 repositories { mavenCentral() }
@@ -109,3 +101,5 @@ dependencies {
         implementation localJars
     }
 }
+
+apply from: file('../../gradle/target-conventions/mixin-compilation.gradle')

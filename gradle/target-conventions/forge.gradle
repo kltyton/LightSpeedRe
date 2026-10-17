@@ -12,6 +12,11 @@ legacyForge {
                     *project.ext.templeDatagenExistingArgs)
         }
     }
-    mods { "${mod_id}" { sourceSet sourceSets.main } }
+    mods {
+        "${mod_id}" {
+            sourceSet sourceSets.main
+            sourceSet project(':common').sourceSets.main
+        }
+    }
 }
 apply from: file('../../gradle/target-conventions/publish.gradle')

@@ -1,0 +1,53 @@
+// Keep native plugin mapping outputs while :common owns the Java compilation.
+gradle.projectsEvaluated {
+    def nativeCompiler = tasks.named('compileJava', JavaCompile).get()
+    def commonCompiler = project(':common').tasks.named('compileJava', JavaCompile)
+    def nativeArguments = new ArrayList<String>(nativeCompiler.options.compilerArgs)
+    commonCompiler.configure { compiler ->
+        compiler.options.annotationProcessorPath = nativeCompiler.options.annotationProcessorPath
+        compiler.options.compilerArgs.addAll(nativeArguments)
+    }
+    if (loader == 'fabric' && (java_version as int) < 25) {
+        // Loom prepares these arguments at configuration time, including its remapper's mapping file.
+        def outputs = nativeArguments.findAll {
+            it.startsWith('-AoutRefMapFile=') || it.startsWith('-AoutMapFileNamedIntermediary=')
+        }.collect { file(it.substring(it.indexOf('=') + 1)) }
+        def refmap = nativeArguments.find { it.startsWith('-AoutRefMapFile=') }
+        tasks.named('processResources', ProcessResources) {
+            from file(refmap.substring(refmap.indexOf('=') + 1))
+        }
+        commonCompiler.configure { compiler ->
+            compiler.outputs.files(outputs)
+            compiler.doFirst { outputs.each { it.parentFile.mkdirs() } }
+        }
+    } else if (plugins.hasPlugin('net.minecraftforge.gradle')) {
+        def mappings = mixin.mappings
+        def refmap = nativeCompiler.refMapFile
+        def shadowMappings = nativeCompiler.outTsrgFile
+        def packagedRefmap = new File(refmap.parentFile, nativeCompiler.refMap.toString())
+        def createMappings = tasks.named('createMcpToSrg')
+        def embeddedCompiler = project(':agent').tasks.named('compileJava')
+        def obfuscationEnvironment = mixin.defaultObfuscationEnv
+        commonCompiler.configure { compiler ->
+            compiler.dependsOn createMappings, embeddedCompiler
+            compiler.inputs.file(mappings)
+            compiler.outputs.files(refmap, shadowMappings, packagedRefmap)
+            compiler.options.compilerArgs.addAll([
+                    "-AreobfTsrgFile=${mappings.canonicalPath}",
+                    "-AoutTsrgFile=${shadowMappings.canonicalPath}",
+                    "-AoutRefMapFile=${refmap.canonicalPath}",
+                    '-AmappingTypes=tsrg', "-AdefaultObfuscationEnv=${obfuscationEnvironment}"])
+            compiler.doFirst {
+                refmap.parentFile.mkdirs()
+                [refmap, shadowMappings, packagedRefmap].each { java.nio.file.Files.deleteIfExists(it.toPath()) }
+            }
+            compiler.doLast {
+                java.nio.file.Files.copy(refmap.toPath(), packagedRefmap.toPath(),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+            }
+        }
+    } else if (loader == 'neoforge' && minecraft_version == '1.21.1') {
+        def embeddedCompiler = project(':agent').tasks.named('compileJava')
+        commonCompiler.configure { dependsOn embeddedCompiler }
+    }
+}
