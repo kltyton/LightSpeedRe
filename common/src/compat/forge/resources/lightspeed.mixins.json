@@ -13,6 +13,7 @@
     "compat.ModernFixAuditMixin",
     "compat.SupplementariesSignModelMixin",
     "compat.NetMusicItemRendererMixin",
+    "compat.ldlib.LdlibMetadataLookupMixin",
     "renderer.BlockEntityRenderDispatcherAccessor",
     "renderer.BlockEntityRenderDispatcherMixin",
     "client.ForgeLoadingOverlayMixin",
