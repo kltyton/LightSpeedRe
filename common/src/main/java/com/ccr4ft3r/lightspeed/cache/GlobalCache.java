@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -55,7 +56,8 @@ public final class GlobalCache {
     public static final Map<String, Map<PackType, Set<String>>> PERSISTED_NAMESPACES_BY_MOD = Maps.newConcurrentMap();
     public static final Map<String, Map<PackType, Map<String, List<String>>>> PERSISTED_RESOURCE_LISTS_BY_MOD = Maps.newConcurrentMap();
     private static final AtomicBoolean PERSISTED_CACHE_LOAD_STARTED = new AtomicBoolean(false);
-    private static volatile CompletableFuture<Void> persistedCacheLoad = CompletableFuture.completedFuture(null);
+    private static final CompletableFuture<Void> persistedCacheLoad = new CompletableFuture<>();
+    private static final Map<PersistedCacheFileKey, CompletableFuture<Void>> PERSISTED_FILE_LOADS = Maps.newConcurrentMap();
 
     private static final Set<ICache> CACHES = Sets.newConcurrentHashSet();
     private static final Set<CompletableFuture<?>> BACKGROUND_CACHE_TASKS = Sets.newConcurrentHashSet();
@@ -84,11 +86,32 @@ public final class GlobalCache {
             return CompletableFuture.completedFuture(null);
         }
         File file = CacheFiles.cacheFile(directory, id);
+        return loadPersistedCacheFileAsync(file, targetMap);
+    }
+
+    private static <K, V> CompletableFuture<Void> loadPersistedCacheFileAsync(File file, Map<K, V> targetMap) {
         if (!file.isFile()) {
             return CompletableFuture.completedFuture(null);
         }
-        return executeCacheLogged("load cache file " + file.getName(), () ->
-                CacheFiles.<K, V>load(file).forEach(targetMap::putIfAbsent));
+        PersistedCacheFileKey key = new PersistedCacheFileKey(file, targetMap);
+        return PERSISTED_FILE_LOADS.computeIfAbsent(key, ignored ->
+                executeCacheLogged("load cache file " + file.getName(), () ->
+                        mergePersistedEntries(targetMap, CacheFiles.<K, V>load(file))));
+    }
+
+    /** Fills nested cache maps without replacing paths already discovered in this process. */
+    @SuppressWarnings("unchecked")
+    private static <K, V> void mergePersistedEntries(Map<K, V> target, Map<? extends K, ? extends V> stored) {
+        stored.forEach((key, value) -> {
+            if (value instanceof Map<?, ?> storedChildren) {
+                V current = target.computeIfAbsent(key, ignored -> (V) new ConcurrentHashMap<>());
+                if (current instanceof Map<?, ?> children) {
+                    mergePersistedEntries((Map<Object, Object>) children, (Map<Object, Object>) storedChildren);
+                }
+            } else {
+                target.putIfAbsent(key, value);
+            }
+        });
     }
 
     public static CompletableFuture<Void> executeLogged(String taskName, Runnable task) {
@@ -233,6 +256,7 @@ public final class GlobalCache {
         PERSISTED_EXISTENCES_BY_MOD.clear();
         PERSISTED_NAMESPACES_BY_MOD.clear();
         PERSISTED_RESOURCE_LISTS_BY_MOD.clear();
+        PERSISTED_FILE_LOADS.clear();
     }
 
     public static void shutdownExecutors() {
@@ -284,13 +308,18 @@ public final class GlobalCache {
 
     public static CompletableFuture<Void> loadPersistedCachesAsync() {
         if (PERSISTED_CACHE_LOAD_STARTED.compareAndSet(false, true)) {
-            persistedCacheLoad = CompletableFuture.allOf(
-                    loadPersistedCaches(NAMESPACE_CACHE_DIR, PERSISTED_NAMESPACES_BY_MOD),
-                    loadPersistedCaches(RESOURCE_LIST_CACHE_DIR, PERSISTED_RESOURCE_LISTS_BY_MOD)
-            ).exceptionally(throwable -> {
-                LOGGER.error("Lightspeed failed to load persisted caches", throwable);
-                return null;
-            });
+            try {
+                CompletableFuture.allOf(
+                        loadPersistedCaches(NAMESPACE_CACHE_DIR, PERSISTED_NAMESPACES_BY_MOD),
+                        loadPersistedCaches(RESOURCE_LIST_CACHE_DIR, PERSISTED_RESOURCE_LISTS_BY_MOD)
+                ).whenComplete((ignored, failure) -> {
+                    if (failure != null) LOGGER.error("Lightspeed failed to load persisted caches", failure);
+                    persistedCacheLoad.complete(null);
+                });
+            } catch (RuntimeException failure) {
+                persistedCacheLoad.completeExceptionally(failure);
+                throw failure;
+            }
         }
         return persistedCacheLoad;
     }
@@ -309,7 +338,12 @@ public final class GlobalCache {
     }
 
     public static <T> CompletableFuture<T> supplyCacheAfterPersistedLoad(String taskName, Supplier<T> task) {
-        CompletableFuture<T> future = loadPersistedCachesAsync().thenApplyAsync(ignored -> {
+        return supplyCacheAfter(loadPersistedCachesAsync(), taskName, task);
+    }
+
+    public static <T> CompletableFuture<T> supplyCacheAfter(CompletableFuture<?> prerequisite,
+                                                          String taskName, Supplier<T> task) {
+        CompletableFuture<T> future = prerequisite.thenApplyAsync(ignored -> {
             try {
                 return isEnabled ? task.get() : null;
             } catch (Exception e) {
@@ -323,11 +357,11 @@ public final class GlobalCache {
     private static <K, V> CompletableFuture<Void> loadPersistedCaches(File dir, Map<String, Map<K, V>> targetMap) {
         dir.mkdirs();
         CompletableFuture<?>[] futures = CacheFiles.getCacheFiles(dir)
-                .map(file -> executeCacheLogged("load cache file " + file.getName(), () -> {
+                .map(file -> {
                     String id = org.apache.commons.io.FilenameUtils.getBaseName(file.getName());
                     Map<K, V> target = targetMap.computeIfAbsent(id, ignored -> Maps.newConcurrentMap());
-                    CacheFiles.<K, V>load(file).forEach(target::putIfAbsent);
-                }))
+                    return loadPersistedCacheFileAsync(file, target);
+                })
                 .toArray(CompletableFuture[]::new);
         return CompletableFuture.allOf(futures);
     }
@@ -340,5 +374,26 @@ public final class GlobalCache {
                 LOGGER.error("Lightspeed cache persist failed: {}", cache.getClass().getName(), e);
             }
         }, CACHE_EXECUTOR);
+    }
+
+    /** One file load can be shared only when it publishes into the same map instance. */
+    private static final class PersistedCacheFileKey {
+        private final File file;
+        private final Map<?, ?> target;
+
+        private PersistedCacheFileKey(File file, Map<?, ?> target) {
+            this.file = file.toPath().toAbsolutePath().normalize().toFile();
+            this.target = target;
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            return other instanceof PersistedCacheFileKey key && file.equals(key.file) && target == key.target;
+        }
+
+        @Override
+        public int hashCode() {
+            return 31 * file.hashCode() + System.identityHashCode(target);
+        }
     }
 }
