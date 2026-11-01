@@ -16,9 +16,31 @@ public final class RegistryMixinPlugin implements IMixinConfigPlugin {
             "com.ccr4ft3r.lightspeed.mixin.registry.RegistryObjectHolderMixin",
             "com.ccr4ft3r.lightspeed.mixin.registry.ObjectHolderRegistryMixin");
     private Boolean legacyHolderDispatch;
+    private String emfModelSelector;
 
     @Override
     public boolean shouldApplyMixin(String targetClassName, String mixinClassName) {
+        if (mixinClassName.startsWith("com.ccr4ft3r.lightspeed.mixin.compat.emf.")) {
+            if (emfModelSelector == null) {
+                try {
+                    ClassNode manager = MixinService.getService().getBytecodeProvider()
+                            .getClassNode(targetClassName);
+                    emfModelSelector = manager.fields.stream()
+                            .filter(field -> field.name.equals("currentSpecifiedModelLoading"))
+                            .map(field -> field.desc)
+                            .findFirst().orElseThrow(() -> new IllegalStateException("EMF model selector is missing"));
+                } catch (ClassNotFoundException exception) {
+                    return false;
+                } catch (IOException exception) {
+                    throw new IllegalStateException("Cannot read EMF's model selector ABI", exception);
+                }
+            }
+            return switch (emfModelSelector) {
+                case "Ljava/lang/String;" -> mixinClassName.endsWith(".EmfModelLoadingContextMixin");
+                case "Ljava/lang/ThreadLocal;" -> mixinClassName.endsWith(".EmfThreadLocalModelLoadingContextMixin");
+                default -> throw new IllegalStateException("Unsupported EMF model selector " + emfModelSelector);
+            };
+        }
         if (!LEGACY_HOLDER_MIXINS.contains(mixinClassName)) {
             return true;
         }

@@ -16,6 +16,7 @@ public final class LazyEntityRenderer<T extends Entity> extends EntityRenderer<T
     private final EntityRendererProvider<T> provider;
     private final EntityRendererProvider.Context context;
     private final String rendererId;
+    private final RendererLoadingContext.Snapshot modelContext;
     private volatile EntityRenderer<T> delegate;
 
     public LazyEntityRenderer(EntityRendererProvider.Context context, EntityRendererProvider<T> provider,
@@ -24,6 +25,7 @@ public final class LazyEntityRenderer<T extends Entity> extends EntityRenderer<T
         this.context = context;
         this.provider = provider;
         this.rendererId = rendererId;
+        this.modelContext = RendererLoadingContext.capture();
     }
 
     @Override
@@ -83,7 +85,8 @@ public final class LazyEntityRenderer<T extends Entity> extends EntityRenderer<T
             current = delegate;
             if (current == null) {
                 try {
-                    current = (EntityRenderer<T>) provider.create(context);
+                    current = RendererLoadingContext.create(modelContext,
+                            () -> (EntityRenderer<T>) provider.create(context));
                 } catch (RuntimeException exception) {
                     throw new IllegalStateException("Failed to initialize entity renderer " + rendererId, exception);
                 }

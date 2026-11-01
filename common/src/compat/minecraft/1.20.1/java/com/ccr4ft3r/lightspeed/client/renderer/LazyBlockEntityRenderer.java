@@ -11,6 +11,7 @@ public final class LazyBlockEntityRenderer<T extends BlockEntity> implements Blo
     private final BlockEntityRendererProvider<T> provider;
     private final BlockEntityRendererProvider.Context context;
     private final String rendererId;
+    private final RendererLoadingContext.Snapshot modelContext;
     private volatile BlockEntityRenderer<T> delegate;
 
     public LazyBlockEntityRenderer(BlockEntityRendererProvider.Context context,
@@ -18,6 +19,7 @@ public final class LazyBlockEntityRenderer<T extends BlockEntity> implements Blo
         this.context = context;
         this.provider = provider;
         this.rendererId = rendererId;
+        this.modelContext = RendererLoadingContext.capture();
     }
 
     @Override
@@ -57,7 +59,7 @@ public final class LazyBlockEntityRenderer<T extends BlockEntity> implements Blo
             current = delegate;
             if (current == null) {
                 try {
-                    current = provider.create(context);
+                    current = RendererLoadingContext.create(modelContext, () -> provider.create(context));
                 } catch (RuntimeException exception) {
                     throw new IllegalStateException("Failed to initialize block-entity renderer " + rendererId,
                             exception);

@@ -5,6 +5,8 @@
   "compatibilityLevel": "JAVA_17",
   "refmap": "lightspeed.refmap.json",
   "client": [
+    "compat.emf.EmfModelLoadingContextMixin",
+    "compat.emf.EmfThreadLocalModelLoadingContextMixin",
     "compat.LightLoadArchivePersistenceMixin",
     "compat.LazyyyyyRendererFactoryMixin",
     "compat.LazyyyyyLayerDispatchMixin",
