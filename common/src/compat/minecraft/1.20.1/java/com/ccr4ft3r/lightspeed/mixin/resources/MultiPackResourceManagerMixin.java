@@ -9,6 +9,7 @@ import net.minecraft.server.packs.resources.MultiPackResourceManager;
 import net.minecraft.server.packs.resources.FallbackResourceManager;
 import net.minecraft.server.packs.resources.Resource;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -19,9 +20,11 @@ import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Predicate;
 
-@Mixin(MultiPackResourceManager.class)
+/** Shares listing results and avoids intermediate sorting only when the caller merges namespaces. */
+@Mixin(value = MultiPackResourceManager.class, priority = 1100)
 public abstract class MultiPackResourceManagerMixin implements ResourceListingCache {
     @Unique private final Map<ListingQuery, SortedMap<ResourceLocation, Resource>> lightspeed$listings = new ConcurrentHashMap<>();
+    @Shadow @Final private Map<String, FallbackResourceManager> namespacedManagers;
 
     @Shadow public abstract Map<ResourceLocation, Resource> listResources(String path, Predicate<ResourceLocation> filter);
 
@@ -40,6 +43,10 @@ public abstract class MultiPackResourceManagerMixin implements ResourceListingCa
             target = "Lnet/minecraft/server/packs/resources/FallbackResourceManager;listResources(Ljava/lang/String;Ljava/util/function/Predicate;)Ljava/util/Map;"))
     private Map<ResourceLocation, Resource> lightspeed$sortMergedListingOnce(FallbackResourceManager manager, String path,
             Predicate<ResourceLocation> filter, Operation<Map<ResourceLocation, Resource>> original) {
+        // A single-namespace implementation may return the fallback map without an outer sort.
+        if (namespacedManagers.size() <= 1) {
+            return original.call(manager, path, filter);
+        }
         boolean previous = ResourceListingScope.enter();
         try {
             return original.call(manager, path, filter);
