@@ -10,20 +10,13 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 import java.util.List;
 
+/** Replays cached character plans without skipping this reload's provider callbacks. */
 @Mixin(FontManager.class)
 public abstract class FontManagerSnapshotMixin {
     @Inject(method = "finalizeProviderLoading", at = @At("HEAD"), cancellable = true)
     private void lightspeed$restoreFontWarmup(List<GlyphProvider> providers, GlyphProvider missing,
                                               CallbackInfo ci) {
-        if (FontWarmupSnapshot.shouldSkip(providers)) {
-            providers.add(0, missing);
-            ci.cancel();
-        }
-    }
-
-    @Inject(method = "finalizeProviderLoading", at = @At("RETURN"))
-    private void lightspeed$recordFontWarmup(List<GlyphProvider> providers, GlyphProvider missing,
-                                             CallbackInfo ci) {
-        FontWarmupSnapshot.recordCompleted();
+        FontWarmupSnapshot.warmup(providers, missing);
+        ci.cancel();
     }
 }
