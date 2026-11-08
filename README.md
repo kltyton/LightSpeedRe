@@ -1,3 +1,9 @@
+## Fork note
+
+This fork by [Sekai0NI0itamio](https://github.com/Sekai0NI0itamio/LightSpeedRe) adds Minecraft 26.3 targets (`targets/fabric-26.3`, `targets/neoforge-26.3`) on top of [kltyton/LightSpeedRe](https://github.com/kltyton/LightSpeedRe). The original mod is [Lightspeed by CCr4ft3r](https://github.com/CCr4ft3r/lightspeed) (LGPL-3.0-only); the port is by kltyton (LGPL-3.0-or-later). Credit and license notices are retained under `LICENSE` / `gradle.properties` (`mod_authors=CCr4ft3r,kltyton`).
+
+---
+
 <p><img src="https://img.shields.io/badge/-ModLoader:%20Forge-lightgrey" width="111" height="20" />&nbsp;<img src="https://img.shields.io/badge/-Minecraft%201.18.2-green" alt="" width="101" height="20" />&nbsp;<img src="https://img.shields.io/badge/-More%20versions%20&amp;%20optimizations%20are%20work%20in%20progress-informational" width="295" height="20" />&nbsp;<img src="https://img.shields.io/badge/-Client%20Mod%20-critical" width="69" height="20" />&nbsp;</p>
 <h5><strong>Are you using a large modpack? Do you also experience insanely high launch times when using it?<br /> Then my mod "Lightspeed" might be just what you are looking for.</strong></h5>
 <p>&nbsp;</p>
