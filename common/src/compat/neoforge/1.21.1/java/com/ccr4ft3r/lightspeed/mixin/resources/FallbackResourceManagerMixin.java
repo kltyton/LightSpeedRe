@@ -3,6 +3,7 @@ package com.ccr4ft3r.lightspeed.mixin.resources;
 import com.ccr4ft3r.lightspeed.cache.GlobalCache;
 import com.ccr4ft3r.lightspeed.cache.resource.ResourcePackLookup;
 import com.ccr4ft3r.lightspeed.cache.resource.ResourcePackEntry;
+import com.ccr4ft3r.lightspeed.cache.resource.ResourceListingScope;
 import com.ccr4ft3r.lightspeed.compat.FusionPackCompat;
 import com.ccr4ft3r.lightspeed.interfaces.IPathResourcePack;
 import com.ccr4ft3r.lightspeed.interfaces.IndexedPackResources;
@@ -22,16 +23,24 @@ import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.gen.Invoker;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.ModifyVariable;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.io.InputStream;
 import java.util.List;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Optional;
 
 @Mixin(FallbackResourceManager.class)
 public abstract class FallbackResourceManagerMixin implements ResourcePackLookup.GroupedAccess<ResourceLocation> {
     @Shadow @Final public List<?> fallbacks;
     @Shadow @Final private PackType type;
+
+    @ModifyVariable(method = "listResources", at = @At("STORE"), ordinal = 2)
+    private Map<ResourceLocation, Resource> lightspeed$skipIntermediateSort(Map<ResourceLocation, Resource> resources) {
+        return ResourceListingScope.bulk() ? new HashMap<>() : resources;
+    }
 
     @Invoker("createStackMetadataFinder")
     protected abstract IoSupplier<ResourceMetadata> lightspeed$createStackMetadataFinder(ResourceLocation location, int index);

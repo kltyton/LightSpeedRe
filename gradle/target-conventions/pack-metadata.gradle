@@ -1,0 +1,56 @@
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+import java.util.zip.ZipFile
+
+def common = project(':common')
+def manualMetadata = ([file('src/main/resources'), file('src/generated/resources')] + common.templeResourceDirectories)
+        .collect { new File(it, 'pack.mcmeta') }
+def sdkResources = plugins.hasPlugin('net.neoforged.moddev.legacyforge') ?
+        files(tasks.named('createMinecraftArtifacts').flatMap { it.resourcesArtifact }) :
+        configurations.compileClasspath.incoming.artifactView {
+    componentFilter { id -> id instanceof ModuleComponentIdentifier &&
+            (id.group == 'net.minecraft' || id.group == 'net.minecraftforge' && id.module == 'forge') }
+}.files
+def selectedResources = providers.provider { manualMetadata.any { it.isFile() } ? files() : sdkResources }
+def metadataDirectory = layout.buildDirectory.dir('generated/temple/pack-metadata')
+def generatePackMetadata = tasks.register('generatePackMetadata') {
+    inputs.files(manualMetadata).withPropertyName('manualPackMetadata')
+    inputs.files(selectedResources).withPropertyName('minecraftSdk')
+    inputs.properties([minecraft_version: minecraft_version, mod_name: mod_name])
+    outputs.dir(metadataDirectory)
+    doLast {
+        def output = metadataDirectory.get().file('pack.mcmeta').asFile
+        if (manualMetadata.any { it.isFile() }) {
+            java.nio.file.Files.deleteIfExists(output.toPath())
+            return
+        }
+        def formats = []
+        selectedResources.get().each { jar ->
+            if (jar.name.endsWith('.jar')) new ZipFile(jar).withCloseable { zip ->
+                def entry = zip.getEntry('version.json')
+                if (entry != null) {
+                    def version = zip.getInputStream(entry).withCloseable { new JsonSlurper().parse(it, 'UTF-8') }
+                    if (version.id == minecraft_version.toString()) formats.add(version.pack_version)
+                }
+            }
+        }
+        formats = formats.unique()
+        if (formats.size() != 1) throw new GradleException("Expected one Minecraft ${minecraft_version} pack-version definition in the resolved SDK, found ${formats.size()}")
+        def format = formats.first()
+        def pack = [description: mod_name.toString()]
+        if (format.resource instanceof Number && format.data instanceof Number) {
+            pack.pack_format = format.data
+            pack['forge:client_resources_pack_format'] = format.resource
+            pack['forge:server_data_pack_format'] = format.data
+        } else if (format.data_major instanceof Number && format.data_minor instanceof Number) {
+            pack.min_format = [format.data_major, format.data_minor]
+            pack.max_format = [format.data_major, format.data_minor]
+        } else {
+            throw new GradleException("Unsupported Minecraft pack-version definition: ${format}")
+        }
+        output.parentFile.mkdirs()
+        output.setText(JsonOutput.prettyPrint(JsonOutput.toJson([pack: pack])) + '\n', 'UTF-8')
+    }
+}
+tasks.named('processResources', ProcessResources) { from(generatePackMetadata) }

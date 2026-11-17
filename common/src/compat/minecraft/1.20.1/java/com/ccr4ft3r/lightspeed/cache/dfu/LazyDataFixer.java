@@ -18,6 +18,9 @@ public final class LazyDataFixer implements DataFixer {
 
     @Override
     public <T> Dynamic<T> update(DSL.TypeReference type, Dynamic<T> input, int version, int newVersion) {
+        if (version >= newVersion) {
+            return input;
+        }
         return delegate().update(type, input, version, newVersion);
     }
 

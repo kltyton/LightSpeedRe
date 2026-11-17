@@ -10,6 +10,7 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Predicate;
 import java.util.function.Consumer;
+import java.util.function.BiPredicate;
 
 public final class BootstrapAgentBridge {
     public static final int UNKNOWN = -1;
@@ -44,10 +45,33 @@ public final class BootstrapAgentBridge {
         return RESOURCE_INDEX_ENABLED && access != null;
     }
 
+    /** Source ownership is available independently of the optional resource-index fast path. */
+    public static int resourceRootSourceCount(Path root) {
+        if (access == null) {
+            refresh();
+        }
+        Access current = access;
+        if (current == null || root == null) {
+            return UNKNOWN;
+        }
+        try {
+            return current.resourceRootSourceCount(root);
+        } catch (RuntimeException | LinkageError exception) {
+            logFailure("inspect resource root sources", exception);
+            return UNKNOWN;
+        }
+    }
+
     public static void withRegistryFilter(Predicate<?> filter, Object key, Runnable action) {
         Access current = access;
         if (current == null) action.run();
         else current.withRegistryFilter(filter, key, action);
+    }
+
+    public static <T> void registerObjectHolderDispatcher(
+            BiPredicate<Set<Consumer<Predicate<T>>>, Predicate<T>> dispatcher) {
+        Access current = access;
+        if (current != null) current.registerObjectHolderDispatcher(dispatcher);
     }
 
     public static void withRegisterEvent(Object event, Object key, Runnable action) {
@@ -151,10 +175,11 @@ public final class BootstrapAgentBridge {
         }
     }
 
-    public static void finishStartupHttpWindow() {
+    public static void finishStartupArchiveWindow() {
         Access current = access;
-        if (current != null) current.finishStartupHttpWindow();
+        if (current != null) current.finishStartupArchiveWindow();
     }
+
 
 
     private static void disable(String operation, Throwable throwable) {
@@ -170,6 +195,11 @@ public final class BootstrapAgentBridge {
     }
 
     interface Access {
+        int resourceRootSourceCount(Path root);
+
+        <T> void registerObjectHolderDispatcher(
+                BiPredicate<Set<Consumer<Predicate<T>>>, Predicate<T>> dispatcher);
+
         void withRegistryFilter(Predicate<?> filter, Object key, Runnable action);
 
         void withRegisterEvent(Object event, Object key, Runnable action);
@@ -190,7 +220,8 @@ public final class BootstrapAgentBridge {
 
         void persistResourceImage();
 
-        void finishStartupHttpWindow();
+        void finishStartupArchiveWindow();
+
 
 
     }

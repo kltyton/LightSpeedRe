@@ -2,9 +2,6 @@ package com.ccr4ft3r.lightspeed.bootstrap.runtime.transform;
 
 import com.ccr4ft3r.lightspeed.bootstrap.runtime.RuntimeModuleAccess;
 import org.objectweb.asm.ClassReader;
-import org.objectweb.asm.ClassVisitor;
-import org.objectweb.asm.MethodVisitor;
-import org.objectweb.asm.AnnotationVisitor;
 import org.objectweb.asm.Opcodes;
 
 import java.io.IOException;
@@ -12,7 +9,6 @@ import java.io.InputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
-import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HashMap;
@@ -31,6 +27,14 @@ public final class ClassPassThrough {
     private static final String EVENT_BUS = "net.minecraftforge.eventbus.service.ModLauncherService";
     private static final String EVENT_ENGINE = "net.minecraftforge.eventbus.EventBusEngine";
     private static final String DIST_CLEANER = "net.minecraftforge.fml.loading.RuntimeDistCleaner";
+    private static final String ENUM_EXTENDER = "net.minecraftforge.fml.common.asm.RuntimeEnumExtender";
+    private static final String OBJECT_HOLDER = "net.minecraftforge.fml.common.asm.ObjectHolderDefinalize";
+    private static final String CAPABILITY_TOKEN = "net.minecraftforge.fml.common.asm.CapabilityTokenSubclass";
+    private static final String TOKEN_CLASS = "net/minecraftforge/common/capabilities/CapabilityToken";
+    private static final Set<String> VANILLA_HOLDERS = Set.of(
+            "net.minecraft.world.level.block.Blocks", "net.minecraft.world.item.Items",
+            "net.minecraft.world.item.enchantment.Enchantments", "net.minecraft.world.effect.MobEffects",
+            "net.minecraft.core.particles.ParticleTypes", "net.minecraft.sounds.SoundEvents");
     private static final String CURRENT_EVENT_BUS = "c6aa105da1bbb3b2b8dce1282528f1f3aed7746b7df0dd6fb96b89ca8270b18a";
     private static final String CURRENT_EVENT_ENGINE = "679c4106e0e8d80d53f55a66521993008048a5d4ed207ab2b9cf68071df914bf";
     private static final String CURRENT_DIST_CLEANER = "ccc078ea58d120d355c106fe7dd847e12a417fb05d8c908b16b02836e414cc6a";
@@ -51,12 +55,6 @@ public final class ClassPassThrough {
             Map.entry("net.minecraftforge.fml.common.asm.RuntimeEnumExtender", "7bff6553591fa3121bb831cc84cf9cbf67d2bf2e34b5b397888d811229d42c03"),
             Map.entry("net.minecraftforge.fml.common.asm.ObjectHolderDefinalize", "fb91279833973ea22f9a983347bf4004145374db96111f4f369ae454f17d3e8f"),
             Map.entry("net.minecraftforge.fml.common.asm.CapabilityTokenSubclass", "c69ac1dcd4dcea933a8eb4999e37837a5be611b093023f923b576b01abcc37a9"));
-    private static final byte[][] ANNOTATIONS = {
-            ascii("Lnet/minecraftforge/api/distmarker/OnlyIn;"),
-            ascii("Lnet/minecraftforge/api/distmarker/OnlyIns;"),
-            ascii("Lnet/minecraftforge/registries/ObjectHolder;"),
-            ascii("Lnet/minecraftforge/eventbus/api/SubscribeEvent;")
-    };
     private static final LongAdder BYPASSED = new LongAdder();
     private static final LongAdder PHASE_QUERIES = new LongAdder();
     private static final LongAdder MIXIN_PLUGIN_SKIPPED = new LongAdder();
@@ -171,12 +169,9 @@ public final class ClassPassThrough {
             Iterable<?> names = entries instanceof Map<?, ?> map ? map.keySet() : (Set<?>) entries;
             for (Object name : names) specialClasses.add(((String) name).replace('/', '.'));
         }
-        Class<?> mixins = Class.forName("org.spongepowered.asm.mixin.Mixins", false, loader);
-        RuntimeModuleAccess.openToAgent(mixins);
-        Method unvisited = mixins.getMethod("getUnvisitedCount");
-        unvisited.setAccessible(true);
+        // Publication follows the first applied mixin; selection is sealed for this environment.
         Scope published = new Scope(loader, environment, environment.getClass().getMethod("getCurrentEnvironment"),
-                unvisited, targetClasses, Set.copyOf(targetPackages), prefixes, Set.copyOf(specialClasses), revision);
+                targetClasses, Set.copyOf(targetPackages), prefixes, Set.copyOf(specialClasses), revision);
         if (revision != MixinTargetIndex.revision()) return false;
         scope = published;
         return true;
@@ -184,38 +179,66 @@ public final class ClassPassThrough {
 
     public static boolean transform(byte[] bytes, String name, String reason, Object asmType,
             Map<?, ?> phases, boolean hasTransformers, Object audit, ClassLoader loader) {
+        boolean metadata = "mixin".equals(reason);
         Scope active = scope;
-        if (hasTransformers || bytes.length == 0 || !"classloading".equals(reason) || active == null
+        if (hasTransformers || bytes.length == 0 || !metadata && !"classloading".equals(reason)
                 || !audit.getClass().getName().equals("cpw.mods.modlauncher.TransformerAuditTrail")
-                || name.startsWith("net.minecraft.") || name.startsWith("net.minecraftforge.")
-                || name.startsWith("com.mojang.") || !active.containsNoWork(name)) return false;
+                || !metadata && (active == null || !active.containsNoWork(name))) return false;
 
         Object mixin = null;
         Object mixinPhase = null;
+        boolean eventBus = false;
+        Class<?> distCleaner = null;
+        boolean objectHolders = false;
+        boolean enumExtender = false;
+        boolean capabilityTokens = false;
         for (Map.Entry<?, ?> entry : phases.entrySet()) {
             for (Object plugin : (List<?>) entry.getValue()) {
                 Class<?> type = plugin.getClass();
                 if (!TRUSTED.get(type)) return false;
                 if (type.getName().equals(MIXIN) || type.getName().equals(MIXIN_LEGACY)) {
+                    if (metadata) return false;
                     if (type.getName().equals(MIXIN) && !TRUSTED.get(type.getSuperclass())) return false;
                     if (!((Enum<?>) entry.getKey()).name().equals("AFTER")) return false;
                     mixin = plugin;
                     mixinPhase = entry.getKey();
                 } else if (type.getName().equals(EVENT_BUS)) {
+                    // Its native callback returns NO_REWRITE for every non-classloading reason.
+                    if (metadata) continue;
                     Object engine = invoke(EVENT_ENGINE_ACCESS.get(type), plugin);
                     if (!engine.getClass().getName().equals(EVENT_ENGINE) || !TRUSTED.get(engine.getClass())
                             || (boolean) invoke(PENDING_WRAPPER.get(engine.getClass()), null, name)) return false;
+                    eventBus = true;
+                } else {
+                    switch (type.getName()) {
+                        case DIST_CLEANER -> distCleaner = type;
+                        case OBJECT_HOLDER -> objectHolders = true;
+                        case ENUM_EXTENDER -> enumExtender = true;
+                        case CAPABILITY_TOKEN -> capabilityTokens = true;
+                        default -> { return false; }
+                    }
                 }
             }
         }
-        if (mixin == null || mixin.getClass().getClassLoader() != active.loader) return false;
-        ClassReader reader = new ClassReader(bytes);
-        String parent = reader.getSuperName();
-        if (!ClassHierarchy.excludesEvent(loader, parent)
-                || "net/minecraftforge/common/capabilities/CapabilityToken".equals(parent)
-                || (reader.getAccess() & Opcodes.ACC_ENUM) != 0
-                    && Arrays.asList(reader.getInterfaces()).contains("net/minecraftforge/common/IExtensibleEnum")
-                || hasTransformAnnotation(reader, bytes)) return false;
+        if (!metadata && (mixin == null || mixin.getClass().getClassLoader() != active.loader)) return false;
+        if (objectHolders && VANILLA_HOLDERS.contains(name)) return false;
+        int annotationConsumers = (distCleaner != null ? 3 : 0) | (objectHolders ? 4 : 0) | (eventBus ? 8 : 0);
+        if (eventBus || capabilityTokens || enumExtender || annotationConsumers != 0) {
+            ClassReader reader = new ClassReader(bytes);
+            String parent = reader.getSuperName();
+            if (eventBus && !ClassHierarchy.excludesEvent(loader, parent)
+                    || capabilityTokens && (TOKEN_CLASS.equals(reader.getClassName()) || TOKEN_CLASS.equals(parent))
+                    || enumExtender && (reader.getAccess() & Opcodes.ACC_ENUM) != 0
+                        && Arrays.asList(reader.getInterfaces()).contains("net/minecraftforge/common/IExtensibleEnum")
+                    || annotationConsumers != 0 && AnnotationEffects.requiresRewrite(reader, bytes, annotationConsumers, distCleaner)) return false;
+        }
+
+        if (metadata) {
+            // Mixin excluded itself before processor dispatch, so its tracker must remain untouched.
+            invoke(AUDIT.get(audit.getClass()), audit, name, reason);
+            BYPASSED.increment();
+            return true;
+        }
 
         MixinAccess access = MIXIN_ACCESS.get(mixin.getClass());
         Object tracker = classTracker(access, mixin);
@@ -254,8 +277,7 @@ public final class ClassPassThrough {
                 || plugin.getClass().getName().equals(MIXIN) && !TRUSTED.get(plugin.getClass().getSuperclass())
                 || !active.containsNoWork(name)
                 || scope != active || active.revision != MixinTargetIndex.revision()
-                || invoke(active.currentEnvironment, null) != active.environment
-                || (int) invoke(active.unvisited, null) != 0) return false;
+                || invoke(active.currentEnvironment, null) != active.environment) return false;
         MixinAccess access = MIXIN_ACCESS.get(plugin.getClass());
         Object tracker = classTracker(access, plugin);
         if (tracker == null) return false;
@@ -282,44 +304,6 @@ public final class ClassPassThrough {
         }
     }
 
-    private static boolean hasTransformAnnotation(ClassReader reader, byte[] bytes) {
-        boolean subscriberDescriptor = false;
-        for (int item = 1; item < reader.getItemCount(); item++) {
-            int offset = reader.getItem(item);
-            if (offset == 0 || reader.readByte(offset - 1) != 1) continue;
-            int length = reader.readUnsignedShort(offset);
-            for (int annotationIndex = 0; annotationIndex < ANNOTATIONS.length; annotationIndex++) {
-                byte[] annotation = ANNOTATIONS[annotationIndex];
-                if (annotation.length != length) continue;
-                int index = 0;
-                while (index < length && bytes[offset + 2 + index] == annotation[index]) index++;
-                if (index == length) {
-                    if (annotationIndex < 3) return true;
-                    subscriberDescriptor = true;
-                }
-            }
-        }
-        if (!subscriberDescriptor) return false;
-        boolean publicClass = (reader.getAccess() & (Opcodes.ACC_PUBLIC | Opcodes.ACC_PRIVATE | Opcodes.ACC_PROTECTED))
-                == Opcodes.ACC_PUBLIC;
-        boolean[] changesAccess = {false};
-        reader.accept(new ClassVisitor(Opcodes.ASM9) {
-            @Override
-            public MethodVisitor visitMethod(int access, String name, String descriptor, String signature, String[] exceptions) {
-                return new MethodVisitor(Opcodes.ASM9) {
-                    @Override
-                    public AnnotationVisitor visitAnnotation(String annotation, boolean visible) {
-                        if (visible && annotation.equals("Lnet/minecraftforge/eventbus/api/SubscribeEvent;")
-                                && (!publicClass || (access & (Opcodes.ACC_PUBLIC | Opcodes.ACC_PRIVATE | Opcodes.ACC_PROTECTED))
-                                != Opcodes.ACC_PUBLIC)) changesAccess[0] = true;
-                        return null;
-                    }
-                };
-            }
-        }, ClassReader.SKIP_CODE | ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
-        return changesAccess[0];
-    }
-
     private static Method method(Class<?> type, String name, int parameters) {
         for (Method method : type.getDeclaredMethods()) {
             if (method.getName().equals(name) && method.getParameterCount() == parameters) {
@@ -343,10 +327,6 @@ public final class ClassPassThrough {
         }
     }
 
-    private static byte[] ascii(String value) {
-        return value.getBytes(StandardCharsets.US_ASCII);
-    }
-
     private static String packageName(String name) {
         int separator = name.lastIndexOf('.');
         return separator < 0 ? "" : name.substring(0, separator);
@@ -358,7 +338,7 @@ public final class ClassPassThrough {
 
     private record MixinAccess(Field processors, Method trackClass, Method handlesClass) { }
 
-    private record Scope(ClassLoader loader, Object environment, Method currentEnvironment, Method unvisited,
+    private record Scope(ClassLoader loader, Object environment, Method currentEnvironment,
                          Set<String> targetClasses, Set<String> targetPackages, Prefixes mixinPackages,
                          Set<String> specialClasses, long revision) {
         private boolean containsNoWork(String name) {

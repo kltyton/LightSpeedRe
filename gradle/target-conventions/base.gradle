@@ -1,4 +1,4 @@
-import groovy.json.JsonOutput
+import groovy.json.JsonGenerator
 
 def templeRoot = file('../..')
 def outputVariant = providers.gradleProperty('lightspeed.outputVariant').orNull
@@ -78,16 +78,18 @@ tasks.named('processResources', ProcessResources) {
         raw.forge_version = forge_version
         raw.forge_version_range = forge_version_range
     }
+    def json = new JsonGenerator.Options().disableUnicodeEscaping().build()
     def escaped = raw.collectEntries { key, value ->
-        def encoded = JsonOutput.toJson(value.toString())
+        def encoded = json.toJson(value.toString()).replace('\u007f', '\\u007f')
         [(key): encoded.substring(1, encoded.length() - 1)]
     }
     inputs.properties(raw)
     filesMatching(['fabric.mod.json', 'META-INF/mods.toml', 'META-INF/neoforge.mods.toml']) {
-        expand escaped
+        filter { line -> line.replaceAll(/\$\{([a-z_]+)\}/) { match, key -> escaped.containsKey(key) ? escaped[key] : match } }
     }
 }
 tasks.named('jar', Jar) {
+    manifest.attributes('Implementation-Version': project.version.toString())
     from common.sourceSets.main.output
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     from(templeRoot.toPath().resolve('LICENSE').toFile()) { rename { "LICENSE_${mod_id}" } }

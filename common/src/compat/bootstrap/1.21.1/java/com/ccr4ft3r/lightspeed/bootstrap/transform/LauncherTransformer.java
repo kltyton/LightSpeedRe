@@ -3,18 +3,18 @@ package com.ccr4ft3r.lightspeed.bootstrap.transform;
 import com.ccr4ft3r.lightspeed.bootstrap.runtime.RuntimeModuleAccess;
 import com.ccr4ft3r.lightspeed.bootstrap.runtime.attribution.ClassDefinitionAttribution;
 import com.ccr4ft3r.lightspeed.bootstrap.runtime.transform.MixinTargetIndex;
-import com.ccr4ft3r.lightspeed.bootstrap.runtime.transform.ClassHierarchy;
 import com.ccr4ft3r.lightspeed.bootstrap.runtime.transform.ClassPassThrough;
 import com.ccr4ft3r.lightspeed.bootstrap.runtime.registry.ObjectHolderRouter;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.ClassBytesPatch;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.BackgroundScanPatch;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.EventBusPatch;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.EventBusAsmLoaderPatch;
-import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.HttpClientConnectTimeoutPatch;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.ListenerListGrowthPatch;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.ListenerPresencePatch;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.EventWrapperPatch;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.ForgeScanPatch;
+import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.NeoForgeScanPatch;
+import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.UnionFileSystemRootPatch;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.MixinOpcodeNamePatch;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.MixinTargetIndexPatch;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.JdkModuleGraphPatch;
@@ -26,31 +26,48 @@ import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.ModTransitionPatch;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.ModContainerPreparationPatch;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.NamespacedWrapperCapacityPatch;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.AccessTransformerIndexPatch;
+import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.BusLockHelperPatch;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.ObjectHolderPatch;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.ResourceLookupPatch;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.JarModuleReaderPatch;
+import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.ReadOnlyArchiveOpenPatch;
+import com.ccr4ft3r.lightspeed.bootstrap.runtime.filesystem.ReadOnlyArchiveOpen;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.UnionInputStreamPatch;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.ServiceDiscoveryPatch;
+import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.EarlyDisplayVsyncPatch;
+import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.TypeHashPatch;
 
 import java.lang.instrument.ClassFileTransformer;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.ProtectionDomain;
+import java.io.InputStream;
+import java.io.IOException;
+import java.util.Set;
+import java.util.Arrays;
+import java.util.Comparator;
+import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.ClassWriter;
+import org.objectweb.asm.tree.ClassNode;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 import java.util.function.UnaryOperator;
+import java.util.function.BiFunction;
 
 public final class LauncherTransformer implements ClassFileTransformer {
     private static final String FORGE_DISCOVERY = "net/minecraftforge/fml/loading/ModDirTransformerDiscoverer";
     private static final String NEOFORGE_DISCOVERY = "net/neoforged/fml/loading/ModDirTransformerDiscoverer";
+    private static final String NEOFORGE_EARLY_WINDOW = "net/neoforged/fml/earlydisplay/DisplayWindow";
     private static final String SECURE_JAR = "cpw/mods/jarhandling/impl/Jar";
+    private static final String SECURE_JAR_CONTENTS = "cpw/mods/jarhandling/impl/JarContentsImpl";
     private static final String SECURE_JAR_MODULE_READER = "cpw/mods/jarhandling/impl/Jar$JarModuleDataProvider";
     private static final String UNION_FILE_SYSTEM = "cpw/mods/niofs/union/UnionFileSystem";
     private static final String UNION_FILE_SYSTEM_PROVIDER = "cpw/mods/niofs/union/UnionFileSystemProvider";
     private static final String MODULE_CLASS_LOADER = "cpw/mods/cl/ModuleClassLoader";
     private static final String FORGE_SCANNER = "net/minecraftforge/fml/loading/moddiscovery/Scanner";
+    private static final String NEOFORGE_SCANNER = "net/neoforged/fml/loading/modscan/Scanner";
     private static final String FORGE_BACKGROUND_SCANNER =
             "net/minecraftforge/fml/loading/moddiscovery/BackgroundScanHandler";
     private static final String EVENT_BUS = "net/minecraftforge/eventbus/EventBus";
@@ -67,13 +84,17 @@ public final class LauncherTransformer implements ClassFileTransformer {
     private static final String MIXIN_EXTENSIONS = "org/spongepowered/asm/mixin/transformer/ext/Extensions";
     private static final String MIXIN_LAUNCH_PLUGIN = "org/spongepowered/asm/launch/MixinLaunchPluginLegacy";
     private static final String JDK_RESOLVER = "java/lang/module/Resolver";
-    private static final String JDK_HTTP_CLIENT_IMPL = "jdk/internal/net/http/HttpClientImpl";
+    private static final String JDK_ZIP_FILE_SYSTEM = "jdk/nio/zipfs/ZipFileSystem";
     private static final String CLASS_TRANSFORMER = "cpw/mods/modlauncher/ClassTransformer";
     private static final String FML_CONTAINER = "net/minecraftforge/fml/javafmlmod/FMLModContainer";
     private static final String KEY_LOOKUP = "net/minecraftforge/client/settings/KeyMappingLookup";
     private static final String MOD_CONTAINER = "net/minecraftforge/fml/ModContainer";
     private static final String MOD_LOADER = "net/minecraftforge/fml/ModLoader";
     private static final String ACCESS_TRANSFORMER_LIST = "net/minecraftforge/accesstransformer/parser/AccessTransformerList";
+    private static final String NEOFORGE_ACCESS_TRANSFORMER_LIST =
+            "net/neoforged/accesstransformer/parser/AccessTransformerList";
+    private static final String NEOFORGE_LOCK_HELPER = "net/neoforged/bus/LockHelper";
+    private static final String ASM_TYPE = String.join("/", "org", "objectweb", "asm", "Type");
     private static final Map<String, List<Target>> TARGETS = Map.ofEntries(
             Map.entry(MOD_LOADER, List.of(
                     target("30f45ffd6318148c3f59994f30a0e3ee083884fb7efe313a594411b5171ed0ce",
@@ -81,6 +102,12 @@ public final class LauncherTransformer implements ClassFileTransformer {
             Map.entry(ACCESS_TRANSFORMER_LIST, List.of(
                     target("5f8b37bb4512ba5c5192474370338299e0fb15ce05cf060a546160e87cc4e6a5",
                             AccessTransformerIndexPatch::apply))),
+            Map.entry(NEOFORGE_ACCESS_TRANSFORMER_LIST, List.of(
+                    target("829bc76a40546bf39782650b9bb999e269c1cca0fd08d358ea4a5ffb7589091c",
+                            AccessTransformerIndexPatch::applyNamed))),
+            Map.entry(NEOFORGE_LOCK_HELPER, List.of(
+                    targetWithoutAgentRead("28a7dd87748b9c42334ea2a1853d43ff808b73cb70cb8ce03eb40adfe93a50bc",
+                            BusLockHelperPatch::apply))),
             Map.entry(MOD_CONTAINER, List.of(
                     target("3242e1fdaf9db33edae81640288392f8a83acdb0d6ef32cacf4f6b56038a1955",
                             ModTransitionPatch::apply))),
@@ -107,10 +134,12 @@ public final class LauncherTransformer implements ClassFileTransformer {
                             ClassPassThroughPatch::apply))),
             Map.entry(JDK_RESOLVER, List.of(
                     targetWithoutAgentRead("50592f617814a53ad1bb78049a4d3a68bfd7fe07f4499cb881a5c13de64c0208",
+                            JdkModuleGraphPatch::apply),
+                    targetWithoutAgentRead("f1758642e20a326294971538e3456f3ef8136ed46f1d3d610abc469dc8166c21",
                             JdkModuleGraphPatch::apply))),
-            Map.entry(JDK_HTTP_CLIENT_IMPL, List.of(
-                    target("8bb0617587668c0b746e1540a7f29b0547cf225355a6f922b7767e30b6188fac",
-                            HttpClientConnectTimeoutPatch::apply))),
+            Map.entry(JDK_ZIP_FILE_SYSTEM, List.of(
+                    targetWithoutAgentRead("515ae2d4ca6ad81d5aae358a7f3359eb75678d367f01d695a935a9140a8182b7",
+                            ReadOnlyArchiveOpenPatch::zipFileSystem))),
             Map.entry(MIXIN_PROCESSOR, List.of(
                     target("c354f62d30691abf138619853ece6c8f242250384ab77013fab36a3c2b6b427c",
                             MixinTargetIndexPatch::processor),
@@ -123,28 +152,42 @@ public final class LauncherTransformer implements ClassFileTransformer {
                             MixinTargetIndexPatch::configuration))),
             Map.entry(MIXIN_BYTECODE, List.of(
                     target("4e1778d03277fd62bde5fce2d65932922f8cb710926a0ecb94393f3a7d2dfb47",
+                            MixinOpcodeNamePatch::apply),
+                    target("f739f2b50dc1deb178df4cd16a977808795d965a0fe0118a5af233f5db8abe37",
                             MixinOpcodeNamePatch::apply))),
+            Map.entry(ASM_TYPE, List.of(
+                    targetWithoutAgentRead("282547d85fa24798e6e79ca9edacae02d5a95ceab980cf1bbe4f88823ad06574",
+                            TypeHashPatch::apply),
+                    targetWithoutAgentRead("edfc6365198731997dc2357c17f956e510dc4f3ae4a289751499eeaa8dd2c2c8",
+                            TypeHashPatch::apply),
+                    targetWithoutAgentRead("d19ee6bd42204bd3ba102583a44ee4ab736868a1caa8ffa0dabcc2a677df55b6",
+                            TypeHashPatch::apply))),
             Map.entry(FORGE_DISCOVERY, List.of(
                     target("fe801f95d52cff0afda4a64768a77a6567fcb8a55cbeed1efee491e2098142f3", ServiceDiscoveryPatch::forge),
                     target("b9991df65f099d651b4d07729412b4c7f6b2815e6eb1dc6b65f43a5b724b72a9", ServiceDiscoveryPatch::forge))),
+            Map.entry(NEOFORGE_EARLY_WINDOW, List.of(
+                    targetWithoutAgentRead("bd1a0a80ac030ddf88f473571857ef8a56e48853043e1b5ec4d1bfd580fb4860",
+                            EarlyDisplayVsyncPatch::apply))),
             Map.entry(NEOFORGE_DISCOVERY, List.of(
                     target("7a94a5ce380ea983a337d5a8e3ea3eb84e88b584fc172c6ab314948967c9083c", ServiceDiscoveryPatch::neoForge))),
             Map.entry(SECURE_JAR, List.of(
-                    target("bba6a4ee9327d364967a3cfec4707d695d5962cb42a20a4b212a26434a5b9055", ResourceLookupPatch::applyWithRegistration))),
-            Map.entry(SECURE_JAR_MODULE_READER, List.of(
-                    targetWithoutAgentRead("045c87e04bf053c21da1cd06ea9d3a2426eed5bdc3464069d0191e1758401ab0",
-                            JarModuleReaderPatch::apply))),
+                    target("bba6a4ee9327d364967a3cfec4707d695d5962cb42a20a4b212a26434a5b9055", ResourceLookupPatch::applyWithRegistration),
+                    target("ce036690cdf020cafb15d4a3a84a009c6bb50cea8073ea82ada379e5778d0838", ResourceLookupPatch::applyVerifySkipOnly))),
+            Map.entry(SECURE_JAR_CONTENTS, List.of(
+                    target("c309524b8bb1c29bc80a1944b25ccdceaab7e010d3e7888287924d1f8ceeebad", ResourceLookupPatch::applyContentsIndex))),
             Map.entry(UNION_FILE_SYSTEM, List.of(
-                    target("de67081ffbb73a4db7cddfbed23b397cdceea4cfe59938cf3ee16318018434c4",
-                            UnionInputStreamPatch::fileSystem))),
-            Map.entry(UNION_FILE_SYSTEM_PROVIDER, List.of(
-                    target("4385f3c63f714548e56f6ebcad2d8b490b9b54132159040c270ab677b48c3504",
-                            UnionInputStreamPatch::provider))),
+                    target("f08bb177b6950b7a6c47a8db5a0a814293d180b01bfbbdf28eeffe546f66645f",
+                            bytes -> ReadOnlyArchiveOpenPatch.union(UnionFileSystemRootPatch.apply(bytes))))),
+            Map.entry(SECURE_JAR_MODULE_READER, List.of(
+                    targetWithLoader("045c87e04bf053c21da1cd06ea9d3a2426eed5bdc3464069d0191e1758401ab0",
+                            (loader, bytes) -> JarModuleReaderPatch.apply(bytes, loader)))),
             Map.entry(MODULE_CLASS_LOADER, List.of(
                     target("62e3eaa069098d55f5da70e6dbc2a35a1e622d68804b2af6049583151bcb6f16", ClassBytesPatch::apply),
                     target("1ea195fe3b32c95e7232f49c14750b9245a664e3b66c89e298c31371d8b36376", ClassBytesPatch::apply))),
             Map.entry(FORGE_SCANNER, List.of(
                     target("40475b4b77a9709ac07ef64f00aa234aad403c0f82c4e65b8329ee03f379f495", ForgeScanPatch::apply))),
+            Map.entry(NEOFORGE_SCANNER, List.of(
+                    target("fd6d50099db9a3f7c3216b28534d073f21b8ea32f60414d0db50d76ef5050c45", NeoForgeScanPatch::apply))),
             Map.entry(FORGE_BACKGROUND_SCANNER, List.of(
                     target("a6e143da3b8fe5045e61e0c9b469555a69296eff2105e4b936a47f96ba12c613",
                             BackgroundScanPatch::apply))),
@@ -152,9 +195,9 @@ public final class LauncherTransformer implements ClassFileTransformer {
                     target("85c5db423fac7eb69107993923aa8a1967d21916fd5c9b32d36332700e31e3d0", EventBusPatch::apply))),
             Map.entry(EVENT_LISTENER_LIST, List.of(
                     target("e80d8842d05039cb6965c4acad102a879f6a3268a103f794a630c501d0f1a9de",
-                            ListenerListGrowthPatch::apply))),
+                            bytes -> ListenerPresencePatch.applyToList(ListenerListGrowthPatch.apply(bytes))))),
             Map.entry(EVENT_LISTENER_LIST_INST, List.of(
-                    targetWithoutAgentRead("6e487408ade21fc340cd66ed413e9abdd750373021569f819621a9a1950b5605",
+                    target("6e487408ade21fc340cd66ed413e9abdd750373021569f819621a9a1950b5605",
                             ListenerPresencePatch::apply))),
             Map.entry(EVENT_WRAPPER_FACTORY, List.of(
                     target("eecfddd6384bf97f6769da1e80a427bda678f093d46e3e77a27b7be696b3e46b", EventWrapperPatch::apply),
@@ -172,6 +215,7 @@ public final class LauncherTransformer implements ClassFileTransformer {
                     targetWithoutAgentRead("63b55b2dbf81e925b56bfd4022375febbad12ac224aa5dcefe6d9b7847af3baa",
                             NamespacedWrapperCapacityPatch::apply))));
 
+    private static final String JDK_FILE_PROVIDER = "java/nio/file/spi/FileSystemProvider";
     private final Consumer<String> logger;
 
     public LauncherTransformer(Consumer<String> logger) {
@@ -188,7 +232,9 @@ public final class LauncherTransformer implements ClassFileTransformer {
     @Override
     public byte[] transform(Module module, ClassLoader loader, String className, Class<?> classBeingRedefined,
                             ProtectionDomain protectionDomain, byte[] classfileBuffer) {
-        ClassHierarchy.observe(loader, className, classfileBuffer);
+        if (JDK_FILE_PROVIDER.equals(className)) {
+            return UnionInputStreamPatch.jdkProvider(classfileBuffer);
+        }
         if (classBeingRedefined == null && ClassDefinitionAttribution.enabled()) {
             ClassDefinitionAttribution.record(module, loader, className, protectionDomain);
         }
@@ -213,19 +259,18 @@ public final class LauncherTransformer implements ClassFileTransformer {
         if (JDK_RESOLVER.equals(className) && Runtime.version().feature() != 21) {
             return null;
         }
-        if (JDK_HTTP_CLIENT_IMPL.equals(className) && Runtime.version().feature() != 21) {
+        if (JDK_ZIP_FILE_SYSTEM.equals(className) && Runtime.version().feature() != 21) {
             return null;
         }
-        if ((MIXIN_PROCESSOR.equals(className) || MIXIN_CONFIG.equals(className)
-                || FML_CONTAINER.equals(className) || KEY_LOOKUP.equals(className)
-                || ACCESS_TRANSFORMER_LIST.equals(className))
-                && classBeingRedefined != null) {
-            return null;
+        if (classBeingRedefined != null && requiresInitialDefinition(className)) {
+            throw new IllegalStateException("Structural target was loaded before early bootstrap: " + className);
         }
 
         try {
             String fingerprint = sha256(JDK_RESOLVER.equals(className)
                     ? JdkModuleGraphPatch.methodBytes(classfileBuffer)
+                    : JDK_ZIP_FILE_SYSTEM.equals(className)
+                    ? ReadOnlyArchiveOpenPatch.writableMethodBytes(classfileBuffer)
                     : NAMESPACED_WRAPPER.equals(className)
                     ? NamespacedWrapperCapacityPatch.methodBytes(classfileBuffer)
                     : classfileBuffer);
@@ -236,11 +281,18 @@ public final class LauncherTransformer implements ClassFileTransformer {
                     break;
                 }
             }
+            if (target == null && classBeingRedefined != null) {
+                target = originalTarget(classBeingRedefined, classfileBuffer, candidates);
+            }
             if (target == null) {
                 logger.accept("skipped " + className + ": unsupported fingerprint " + fingerprint);
                 return null;
             }
-            byte[] transformed = target.patch().apply(classfileBuffer);
+            if (SECURE_JAR.equals(className)) JarModuleReaderPatch.capture(loader, classfileBuffer);
+            byte[] transformed = target.patch().apply(loader, classfileBuffer);
+            if (JDK_ZIP_FILE_SYSTEM.equals(className)) {
+                ReadOnlyArchiveOpen.installed();
+            }
             if (target.requiresAgentRead()) {
                 RuntimeModuleAccess.grantReadAccess(module);
             }
@@ -254,17 +306,77 @@ public final class LauncherTransformer implements ClassFileTransformer {
                 System.setProperty("lightspeed.bootstrapAgent.moduleGraph", "true");
             }
             if (SECURE_JAR.equals(className)
-                    && "bba6a4ee9327d364967a3cfec4707d695d5962cb42a20a4b212a26434a5b9055".equals(fingerprint)) {
+                    && "bba6a4ee9327d364967a3cfec4707d695d5962cb42a20a4b212a26434a5b9055".equals(target.sha256())) {
+                System.setProperty("lightspeed.bootstrapAgent.resourceIndex", "true");
+            }
+            if (UNION_FILE_SYSTEM.equals(className)) {
                 System.setProperty("lightspeed.bootstrapAgent.resourceIndex", "true");
             }
             logger.accept((classBeingRedefined == null ? "patched " : "repatched ")
-                    + className + (JDK_RESOLVER.equals(className) || NAMESPACED_WRAPPER.equals(className)
-                    ? " methodSha256=" : " sha256=") + fingerprint);
+                    + className + (JDK_RESOLVER.equals(className) || JDK_ZIP_FILE_SYSTEM.equals(className)
+                    || NAMESPACED_WRAPPER.equals(className) ? " methodSha256=" : " sha256=") + fingerprint);
             return transformed;
-        } catch (RuntimeException | LinkageError exception) {
+        } catch (IOException | RuntimeException | LinkageError exception) {
+            System.setProperty("lightspeed.bootstrapAgent.patchFailure", className + ": " + exception);
             logger.accept("failed to patch " + className + ": " + exception);
             return null;
         }
+    }
+
+    public static Set<String> targetClassNames() {
+        Set<String> names = new java.util.HashSet<>();
+        TARGETS.keySet().forEach(name -> names.add(name.replace('/', '.')));
+        names.add(JDK_FILE_PROVIDER.replace('/', '.'));
+        return Set.copyOf(names);
+    }
+
+    public static boolean requiresInitialDefinition(String name) {
+        return FML_CONTAINER.equals(name) || KEY_LOOKUP.equals(name) || NAMESPACED_WRAPPER.equals(name)
+                || ASM_TYPE.equals(name) || EVENT_LISTENER_LIST_INST.equals(name);
+    }
+
+    private static Target originalTarget(Class<?> type, byte[] bytes, List<Target> candidates) throws IOException {
+        try (InputStream input = type.getResourceAsStream("/" + type.getName().replace('.', '/') + ".class")) {
+            if (input == null) return null;
+            byte[] original = input.readAllBytes();
+            String digest = sha256(original);
+            for (Target candidate : candidates) {
+                if (candidate.sha256().equals(digest) && Arrays.equals(canonical(original), canonical(bytes))) {
+                    return candidate;
+                }
+            }
+            return null;
+        }
+    }
+
+    private static byte[] canonical(byte[] bytes) {
+        ClassNode node = new ClassNode();
+        new ClassReader(bytes).accept(node, ClassReader.SKIP_DEBUG | ClassReader.EXPAND_FRAMES);
+        // HotSpot does not reconstruct CLASS-retained annotations for an already loaded class.
+        node.invisibleAnnotations = null;
+        node.invisibleTypeAnnotations = null;
+        node.fields.forEach(field -> {
+            field.invisibleAnnotations = null;
+            field.invisibleTypeAnnotations = null;
+        });
+        node.methods.forEach(method -> {
+            method.invisibleAnnotations = null;
+            method.invisibleTypeAnnotations = null;
+            method.invisibleParameterAnnotations = null;
+            method.invisibleAnnotableParameterCount = 0;
+            method.invisibleLocalVariableAnnotations = null;
+            method.tryCatchBlocks.forEach(block -> block.invisibleTypeAnnotations = null);
+            method.instructions.forEach(instruction -> instruction.invisibleTypeAnnotations = null);
+        });
+        if (node.recordComponents != null) node.recordComponents.forEach(component -> {
+            component.invisibleAnnotations = null;
+            component.invisibleTypeAnnotations = null;
+        });
+        node.methods.sort(Comparator.comparing(method -> method.name + method.desc));
+        node.fields.sort(Comparator.comparing(field -> field.name + field.desc));
+        ClassWriter writer = new ClassWriter(0);
+        node.accept(writer);
+        return writer.toByteArray();
     }
 
     private static String sha256(byte[] bytes) {
@@ -276,13 +388,17 @@ public final class LauncherTransformer implements ClassFileTransformer {
     }
 
     private static Target target(String sha256, UnaryOperator<byte[]> patch) {
-        return new Target(sha256, patch, true);
+        return new Target(sha256, (loader, bytes) -> patch.apply(bytes), true);
     }
 
     private static Target targetWithoutAgentRead(String sha256, UnaryOperator<byte[]> patch) {
-        return new Target(sha256, patch, false);
+        return new Target(sha256, (loader, bytes) -> patch.apply(bytes), false);
     }
 
-    private record Target(String sha256, UnaryOperator<byte[]> patch, boolean requiresAgentRead) {
+    private static Target targetWithLoader(String sha256, BiFunction<ClassLoader, byte[], byte[]> patch) {
+        return new Target(sha256, patch, true);
+    }
+
+    private record Target(String sha256, BiFunction<ClassLoader, byte[], byte[]> patch, boolean requiresAgentRead) {
     }
 }

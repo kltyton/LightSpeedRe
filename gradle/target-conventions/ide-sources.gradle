@@ -1,0 +1,55 @@
+import groovy.json.JsonOutput
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.security.MessageDigest
+
+def commonRoot = project.buildFile.canonicalFile.parentFile
+def templeRoot = commonRoot.parentFile
+def identity = new Properties()
+new File(templeRoot, 'gradle.properties').withReader('UTF-8') { identity.load(it) }
+def selectionFile = new File(templeRoot, '.temple/active-target')
+def selection = selectionFile.isFile() ? selectionFile.getText('UTF-8').trim() : identity.getProperty('temple_default_target')
+def target = "${rootProject.property('loader')}-${rootProject.property('minecraft_version')}"
+def context = new File(commonRoot, ".gradle/contexts/${target}").toPath()
+Files.createDirectories(context)
+def destination = context.resolve('ide-sources.json')
+def relative = { File file -> templeRoot.toPath().relativize(file.toPath()).toString().replace('\\', '/') }
+def inputs = new TreeMap<String, String>()
+def inputFiles = [templeRoot, commonRoot, rootProject.projectDir].collectMany { base ->
+    ['gradle.properties', 'settings.gradle', 'settings.gradle.kts', 'build.gradle', 'build.gradle.kts']
+            .collect { new File(base, it) }.findAll { it.isFile() }
+}
+def conventions = new File(templeRoot, 'gradle/target-conventions')
+if (conventions.isDirectory()) conventions.eachFileRecurse { file ->
+    if (file.isFile() && (file.name.endsWith('.gradle') || file.name.endsWith('.gradle.kts'))) inputFiles.add(file)
+}
+inputFiles.each { file -> inputs[relative(file)] = MessageDigest.getInstance('SHA-256').digest(file.bytes).encodeHex().toString() }
+def inventory = new TreeSet<String>()
+def sourceDirectory = new File(commonRoot, 'src')
+def tests = new File(sourceDirectory, 'test').toPath()
+if (sourceDirectory.isDirectory()) sourceDirectory.eachFileRecurse { file ->
+    if (file.isFile() && !file.toPath().startsWith(tests)) {
+        def boundary = file.parentFile
+        while (boundary != null && boundary != sourceDirectory && !(boundary.name in ['java', 'resources'])) boundary = boundary.parentFile
+        if (boundary != null && boundary != sourceDirectory) {
+            boolean resource = boundary.name == 'resources'
+            if (resource || file.name.endsWith('.java')) inventory.add((resource ? 'R:' : 'J:') + relative(boundary))
+        } else if (file.name.endsWith('.java')) inventory.add('J:' + relative(file))
+    }
+}
+def content = JsonOutput.toJson([schema: 2, target: target, selection: selection,
+        targetDirectory: rootProject.projectDir.canonicalPath, projectDirectory: project.projectDir.canonicalPath,
+        javaRoots: project.ext.templeSourceDirectories.collect { it.canonicalPath },
+        resourceRoots: project.ext.templeResourceDirectories.collect { it.canonicalPath },
+        inputs: inputs, inventory: inventory])
+if (!Files.isRegularFile(destination) || Files.readString(destination) != content) {
+    def pending = Files.createTempFile(context, 'ide-sources-', '.tmp')
+    try {
+        Files.writeString(pending, content)
+        try { Files.move(pending, destination, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING) }
+        catch (AtomicMoveNotSupportedException ignored) {
+            Files.move(pending, destination, StandardCopyOption.REPLACE_EXISTING)
+        }
+    } finally { Files.deleteIfExists(pending) }
+}

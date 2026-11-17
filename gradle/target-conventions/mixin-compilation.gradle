@@ -30,6 +30,7 @@ gradle.projectsEvaluated {
         def obfuscationEnvironment = mixin.defaultObfuscationEnv
         commonCompiler.configure { compiler ->
             compiler.dependsOn createMappings, embeddedCompiler
+            compiler.options.incremental = false
             compiler.inputs.file(mappings)
             compiler.outputs.files(refmap, shadowMappings, packagedRefmap)
             compiler.options.compilerArgs.addAll([

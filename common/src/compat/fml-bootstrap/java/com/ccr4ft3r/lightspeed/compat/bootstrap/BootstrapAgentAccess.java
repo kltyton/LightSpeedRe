@@ -7,8 +7,20 @@ import java.util.List;
 import java.util.Set;
 import java.util.function.Predicate;
 import java.util.function.Consumer;
+import java.util.function.BiPredicate;
 
 final class BootstrapAgentAccess implements BootstrapAgentBridge.Access {
+    @Override
+    public int resourceRootSourceCount(Path root) {
+        return BootstrapHooks.resourceRootSourceCount(root);
+    }
+
+    @Override
+    public <T> void registerObjectHolderDispatcher(
+            BiPredicate<Set<Consumer<Predicate<T>>>, Predicate<T>> dispatcher) {
+        BootstrapHooks.registerObjectHolderDispatcher(dispatcher);
+    }
+
     @Override
     public void withRegistryFilter(Predicate<?> filter, Object key, Runnable action) {
         BootstrapHooks.withRegistryFilter(filter, key, action);
@@ -61,9 +73,10 @@ final class BootstrapAgentAccess implements BootstrapAgentBridge.Access {
     }
 
     @Override
-    public void finishStartupHttpWindow() {
-        BootstrapHooks.finishStartupHttpWindow();
+    public void finishStartupArchiveWindow() {
+        BootstrapHooks.finishStartupArchiveWindow();
     }
+
 
 
 }

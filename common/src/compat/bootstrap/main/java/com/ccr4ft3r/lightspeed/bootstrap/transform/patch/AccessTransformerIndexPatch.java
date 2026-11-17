@@ -6,9 +6,6 @@ import org.objectweb.asm.Type;
 import org.objectweb.asm.tree.*;
 
 public final class AccessTransformerIndexPatch {
-    private static final String INDEX = "lightspeed$targetIndex";
-    private static final String BUILD = "lightspeed$buildTargetIndex";
-    private static final String MAP = "Ljava/util/Map;";
     private static final Handle METAFACTORY = new Handle(Opcodes.H_INVOKESTATIC,
             "java/lang/invoke/LambdaMetafactory", "metafactory",
             "(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;"
@@ -21,12 +18,10 @@ public final class AccessTransformerIndexPatch {
         MethodNode contains = node.methods.stream().filter(m -> m.name.equals("containsClassTarget")).findFirst().orElseThrow();
         MethodNode select = node.methods.stream().filter(m -> m.name.equals("getTransformersForTarget")).findFirst().orElseThrow();
         String asmType = Type.getArgumentTypes(contains.desc)[0].getDescriptor();
-        node.fields.add(new FieldNode(Opcodes.ACC_PRIVATE | Opcodes.ACC_VOLATILE, INDEX, MAP, null, null));
-        node.methods.add(builder(node.name, asmType));
 
         contains.instructions.clear(); contains.tryCatchBlocks.clear();
         if (contains.localVariables != null) contains.localVariables.clear();
-        contains.instructions.add(index(node.name));
+        contains.instructions.add(index(node.name, asmType));
         contains.instructions.add(new VarInsnNode(Opcodes.ALOAD, 1));
         contains.instructions.add(new MethodInsnNode(Opcodes.INVOKEINTERFACE, "java/util/Map", "containsKey", "(Ljava/lang/Object;)Z", true));
         contains.instructions.add(new InsnNode(Opcodes.IRETURN));
@@ -36,7 +31,7 @@ public final class AccessTransformerIndexPatch {
         AbstractInsnNode collector = map.getNext();
         while (select.instructions.getFirst() != collector) select.instructions.remove(select.instructions.getFirst());
         if (select.localVariables != null) select.localVariables.clear();
-        InsnList selected = index(node.name);
+        InsnList selected = index(node.name, asmType);
         selected.add(new VarInsnNode(Opcodes.ALOAD, 1));
         selected.add(new MethodInsnNode(Opcodes.INVOKESTATIC, "java/util/Collections", "emptyList", "()Ljava/util/List;", false));
         selected.add(new MethodInsnNode(Opcodes.INVOKEINTERFACE, "java/util/Map", "getOrDefault", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", true));
@@ -49,51 +44,80 @@ public final class AccessTransformerIndexPatch {
                 "java/util/Map", "putAll", "(Ljava/util/Map;)V");
         InsnList invalidate = new InsnList();
         invalidate.add(new VarInsnNode(Opcodes.ALOAD, 0));
-        invalidate.add(new InsnNode(Opcodes.ACONST_NULL));
-        invalidate.add(new FieldInsnNode(Opcodes.PUTFIELD, node.name, INDEX, MAP));
+        invalidate.add(new MethodInsnNode(Opcodes.INVOKESTATIC, AsmPatchSupport.HOOK_OWNER,
+                "invalidateAccessTransformers", "(Ljava/lang/Object;)V", false));
         load.instructions.insert(commit, invalidate);
         return AsmPatchSupport.write(node);
     }
 
-    private static InsnList index(String owner) {
-        LabelNode ready = new LabelNode();
-        InsnList code = new InsnList();
-        code.add(new VarInsnNode(Opcodes.ALOAD, 0));
-        code.add(new FieldInsnNode(Opcodes.GETFIELD, owner, INDEX, MAP));
-        code.add(new InsnNode(Opcodes.DUP));
-        code.add(new JumpInsnNode(Opcodes.IFNONNULL, ready));
-        code.add(new InsnNode(Opcodes.POP));
-        code.add(new VarInsnNode(Opcodes.ALOAD, 0));
-        code.add(new MethodInsnNode(Opcodes.INVOKESPECIAL, owner, BUILD, "()" + MAP, false));
-        code.add(ready);
-        code.add(new FrameNode(Opcodes.F_SAME1, 0, null, 1, new Object[]{"java/util/Map"}));
-        return code;
+    /** Patches NeoForge 10.x AccessTransformerList to index rules by target Type/TargetType/name. */
+    public static byte[] applyNamed(byte[] bytes) {
+        ClassNode node = AsmPatchSupport.read(bytes);
+        MethodNode contains = AsmPatchSupport.method(node, "containsClassTarget", "(Lorg/objectweb/asm/Type;)Z");
+        String asmType = Type.getArgumentTypes(contains.desc)[0].getDescriptor();
+        MethodNode select = AsmPatchSupport.method(node, "getTransformersForTarget",
+                "(" + asmType + ")Ljava/util/Map;");
+
+        select.instructions.clear();
+        select.tryCatchBlocks.clear();
+        if (select.localVariables != null) {
+            select.localVariables.clear();
+        }
+        InsnList selected = new InsnList();
+        selected.add(new VarInsnNode(Opcodes.ALOAD, 0));
+        selected.add(new VarInsnNode(Opcodes.ALOAD, 0));
+        selected.add(new FieldInsnNode(Opcodes.GETFIELD, node.name, "accessTransformers", "Ljava/util/Map;"));
+        String targetClass = "net/neoforged/accesstransformer/Target";
+        String targetTypeDesc = "Lnet/neoforged/accesstransformer/TargetType;";
+        selected.add(targetLambda(targetClass, "getASMType", "()" + asmType, "(L" + targetClass + ";)" + asmType));
+        selected.add(targetLambda(targetClass, "getType", "()" + targetTypeDesc,
+                "(L" + targetClass + ";)" + targetTypeDesc));
+        selected.add(targetLambda(targetClass, "targetName", "()Ljava/lang/String;",
+                "(L" + targetClass + ";)Ljava/lang/String;"));
+        selected.add(new MethodInsnNode(Opcodes.INVOKESTATIC, AsmPatchSupport.HOOK_OWNER,
+                "accessTransformersNamedFor",
+                "(Ljava/lang/Object;Ljava/util/Map;Ljava/util/function/Function;"
+                        + "Ljava/util/function/Function;Ljava/util/function/Function;)Ljava/util/Map;",
+                false));
+        selected.add(new VarInsnNode(Opcodes.ALOAD, 1));
+        selected.add(new MethodInsnNode(Opcodes.INVOKESTATIC, "java/util/Collections",
+                "emptyMap", "()Ljava/util/Map;", false));
+        selected.add(new MethodInsnNode(Opcodes.INVOKEINTERFACE, "java/util/Map",
+                "getOrDefault", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", true));
+        selected.add(new TypeInsnNode(Opcodes.CHECKCAST, "java/util/Map"));
+        selected.add(new InsnNode(Opcodes.ARETURN));
+        select.instructions.add(selected);
+
+        MethodNode load = AsmPatchSupport.method(node, "loadAT", "(Lorg/antlr/v4/runtime/CharStream;)V");
+        MethodInsnNode commit = AsmPatchSupport.uniqueInvocation(load, Opcodes.INVOKEINTERFACE,
+                "java/util/Map", "putAll", "(Ljava/util/Map;)V");
+        InsnList invalidate = new InsnList();
+        invalidate.add(new VarInsnNode(Opcodes.ALOAD, 0));
+        invalidate.add(new MethodInsnNode(Opcodes.INVOKESTATIC, AsmPatchSupport.HOOK_OWNER,
+                "invalidateAccessTransformers", "(Ljava/lang/Object;)V", false));
+        load.instructions.insert(commit, invalidate);
+        return AsmPatchSupport.write(node);
     }
 
-    private static MethodNode builder(String owner, String asmType) {
-        MethodNode method = new MethodNode(Opcodes.ACC_PRIVATE | Opcodes.ACC_SYNCHRONIZED | Opcodes.ACC_SYNTHETIC,
-                BUILD, "()" + MAP, null, null);
-        LabelNode ready = new LabelNode();
-        method.instructions.add(new VarInsnNode(Opcodes.ALOAD, 0));
-        method.instructions.add(new FieldInsnNode(Opcodes.GETFIELD, owner, INDEX, MAP));
-        method.instructions.add(new InsnNode(Opcodes.DUP));
-        method.instructions.add(new JumpInsnNode(Opcodes.IFNONNULL, ready));
-        method.instructions.add(new InsnNode(Opcodes.POP));
-        method.instructions.add(new VarInsnNode(Opcodes.ALOAD, 0));
-        method.instructions.add(new VarInsnNode(Opcodes.ALOAD, 0));
-        method.instructions.add(new FieldInsnNode(Opcodes.GETFIELD, owner, "accessTransformers", MAP));
-        method.instructions.add(new InvokeDynamicInsnNode("apply", "()Ljava/util/function/Function;", METAFACTORY,
+    private static InvokeDynamicInsnNode targetLambda(String targetClass, String methodName,
+                                                      String virtualDesc, String samSpecializedDesc) {
+        return new InvokeDynamicInsnNode("apply", "()Ljava/util/function/Function;", METAFACTORY,
+                Type.getMethodType("(Ljava/lang/Object;)Ljava/lang/Object;"),
+                new Handle(Opcodes.H_INVOKEVIRTUAL, targetClass, methodName, virtualDesc, false),
+                Type.getMethodType(samSpecializedDesc));
+    }
+
+    private static InsnList index(String owner, String asmType) {
+        InsnList code = new InsnList();
+        code.add(new VarInsnNode(Opcodes.ALOAD, 0));
+        code.add(new VarInsnNode(Opcodes.ALOAD, 0));
+        code.add(new FieldInsnNode(Opcodes.GETFIELD, owner, "accessTransformers", "Ljava/util/Map;"));
+        code.add(new InvokeDynamicInsnNode("apply", "()Ljava/util/function/Function;", METAFACTORY,
                 Type.getMethodType("(Ljava/lang/Object;)Ljava/lang/Object;"),
                 new Handle(Opcodes.H_INVOKEVIRTUAL, "net/minecraftforge/accesstransformer/Target", "getASMType", "()" + asmType, false),
                 Type.getMethodType("(Lnet/minecraftforge/accesstransformer/Target;)" + asmType)));
-        method.instructions.add(new MethodInsnNode(Opcodes.INVOKESTATIC, AsmPatchSupport.HOOK_OWNER,
-                "indexAccessTransformers", "(Ljava/util/Map;Ljava/util/function/Function;)Ljava/util/Map;", false));
-        method.instructions.add(new FieldInsnNode(Opcodes.PUTFIELD, owner, INDEX, MAP));
-        method.instructions.add(new VarInsnNode(Opcodes.ALOAD, 0));
-        method.instructions.add(new FieldInsnNode(Opcodes.GETFIELD, owner, INDEX, MAP));
-        method.instructions.add(ready);
-        method.instructions.add(new FrameNode(Opcodes.F_SAME1, 0, null, 1, new Object[]{"java/util/Map"}));
-        method.instructions.add(new InsnNode(Opcodes.ARETURN));
-        return method;
+        code.add(new MethodInsnNode(Opcodes.INVOKESTATIC, AsmPatchSupport.HOOK_OWNER,
+                "accessTransformersFor", "(Ljava/lang/Object;Ljava/util/Map;Ljava/util/function/Function;)Ljava/util/Map;", false));
+        return code;
     }
 }

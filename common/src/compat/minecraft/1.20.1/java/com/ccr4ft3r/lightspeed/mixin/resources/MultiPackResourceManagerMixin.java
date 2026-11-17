@@ -23,18 +23,21 @@ import java.util.function.Predicate;
 /** Shares listing results and avoids intermediate sorting only when the caller merges namespaces. */
 @Mixin(value = MultiPackResourceManager.class, priority = 1100)
 public abstract class MultiPackResourceManagerMixin implements ResourceListingCache {
-    @Unique private final Map<ListingQuery, SortedMap<ResourceLocation, Resource>> lightspeed$listings = new ConcurrentHashMap<>();
+    @Unique private final Map<ListingQuery, SortedMap<ResourceLocation, Resource>> lightspeed$listings = new ConcurrentHashMap<>(256);
     @Shadow @Final private Map<String, FallbackResourceManager> namespacedManagers;
 
     @Shadow public abstract Map<ResourceLocation, Resource> listResources(String path, Predicate<ResourceLocation> filter);
 
     @Override
     public Map<ResourceLocation, Resource> lightspeed$listMatchingResources(String path, String extension) {
-        SortedMap<ResourceLocation, Resource> cached = lightspeed$listings.computeIfAbsent(
-                new ListingQuery(path, extension), query -> {
-                    Map<ResourceLocation, Resource> resources = listResources(query.path(), id -> id.getPath().endsWith(query.extension()));
-                    return new TreeMap<>(resources);
-                });
+        ListingQuery query = new ListingQuery(path, extension);
+        SortedMap<ResourceLocation, Resource> cached = lightspeed$listings.get(query);
+        if (cached == null) {
+            Map<ResourceLocation, Resource> resources = listResources(path, id -> id.getPath().endsWith(extension));
+            TreeMap<ResourceLocation, Resource> computed = new TreeMap<>(resources);
+            SortedMap<ResourceLocation, Resource> existing = lightspeed$listings.putIfAbsent(query, computed);
+            cached = existing != null ? existing : computed;
+        }
         // Each caller owns a mutable result. TreeMap's sorted-copy constructor is linear.
         return new TreeMap<>(cached);
     }

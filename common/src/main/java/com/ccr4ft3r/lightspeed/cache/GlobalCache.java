@@ -63,6 +63,7 @@ public final class GlobalCache {
     private static final Set<CompletableFuture<?>> BACKGROUND_CACHE_TASKS = Sets.newConcurrentHashSet();
     private static final Set<CompletableFuture<?>> PERSISTENCE_TASKS = Sets.newConcurrentHashSet();
     private static volatile CompletableFuture<Void> startupPersistence;
+    private static volatile CompletableFuture<Void> startupFinalization;
     private static final int CACHE_WORKER_COUNT = StartupCachePlatform.cacheWorkerCount();
     public static final ExecutorService EXECUTOR = StartupCachePlatform.startupExecutor(WORKER_COUNT);
     public static final ExecutorService CACHE_EXECUTOR = Executors.newFixedThreadPool(CACHE_WORKER_COUNT,
@@ -170,6 +171,59 @@ public final class GlobalCache {
                 else completion.completeExceptionally(failure);
             });
         } catch (RejectedExecutionException exception) {
+            completion.completeExceptionally(exception);
+            throw exception;
+        }
+    }
+
+    public static synchronized void finishStartupCaches(CompletableFuture<?> reloadCompletion) {
+        java.util.Objects.requireNonNull(reloadCompletion, "reloadCompletion");
+        if (startupPersistence != null) {
+            return;
+        }
+        beginShutdown();
+        CompletableFuture<Void> persisted = new CompletableFuture<>();
+        CompletableFuture<Void> completion = new CompletableFuture<>();
+        startupPersistence = persisted;
+        startupFinalization = completion;
+        completion.whenComplete((ignored, error) -> {
+            if (error != null) {
+                LOGGER.error("Lightspeed startup cache finalization failed", error);
+            }
+        });
+        try {
+            CompletableFuture<Throwable> persistence = CompletableFuture.runAsync(
+                    GlobalCache::disablePersistAndClear, EXECUTOR).handle((ignored, error) -> error);
+            persistence.thenAccept(error -> {
+                if (error == null) persisted.complete(null);
+                else persisted.completeExceptionally(error);
+            });
+            CompletableFuture<Throwable> reload = reloadCompletion.handle((ignored, error) -> error);
+            persistence.thenCombine(reload, (persistenceError, reloadError) -> {
+                Throwable failure = persistenceError != null ? persistenceError : reloadError;
+                if (persistenceError != null && reloadError != null && persistenceError != reloadError) {
+                    persistenceError.addSuppressed(reloadError);
+                }
+                try {
+                    shutdownExecutors();
+                } catch (RuntimeException | Error shutdownError) {
+                    if (failure == null) {
+                        failure = shutdownError;
+                    } else if (failure != shutdownError) {
+                        failure.addSuppressed(shutdownError);
+                    }
+                }
+                return failure;
+            }).whenComplete((failure, aggregationError) -> {
+                if (aggregationError != null) {
+                    completion.completeExceptionally(aggregationError);
+                    return;
+                }
+                if (failure == null) completion.complete(null);
+                else completion.completeExceptionally(failure);
+            });
+        } catch (RejectedExecutionException exception) {
+            persisted.completeExceptionally(exception);
             completion.completeExceptionally(exception);
             throw exception;
         }

@@ -1,5 +1,13 @@
-import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
+import com.electronwill.nightconfig.core.UnmodifiableConfig
+import com.electronwill.nightconfig.toml.TomlParser
+import java.util.jar.Manifest
 import java.util.zip.ZipFile
+
+buildscript {
+    repositories { mavenCentral() }
+    dependencies { classpath 'com.electronwill.night-config:toml:3.8.3' }
+}
 
 apply plugin: 'maven-publish'
 
@@ -17,7 +25,8 @@ def verifyDistribution = tasks.named('verifyDistribution') {
     def javaPackage = findProperty('mod_java_package') ?: mod_group_id
     def entryClass = findProperty('mod_entry_class') ?: "${javaPackage}.TempleCommon"
     inputs.properties([mod_id: mod_id, mod_java_package: javaPackage, mod_entry_class: entryClass,
-                       loader: loader, minecraft_version: minecraft_version])
+                       loader: loader, minecraft_version: minecraft_version, mod_version: mod_version,
+                       minecraft_version_range: minecraft_version_range])
     outputs.file(artifactRecord)
     doLast {
         def artifact = productionFile.get().asFile
@@ -32,8 +41,41 @@ def verifyDistribution = tasks.named('verifyDistribution') {
                 }
             }
             def text = zip.getInputStream(zip.getEntry(metadata)).getText('UTF-8')
-            if (text.contains('${')) {
-                throw new GradleException("Unexpanded metadata in ${artifact}")
+            if (loader == 'fabric') {
+                def value = new JsonSlurper().parseText(text)
+                if (value.id != mod_id.toString() || value.version != mod_version.toString() ||
+                        !(value.depends.minecraft in [minecraft_version.toString(), '=' + minecraft_version, minecraft_version_range.toString()]))
+                    throw new GradleException("Incorrect Fabric metadata in ${artifact}")
+            } else {
+                def value = new TomlParser().parse(text)
+                List<UnmodifiableConfig> mods = value.get('mods')
+                def mod = mods?.find { it.get('modId') == mod_id.toString() }
+                if (mod == null) throw new GradleException("Incorrect mod identity in ${artifact}")
+                String version = mod.get('version')
+                Map substitutions = [:]
+                UnmodifiableConfig properties = value.get('properties')
+                if (properties != null) substitutions.putAll(properties.valueMap())
+                def manifest = zip.getEntry('META-INF/MANIFEST.MF')
+                if (manifest != null) zip.getInputStream(manifest).withCloseable {
+                    substitutions.jarVersion = new Manifest(it).mainAttributes.getValue('Implementation-Version')
+                }
+                version = version.replaceAll(/\$\{file\.([^}]+)\}/) { match, key ->
+                    if (substitutions[key] == null) throw new GradleException("Unresolved version property: ${match}")
+                    substitutions[key].toString()
+                }
+                if (version != mod_version.toString()) throw new GradleException("Incorrect mod version in ${artifact}")
+                List<UnmodifiableConfig> dependencies = value.get(['dependencies', mod_id.toString()])
+                def minecraft = dependencies?.find { it.get('modId') == 'minecraft' }
+                if (minecraft == null || minecraft.get('versionRange') != minecraft_version_range.toString())
+                    throw new GradleException("Incorrect Minecraft range in ${artifact}")
+                if (loader == 'forge') {
+                    def packEntry = zip.getEntry('pack.mcmeta')
+                    if (packEntry == null) throw new GradleException("Missing pack.mcmeta in ${artifact}")
+                    def pack = zip.getInputStream(packEntry).withCloseable { new JsonSlurper().parse(it, 'UTF-8') }.pack
+                    if (!(pack instanceof Map) || pack.description == null ||
+                            !(pack.pack_format instanceof Number || pack.min_format != null && pack.max_format != null))
+                        throw new GradleException("Invalid pack.mcmeta in ${artifact}")
+                }
             }
         }
         def record = artifactRecord.get().asFile

@@ -19,12 +19,31 @@ public final class ResourcePathIndex {
         if (source.isEmpty()) {
             return EMPTY;
         }
-        String[] paths = source.stream()
-                .filter(Objects::nonNull)
-                .distinct()
-                .sorted()
-                .toArray(String[]::new);
-        return paths.length == 0 ? EMPTY : new ResourcePathIndex(paths);
+        String[] copy = new String[source.size()];
+        int count = 0;
+        for (String entry : source) {
+            if (entry != null) {
+                copy[count++] = entry;
+            }
+        }
+        if (count == 0) {
+            return EMPTY;
+        }
+        if (count == 1) {
+            return new ResourcePathIndex(copy.length == 1 ? copy : new String[]{copy[0]});
+        }
+        Arrays.sort(copy, 0, count);
+        int unique = 1;
+        String prev = copy[0];
+        for (int i = 1; i < count; i++) {
+            String current = copy[i];
+            if (!current.equals(prev)) {
+                copy[unique++] = current;
+                prev = current;
+            }
+        }
+        String[] paths = unique == copy.length ? copy : Arrays.copyOf(copy, unique);
+        return new ResourcePathIndex(paths);
     }
 
     public static ResourcePathIndex fromSortedDistinct(List<String> source) {
@@ -39,6 +58,16 @@ public final class ResourcePathIndex {
             previous = path;
         }
         return new ResourcePathIndex(source.toArray(String[]::new));
+    }
+
+    public static ResourcePathIndex fromPrevalidatedSorted(String[] sortedDistinctPaths) {
+        return sortedDistinctPaths == null || sortedDistinctPaths.length == 0
+                ? EMPTY
+                : new ResourcePathIndex(sortedDistinctPaths);
+    }
+
+    public String[] rawSortedPaths() {
+        return paths;
     }
 
     public int size() {

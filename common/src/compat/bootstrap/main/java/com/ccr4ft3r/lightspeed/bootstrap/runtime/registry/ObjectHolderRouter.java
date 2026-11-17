@@ -54,6 +54,7 @@ public final class ObjectHolderRouter {
             }
         }
     };
+    private static final OrderedHandler[] EMPTY_HANDLERS = new OrderedHandler[0];
     private static volatile Routing routing = Routing.EMPTY;
 
     private ObjectHolderRouter() {
@@ -94,14 +95,11 @@ public final class ObjectHolderRouter {
 
     static void applyForKey(Set<?> handlers, Predicate<?> filter, Object key) {
         Routing current = routing(handlers);
-        List<Object> selected = current.byRegistry().getOrDefault(key, current.customHandlers());
+        OrderedHandler[] own = current.byRegistry().getOrDefault(key, EMPTY_HANDLERS);
+        OrderedHandler[] custom = current.fallbackCustom();
         ROUTED_CALLS.increment();
-        SKIPPED_HANDLERS.add(Math.max(0, current.handlerCount() - selected.size()));
-        try {
-            invoke(selected, filter);
-        } finally {
-            if (current.awaitingValidation()) invalidate();
-        }
+        SKIPPED_HANDLERS.add(Math.max(0, current.handlerCount() - own.length - custom.length));
+        invokeMerged(own, custom, filter);
     }
 
     public static long routedCalls() {
@@ -124,54 +122,145 @@ public final class ObjectHolderRouter {
         long version = VERSION.get();
         Routing current = routing;
         if (current.version() == version) {
-            return current;
-        }
-        synchronized (ObjectHolderRouter.class) {
-            current = routing;
-            if (current.version() == version) {
+            if (current.pending().length == 0 || !hasNewlyValidated(current.pending())) {
                 return current;
             }
-            List<Object> snapshot = List.copyOf(handlers);
+        }
+        synchronized (ObjectHolderRouter.class) {
+            version = VERSION.get();
+            current = routing;
+            if (current.version() == version) {
+                if (current.pending().length == 0) {
+                    return current;
+                }
+                Routing promoted = promotePending(current);
+                routing = promoted;
+                return promoted;
+            }
+            Object[] snapshot = handlers.toArray();
             Map<Object, List<OrderedHandler>> grouped = new LinkedHashMap<>();
-            List<OrderedHandler> custom = new ArrayList<>();
-            boolean awaitingValidation = false;
-            for (int index = 0; index < snapshot.size(); index++) {
-                Object handler = snapshot.get(index);
+            List<OrderedHandler> staticCustom = new ArrayList<>();
+            List<OrderedHandler> pending = new ArrayList<>();
+            for (int index = 0; index < snapshot.length; index++) {
+                Object handler = snapshot[index];
                 Object key = registryKey(handler);
                 OrderedHandler ordered = new OrderedHandler(index, handler);
                 HandlerAccess access = HANDLER_ACCESS.get(handler.getClass());
-                if (key == null && access.validation() != null) awaitingValidation = true;
                 if (key == null) {
-                    custom.add(ordered);
+                    if (access.validation() != null) {
+                        pending.add(ordered);
+                    } else {
+                        staticCustom.add(ordered);
+                    }
                 } else {
                     grouped.computeIfAbsent(key, ignored -> new ArrayList<>()).add(ordered);
                 }
             }
-            Map<Object, List<Object>> routes = new LinkedHashMap<>();
-            grouped.forEach((key, own) -> routes.put(key, mergeHandlers(own, custom)));
-            current = new Routing(version, snapshot.size(), Map.copyOf(routes),
-                    custom.stream().map(OrderedHandler::handler).toList(), awaitingValidation);
+            Map<Object, OrderedHandler[]> routes = new LinkedHashMap<>(grouped.size() * 2 + 1);
+            grouped.forEach((k, own) -> routes.put(k, own.toArray(EMPTY_HANDLERS)));
+            OrderedHandler[] staticArr = staticCustom.toArray(EMPTY_HANDLERS);
+            OrderedHandler[] pendingArr = pending.toArray(EMPTY_HANDLERS);
+            OrderedHandler[] fallbackCustom = mergeArrays(staticArr, pendingArr);
+            current = new Routing(version, snapshot.length, Map.copyOf(routes),
+                    staticArr, pendingArr, fallbackCustom);
             routing = current;
             return current;
         }
     }
 
-    private static List<Object> mergeHandlers(List<OrderedHandler> own, List<OrderedHandler> custom) {
-        List<Object> selected = new ArrayList<>(own.size() + custom.size());
-        int ownIndex = 0;
-        int customIndex = 0;
-        while (ownIndex < own.size() || customIndex < custom.size()) {
-            if (customIndex == custom.size()
-                    || ownIndex < own.size() && own.get(ownIndex).position() < custom.get(customIndex).position()) {
-                selected.add(own.get(ownIndex++).handler());
-            } else {
-                selected.add(custom.get(customIndex++).handler());
+    private static boolean hasNewlyValidated(OrderedHandler[] pending) {
+        for (OrderedHandler ordered : pending) {
+            if (registryKey(ordered.handler()) != null) {
+                return true;
             }
         }
-        return List.copyOf(selected);
+        return false;
+    }
+
+    private static Routing promotePending(Routing current) {
+        OrderedHandler[] oldPending = current.pending();
+        Map<Object, List<OrderedHandler>> newlyGrouped = null;
+        List<OrderedHandler> stillPending = null;
+        for (int i = 0; i < oldPending.length; i++) {
+            OrderedHandler ordered = oldPending[i];
+            Object key = registryKey(ordered.handler());
+            if (key == null) {
+                if (stillPending != null) {
+                    stillPending.add(ordered);
+                }
+            } else {
+                if (newlyGrouped == null) {
+                    newlyGrouped = new LinkedHashMap<>();
+                    stillPending = new ArrayList<>(Math.max(0, oldPending.length - i - 1));
+                    for (int prev = 0; prev < i; prev++) {
+                        stillPending.add(oldPending[prev]);
+                    }
+                }
+                newlyGrouped.computeIfAbsent(key, ignored -> new ArrayList<>()).add(ordered);
+            }
+        }
+        if (newlyGrouped == null) {
+            return current;
+        }
+        Map<Object, OrderedHandler[]> updated = new LinkedHashMap<>(current.byRegistry());
+        newlyGrouped.forEach((key, additions) -> {
+            OrderedHandler[] addArr = additions.toArray(EMPTY_HANDLERS);
+            OrderedHandler[] existing = updated.get(key);
+            updated.put(key, existing == null ? addArr : mergeArrays(existing, addArr));
+        });
+        OrderedHandler[] newPending = stillPending.toArray(EMPTY_HANDLERS);
+        OrderedHandler[] newFallback = mergeArrays(current.staticCustom(), newPending);
+        return new Routing(current.version(), current.handlerCount(), Map.copyOf(updated),
+                current.staticCustom(), newPending, newFallback);
+    }
+
+    private static OrderedHandler[] mergeArrays(OrderedHandler[] first, OrderedHandler[] second) {
+        if (first.length == 0) return second;
+        if (second.length == 0) return first;
+        OrderedHandler[] merged = new OrderedHandler[first.length + second.length];
+        int i = 0;
+        int j = 0;
+        int out = 0;
+        while (i < first.length && j < second.length) {
+            if (first[i].position() < second[j].position()) {
+                merged[out++] = first[i++];
+            } else {
+                merged[out++] = second[j++];
+            }
+        }
+        if (i < first.length) {
+            System.arraycopy(first, i, merged, out, first.length - i);
+        } else if (j < second.length) {
+            System.arraycopy(second, j, merged, out, second.length - j);
+        }
+        return merged;
     }
 
     private record OrderedHandler(int position, Object handler) { }
+
+    @SuppressWarnings("unchecked")
+    private static void invokeMerged(OrderedHandler[] own, OrderedHandler[] custom, Predicate<?> filter) {
+        RuntimeException aggregate = new RuntimeException(
+                "Failed to apply some object holders, see suppressed exceptions for details");
+        int i = 0;
+        int j = 0;
+        while (i < own.length || j < custom.length) {
+            OrderedHandler next;
+            if (j == custom.length || i < own.length && own[i].position() < custom[j].position()) {
+                next = own[i++];
+            } else {
+                next = custom[j++];
+            }
+            try {
+                ((Consumer<Object>) next.handler()).accept(filter);
+            } catch (Exception exception) {
+                aggregate.addSuppressed(exception);
+            }
+        }
+        if (aggregate.getSuppressed().length > 0) {
+            throw aggregate;
+        }
+    }
 
     @SuppressWarnings("unchecked")
     private static void invoke(List<Object> handlers, Predicate<?> filter) {
@@ -234,8 +323,8 @@ public final class ObjectHolderRouter {
 
     private record FilterBinding(Predicate<?> filter, Object key) { }
 
-    private record Routing(long version, int handlerCount, Map<Object, List<Object>> byRegistry,
-                           List<Object> customHandlers, boolean awaitingValidation) {
-        private static final Routing EMPTY = new Routing(-1, 0, Map.of(), List.of(), false);
+    private record Routing(long version, int handlerCount, Map<Object, OrderedHandler[]> byRegistry,
+                           OrderedHandler[] staticCustom, OrderedHandler[] pending, OrderedHandler[] fallbackCustom) {
+        private static final Routing EMPTY = new Routing(-1, 0, Map.of(), EMPTY_HANDLERS, EMPTY_HANDLERS, EMPTY_HANDLERS);
     }
 }

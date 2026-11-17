@@ -1,9 +1,12 @@
 package com.ccr4ft3r.lightspeed;
 
 import com.ccr4ft3r.lightspeed.cache.GlobalCache;
+
 import com.ccr4ft3r.lightspeed.config.LightspeedConfig;
-import com.ccr4ft3r.lightspeed.startup.installation.NativeLaunchProfileCleanup;
+import com.ccr4ft3r.lightspeed.startup.compat.EarlyModPackIndexEngine;
+import com.ccr4ft3r.lightspeed.startup.installation.BootstrapAgentInstaller;
 import com.ccr4ft3r.lightspeed.startup.metrics.StartupMetrics;
+
 import com.mojang.logging.LogUtils;
 import net.minecraftforge.eventbus.api.IEventBus;
 import net.minecraftforge.fml.ModLoadingContext;
@@ -25,6 +28,8 @@ public class Main {
     @SuppressWarnings("removal")
     public Main() {
         StartupMetrics.mark("mod-construction");
+        EarlyModPackIndexEngine.preloadIndexStoreAsync();
+
         IEventBus modEventBus = FMLJavaModLoadingContext.get().getModEventBus();
         modEventBus.addListener(this::onConfigEvent);
         ModLoadingContext.get().registerConfig(ModConfig.Type.COMMON, LightspeedConfig.SPEC);
@@ -34,8 +39,8 @@ public class Main {
     private void onConfigEvent(ModConfigEvent event) {
         if (event.getConfig().getSpec() == LightspeedConfig.SPEC) {
             updateCacheFlags();
-            if (event instanceof ModConfigEvent.Loading && FMLEnvironment.dist.isClient()) {
-                NativeLaunchProfileCleanup.removeBootstrapArguments(FMLPaths.GAMEDIR.get());
+            if ((event instanceof ModConfigEvent.Loading || event instanceof ModConfigEvent.Reloading) && FMLEnvironment.dist.isClient()) {
+                BootstrapAgentInstaller.installForNextLaunch();
             }
         }
     }

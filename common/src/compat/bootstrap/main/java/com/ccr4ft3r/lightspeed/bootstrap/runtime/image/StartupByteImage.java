@@ -30,7 +30,12 @@ final class StartupByteImage {
     private volatile CompletableFuture<PackImageFile.Image> loaded;
 
     StartupByteImage(Path file, String fingerprint, long maxBytes, String threadName) {
-        this.packImage = new PackImageFile(file, fingerprint, maxBytes, MAX_ENTRY_BYTES);
+        this(file, fingerprint, maxBytes, threadName, null);
+    }
+
+    StartupByteImage(Path file, String fingerprint, long maxBytes, String threadName,
+                     String legacyFingerprint) {
+        this.packImage = new PackImageFile(file, fingerprint, maxBytes, MAX_ENTRY_BYTES, legacyFingerprint);
         this.maxBytes = maxBytes;
         this.threadName = threadName;
     }
@@ -97,6 +102,13 @@ final class StartupByteImage {
         }
     }
 
+    synchronized void invalidate(String key) {
+        byte[] removed = recorded.remove(key);
+        if (removed != null) recordedBytes.addAndGet(-removed.length);
+        PackImageFile.Image image = loadFuture().join();
+        invalidateEntry(image, key);
+    }
+
     void persist() {
         persist(ignored -> true);
     }
@@ -128,7 +140,7 @@ final class StartupByteImage {
             }
         });
         if (recordedSnapshot.isEmpty() && invalidatedSegments.isEmpty() && invalidatedEntries.isEmpty()
-                && entries.size() == existing.size()) {
+                && entries.size() == existing.size() && !existing.requiresMigration()) {
             return;
         }
         try {
@@ -196,6 +208,7 @@ final class StartupByteImage {
         } catch (IOException | RuntimeException exception) {
             failures.increment();
             loadedBytes.set(0);
+            System.err.println("[Lightspeed Agent] cannot load " + threadName + ": " + exception);
             return PackImageFile.Image.empty();
         }
     }

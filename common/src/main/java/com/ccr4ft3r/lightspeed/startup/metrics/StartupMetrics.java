@@ -17,8 +17,23 @@ public final class StartupMetrics {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final Map<String, Long> RECORDED = new ConcurrentHashMap<>();
     private static volatile CompletableFuture<?> initialReload;
+    private static volatile boolean titleOperable;
+    private static volatile boolean worldFramePacingEnabled;
 
     private StartupMetrics() {
+    }
+
+    public static boolean isTitleOperable() {
+        return titleOperable;
+    }
+
+    /** A direct world launch can complete without ever showing the title screen. */
+    public static boolean isFramePacingEnabled() {
+        return titleOperable || worldFramePacingEnabled;
+    }
+
+    public static void enableWorldFramePacing() {
+        worldFramePacingEnabled = true;
     }
 
     public static void observeInitialReload(CompletableFuture<?> completion) {
@@ -52,11 +67,12 @@ public final class StartupMetrics {
         }
         if ("title-screen-operable".equals(milestone)) {
             initialReload = CompletableFuture.completedFuture(null);
+            titleOperable = true;
         }
         LOGGER.info("Lightspeed startup milestone: name={} elapsedMs={} processStartEpochMs={}",
                 milestone, elapsedMillis, processStartEpochMillis());
         if ("title-screen-operable".equals(milestone) || "server-started".equals(milestone))
-            BootstrapAgentBridge.finishStartupHttpWindow();
+            BootstrapAgentBridge.finishStartupArchiveWindow();
         MilestoneEvent event = new MilestoneEvent();
         if (event.isEnabled()) {
             event.milestone = milestone;

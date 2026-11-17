@@ -31,13 +31,25 @@ public final class PathResourceCache {
 
     public Map<String, Path> resolvedPaths() {
         if (resolved == null) synchronized (this) {
-            if (resolved == null) resolved = new ConcurrentHashMap<>();
+            if (resolved == null) resolved = new ConcurrentHashMap<>(64);
         }
         return resolved;
     }
 
+    public static String formatPartsKey(String[] parts) {
+        if (parts == null) {
+            return "null";
+        }
+        return switch (parts.length) {
+            case 0 -> "[]";
+            case 1 -> "[" + parts[0] + "]";
+            case 2 -> "[" + parts[0] + ", " + parts[1] + "]";
+            default -> Arrays.toString(parts);
+        };
+    }
+
     public Path resolved(String... parts) {
-        String key = Arrays.toString(parts);
+        String key = formatPartsKey(parts);
         Path path = resolvedPaths().get(key);
         if (path != null && !isUsablePath(path)) {
             resolvedPaths().remove(key);
@@ -84,8 +96,12 @@ public final class PathResourceCache {
             else pathSet(type, namespace, paths);
             return paths;
         }
-        paths = scanFiles(root);
+        return publish(type, namespace, scanFiles(root), sorted);
+    }
+
+    public List<String> publish(PackType type, String namespace, List<String> paths, boolean sorted) {
         if (paths != null) {
+            Map<String, List<String>> pathsByNamespace = lists().computeIfAbsent(type, ignored -> new ConcurrentHashMap<>());
             if (sorted) {
                 ResourcePathIndex index = ResourcePathIndex.from(paths);
                 paths = index.entries();

@@ -58,6 +58,7 @@ public final class ClassPassThroughPatch {
         fast.add(original);
         fast.add(new FrameNode(Opcodes.F_SAME, 0, null, 0, null));
         method.instructions.insertBefore(classNode, fast);
+
         return AsmPatchSupport.write(node);
     }
 }

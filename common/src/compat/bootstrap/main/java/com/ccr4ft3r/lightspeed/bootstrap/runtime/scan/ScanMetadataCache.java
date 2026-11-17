@@ -40,16 +40,26 @@ public final class ScanMetadataCache {
     private static final LongAdder FAILURES = new LongAdder();
     private static final AtomicBoolean FAILURE_LOGGED = new AtomicBoolean();
     private static final Set<String> ACTIVE_KEYS = ConcurrentHashMap.newKeySet();
+    private static final Set<Access> ACCESS_INSTANCES = ConcurrentHashMap.newKeySet();
     private static final ClassValue<Access> ACCESS = new ClassValue<>() {
         @Override
         protected Access computeValue(Class<?> type) {
             try {
-                return new Access(type);
+                Access created = new Access(type);
+                ACCESS_INSTANCES.add(created);
+                return created;
             } catch (ReflectiveOperationException exception) {
                 throw new IllegalStateException("unsupported Forge scan metadata model", exception);
             }
         }
     };
+
+    public static void releaseDecodeCaches() {
+        for (Access access : ACCESS_INSTANCES) {
+            access.typeCache.clear();
+            access.keyCache.clear();
+        }
+    }
     private static final ClassValue<ModAccess> MOD_ACCESS = new ClassValue<>() {
         @Override
         protected ModAccess computeValue(Class<?> type) {
@@ -70,7 +80,7 @@ public final class ScanMetadataCache {
         }
         try {
             ModAccess modAccess = MOD_ACCESS.get(modFile.getClass());
-            if (modAccess.hasSecurityData(modFile)) {
+            if (modAccess.hasSecurityData(modFile) || !modAccess.usesStandardScanProvider(modFile)) {
                 return false;
             }
             Path root = modAccess.rootPath(modFile);
@@ -85,8 +95,10 @@ public final class ScanMetadataCache {
                 MISSES.increment();
                 return false;
             }
-            modAccess.restoreUnsignedStatus(modFile, cachedClassCount(encoded));
-            ACCESS.get(scanData.getClass()).decodeInto(scanData, encoded);
+            Access access = ACCESS.get(scanData.getClass());
+            DecodedScan decoded = access.decode(encoded);
+            modAccess.restoreUnsignedStatus(modFile, decoded.classes().size());
+            access.publish(scanData, decoded);
             HITS.increment();
             return true;
         } catch (ReflectiveOperationException | IOException | RuntimeException | LinkageError exception) {
@@ -112,7 +124,8 @@ public final class ScanMetadataCache {
             return false;
         }
         try {
-            ACCESS.get(scanData.getClass()).decodeInto(scanData, encoded);
+            Access access = ACCESS.get(scanData.getClass());
+            access.publish(scanData, access.decode(encoded));
             HITS.increment();
             return true;
         } catch (ReflectiveOperationException | IOException | RuntimeException | LinkageError exception) {
@@ -128,7 +141,7 @@ public final class ScanMetadataCache {
         }
         try {
             ModAccess modAccess = MOD_ACCESS.get(modFile.getClass());
-            if (modAccess.hasSecurityData(modFile)) {
+            if (modAccess.hasSecurityData(modFile) || !modAccess.usesStandardScanProvider(modFile)) {
                 return;
             }
             Path root = modAccess.rootPath(modFile);
@@ -213,7 +226,7 @@ public final class ScanMetadataCache {
             }
             return encoded;
         } catch (ReflectiveOperationException | RuntimeException | LinkageError exception) {
-            throw new IOException("unable to encode Forge scan metadata", exception);
+            throw new IOException("unable to encode loader scan metadata", exception);
         }
     }
 
@@ -263,6 +276,8 @@ public final class ScanMetadataCache {
     private static final class ModAccess {
         private final Method findResource;
         private final Method getSecureJar;
+        private final Method getProvider;
+        private final Method scanFile;
         private final Method setSecurityStatus;
         private final Method hasSecurityData;
         private final Object unverified;
@@ -272,6 +287,14 @@ public final class ScanMetadataCache {
             RuntimeModuleAccess.openToAgent(modFileType);
             this.findResource = modFileType.getMethod("findResource", String[].class);
             this.getSecureJar = modFileType.getMethod("getSecureJar");
+            Method providerMethod;
+            try {
+                providerMethod = modFileType.getMethod("getProvider");
+            } catch (NoSuchMethodException unavailable) {
+                providerMethod = null;
+            }
+            this.getProvider = providerMethod;
+            this.scanFile = modFileType.getMethod("scanFile", java.util.function.Consumer.class);
             Class<?> secureJarType = getSecureJar.getReturnType();
             this.hasSecurityData = secureJarType.getMethod("hasSecurityData");
             this.setSecurityStatus = statusSetter(modFileType);
@@ -287,6 +310,22 @@ public final class ScanMetadataCache {
         private boolean hasSecurityData(Object modFile) throws ReflectiveOperationException {
             Object secureJar = getSecureJar.invoke(modFile);
             return (Boolean) hasSecurityData.invoke(secureJar);
+        }
+
+        private boolean usesStandardScanProvider(Object modFile) throws ReflectiveOperationException {
+            if (getProvider == null) {
+                return scanFile.getDeclaringClass().getName().equals(
+                        "net.neoforged.fml.loading.moddiscovery.ModFile");
+            }
+            Object provider = getProvider.invoke(modFile);
+            if (provider == null) return false;
+            for (Method method : provider.getClass().getMethods()) {
+                if (method.getName().equals("scanFile") && method.getParameterCount() == 2) {
+                    return method.getDeclaringClass().getName().equals(
+                            "net.minecraftforge.fml.loading.moddiscovery.AbstractJarFileModProvider");
+                }
+            }
+            return false;
         }
 
         private void restoreUnsignedStatus(Object modFile, int classCount) throws ReflectiveOperationException {
@@ -355,12 +394,14 @@ public final class ScanMetadataCache {
         private final Constructor<?> enumHolderConstructor;
         private final Method enumDescriptor;
         private final Method enumValue;
+        private final ConcurrentHashMap<String, Object> typeCache = new ConcurrentHashMap<>(65536);
+        private final ConcurrentHashMap<String, String> keyCache = new ConcurrentHashMap<>(4096);
 
         private Access(Class<?> scanDataType) throws ReflectiveOperationException {
             ClassLoader loader = scanDataType.getClassLoader();
-            Class<?> classData = loader.loadClass("net.minecraftforge.forgespi.language.ModFileScanData$ClassData");
-            Class<?> annotationData = loader.loadClass("net.minecraftforge.forgespi.language.ModFileScanData$AnnotationData");
-            this.enumHolder = loader.loadClass("net.minecraftforge.fml.loading.moddiscovery.ModAnnotation$EnumHolder");
+            Class<?> classData = loader.loadClass(ScanRuntimeTypes.SCAN_DATA + "$ClassData");
+            Class<?> annotationData = loader.loadClass(ScanRuntimeTypes.SCAN_DATA + "$AnnotationData");
+            this.enumHolder = loader.loadClass(ScanRuntimeTypes.ENUM_HOLDER);
             RuntimeModuleAccess.openToAgent(scanDataType);
             RuntimeModuleAccess.openToAgent(classData);
             RuntimeModuleAccess.openToAgent(annotationData);
@@ -382,8 +423,8 @@ public final class ScanMetadataCache {
             this.typeFromDescriptor = asmType.getMethod("getType", String.class);
             this.typeDescriptor = asmType.getMethod("getDescriptor");
             this.enumHolderConstructor = enumHolder.getConstructor(String.class, String.class);
-            this.enumDescriptor = enumHolder.getMethod("getDesc");
-            this.enumValue = enumHolder.getMethod("getValue");
+            this.enumDescriptor = enumHolder.getMethod(ScanRuntimeTypes.ENUM_DESCRIPTOR_GETTER);
+            this.enumValue = enumHolder.getMethod(ScanRuntimeTypes.ENUM_VALUE_GETTER);
         }
 
         private int classCount(Object scanData) throws ReflectiveOperationException {
@@ -424,27 +465,38 @@ public final class ScanMetadataCache {
             return bytes.toByteArray();
         }
 
-        @SuppressWarnings("unchecked")
-        private void decodeInto(Object scanData, byte[] encoded) throws ReflectiveOperationException, IOException {
-            try (DataInputStream input = new DataInputStream(new ByteArrayInputStream(encoded))) {
+        private DecodedScan decode(byte[] encoded) throws ReflectiveOperationException, IOException {
+            try (DataInputStream input = new DataInputStream(new UnsyncedByteArrayInputStream(encoded))) {
                 if (input.readInt() != MAGIC || input.readInt() != VERSION) {
                     throw new IOException("unsupported scan metadata cache");
                 }
-                Set<Object> classes = (Set<Object>) getClasses.invoke(scanData);
                 int classCount = readCount(input);
+                List<Object> classes = new ArrayList<>(classCount);
                 for (int classIndex = 0; classIndex < classCount; classIndex++) {
                     Object clazz = type(readString(input));
                     Object parent = type(readNullableString(input));
                     int interfaceCount = readCount(input);
-                    Set<Object> interfaceTypes = new LinkedHashSet<>();
-                    for (int index = 0; index < interfaceCount; index++) {
-                        interfaceTypes.add(type(readString(input)));
+                    Set<Object> interfaceTypes;
+                    if (interfaceCount == 0) {
+                        interfaceTypes = Set.of();
+                    } else if (interfaceCount == 1) {
+                        interfaceTypes = Set.of(type(readString(input)));
+                    } else if (interfaceCount == 2) {
+                        Object t0 = type(readString(input));
+                        Object t1 = type(readString(input));
+                        interfaceTypes = t0.equals(t1) ? Set.of(t0) : Set.of(t0, t1);
+                    } else {
+                        Set<Object> set = new LinkedHashSet<>(interfaceCount * 4 / 3 + 1);
+                        for (int index = 0; index < interfaceCount; index++) {
+                            set.add(type(readString(input)));
+                        }
+                        interfaceTypes = Set.copyOf(set);
                     }
-                    classes.add(classDataConstructor.newInstance(clazz, parent, Set.copyOf(interfaceTypes)));
+                    classes.add(classDataConstructor.newInstance(clazz, parent, interfaceTypes));
                 }
 
                 int annotationCount = readCount(input);
-                Set<Object> annotations = (Set<Object>) getAnnotations.invoke(scanData);
+                List<Object> annotations = new ArrayList<>(annotationCount);
                 for (int index = 0; index < annotationCount; index++) {
                     Object annotation = type(readString(input));
                     ElementType target = ElementType.valueOf(readString(input));
@@ -456,7 +508,17 @@ public final class ScanMetadataCache {
                 if (input.read() != -1) {
                     throw new IOException("trailing scan metadata bytes");
                 }
+                return new DecodedScan(classes, annotations);
             }
+        }
+
+        /** Invalid images must leave the native scanner's collections untouched. */
+        @SuppressWarnings("unchecked")
+        private void publish(Object scanData, DecodedScan decoded) throws ReflectiveOperationException {
+            Set<Object> classes = (Set<Object>) getClasses.invoke(scanData);
+            Set<Object> annotations = (Set<Object>) getAnnotations.invoke(scanData);
+            classes.addAll(decoded.classes());
+            annotations.addAll(decoded.annotations());
         }
 
         private void writeMap(DataOutputStream output, Map<?, ?> values) throws IOException, ReflectiveOperationException {
@@ -474,9 +536,26 @@ public final class ScanMetadataCache {
             int count = readCount(input);
             Map<String, Object> values = new LinkedHashMap<>(Math.max(16, count * 2));
             for (int index = 0; index < count; index++) {
-                values.put(readString(input), readValue(input));
+                values.put(internKey(readString(input)), readValue(input));
             }
             return values;
+        }
+
+        private String internKey(String key) {
+            if (key == null || key.length() > 128) {
+                return key;
+            }
+            String cached = keyCache.get(key);
+            if (cached != null) {
+                return cached;
+            }
+            if (keyCache.size() < 4096) {
+                String raced = keyCache.putIfAbsent(key, key);
+                if (raced != null) {
+                    return raced;
+                }
+            }
+            return key;
         }
 
         private void writeValue(DataOutputStream output, Object value) throws IOException, ReflectiveOperationException {
@@ -626,13 +705,29 @@ public final class ScanMetadataCache {
         }
 
         private Object type(String descriptor) throws ReflectiveOperationException {
-            return descriptor == null ? null : typeFromDescriptor.invoke(null, descriptor);
+            if (descriptor == null) {
+                return null;
+            }
+            Object cached = typeCache.get(descriptor);
+            if (cached != null) {
+                return cached;
+            }
+            Object created = typeFromDescriptor.invoke(null, descriptor);
+            if (created != null && typeCache.size() < 262144) {
+                Object raced = typeCache.putIfAbsent(descriptor, created);
+                if (raced != null) {
+                    return raced;
+                }
+            }
+            return created;
         }
 
         private String descriptor(Object value) throws ReflectiveOperationException {
             return value == null ? null : (String) typeDescriptor.invoke(value);
         }
     }
+
+    private record DecodedScan(List<Object> classes, List<Object> annotations) { }
 
     private static int readCount(DataInputStream input) throws IOException {
         int count = input.readInt();
@@ -668,16 +763,55 @@ public final class ScanMetadataCache {
         output.write(bytes);
     }
 
+    private static final ThreadLocal<byte[]> STRING_SCRATCH = ThreadLocal.withInitial(() -> new byte[512]);
+
     private static String readString(DataInputStream input) throws IOException {
         int length = input.readInt();
         if (length < 0 || length > 16 * 1024 * 1024) {
             throw new IOException("invalid scan metadata string length " + length);
+        }
+        if (length == 0) {
+            return "";
+        }
+        if (length <= 512) {
+            byte[] scratch = STRING_SCRATCH.get();
+            input.readFully(scratch, 0, length);
+            return new String(scratch, 0, length, StandardCharsets.UTF_8);
         }
         byte[] bytes = input.readNBytes(length);
         if (bytes.length != length) {
             throw new IOException("truncated scan metadata string");
         }
         return new String(bytes, StandardCharsets.UTF_8);
+    }
+
+    private static final class UnsyncedByteArrayInputStream extends java.io.InputStream {
+        private final byte[] buf;
+        private int pos;
+
+        private UnsyncedByteArrayInputStream(byte[] buf) {
+            this.buf = buf;
+        }
+
+        @Override
+        public int read() {
+            return pos < buf.length ? (buf[pos++] & 0xff) : -1;
+        }
+
+        @Override
+        public int read(byte[] b, int off, int len) {
+            if (len <= 0) {
+                return 0;
+            }
+            int avail = buf.length - pos;
+            if (avail <= 0) {
+                return -1;
+            }
+            int count = Math.min(len, avail);
+            System.arraycopy(buf, pos, b, off, count);
+            pos += count;
+            return count;
+        }
     }
 
     private static void logFailure(String operation, Throwable throwable) {

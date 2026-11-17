@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.WeakHashMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
 
@@ -20,6 +21,7 @@ public final class MixinTargetIndex {
     private static final LongAdder FAILURES = new LongAdder();
     private static final Set<ClassLoader> TRACKED_LOADERS = Collections.newSetFromMap(new WeakHashMap<>());
     private static volatile boolean trackingInstalled;
+    private static final Map<Object, State> STATES = new ConcurrentHashMap<>();
     private static final ClassValue<Method> TARGETS = new ClassValue<>() {
         @Override
         protected Method computeValue(Class<?> type) {
@@ -74,56 +76,64 @@ public final class MixinTargetIndex {
 
     // The caller holds its MixinProcessor monitor, including during recursive class loads.
     public static List<?> select(List<?> configurations, Object value, String className) {
-        if (!trackingInstalled || !(value instanceof State state) || state.building || state.disabled) {
+        State state = state(value);
+        if (!trackingInstalled || state.building || state.disabled) {
             return configurations;
         }
         long revision = REVISION.get();
         if (state.revision != revision || state.configurationCount != configurations.size()) {
-            state.building = true;
-            try {
-                Map<String, List<Object>> grouped = new HashMap<>();
-                List<String> packages = new ArrayList<>();
-                for (Object configuration : configurations) {
-                    synchronized (TRACKED_LOADERS) {
-                        if (!TRACKED_LOADERS.contains(configuration.getClass().getClassLoader())) {
-                            return configurations;
-                        }
-                    }
-                    Object result = TARGETS.get(configuration.getClass()).invoke(configuration);
-                    packages.add((String) PACKAGES.get(configuration.getClass()).invoke(configuration));
-                    state.loader = configuration.getClass().getClassLoader();
-                    if (!(result instanceof Set<?> targets)) {
-                        throw new IllegalStateException("unexpected Mixin target set");
-                    }
-                    for (Object target : targets) {
-                        if (!(target instanceof String name)) {
-                            throw new IllegalStateException("unexpected Mixin target name");
-                        }
-                        grouped.computeIfAbsent(name, ignored -> new ArrayList<>()).add(configuration);
-                    }
-                }
-                if (revision != REVISION.get()) {
-                    return configurations;
-                }
-                Map<String, List<?>> indexed = new HashMap<>();
-                grouped.forEach((name, matches) -> indexed.put(name, List.copyOf(matches)));
-                state.targets = indexed;
-                state.packages = packages;
-                state.configurationCount = configurations.size();
-                state.revision = revision;
-            } catch (ReflectiveOperationException | RuntimeException | LinkageError exception) {
-                state.disabled = true;
-                FAILURES.increment();
-                System.err.println("[Lightspeed Agent] Mixin target index disabled: " + exception);
+            if (!buildIndex(configurations, state, revision)) {
                 return configurations;
-            } finally {
-                state.building = false;
             }
         }
         List<?> matches = state.targets.getOrDefault(className, List.of());
         QUERIES.increment();
         SKIPPED.add(configurations.size() - matches.size());
         return matches;
+    }
+
+    private static boolean buildIndex(List<?> configurations, State state, long revision) {
+        state.building = true;
+        try {
+            Map<String, List<Object>> grouped = new HashMap<>();
+            List<String> packages = new ArrayList<>();
+            for (Object configuration : configurations) {
+                synchronized (TRACKED_LOADERS) {
+                    if (!TRACKED_LOADERS.contains(configuration.getClass().getClassLoader())) {
+                        return false;
+                    }
+                }
+                Object result = TARGETS.get(configuration.getClass()).invoke(configuration);
+                packages.add((String) PACKAGES.get(configuration.getClass()).invoke(configuration));
+                state.loader = configuration.getClass().getClassLoader();
+                if (!(result instanceof Set<?> targets)) {
+                    throw new IllegalStateException("unexpected Mixin target set");
+                }
+                for (Object target : targets) {
+                    if (!(target instanceof String name)) {
+                        throw new IllegalStateException("unexpected Mixin target name");
+                    }
+                    grouped.computeIfAbsent(name, ignored -> new ArrayList<>()).add(configuration);
+                }
+            }
+            if (revision != REVISION.get()) {
+                return false;
+            }
+            Map<String, List<?>> indexed = new HashMap<>();
+            grouped.forEach((name, matches) -> indexed.put(name, List.copyOf(matches)));
+            state.targets = indexed;
+            state.packages = packages;
+            state.configurationCount = configurations.size();
+            state.revision = revision;
+            return true;
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError exception) {
+            state.disabled = true;
+            FAILURES.increment();
+            System.err.println("[Lightspeed Agent] Mixin target index disabled: " + exception);
+            return false;
+        } finally {
+            state.building = false;
+        }
     }
 
     public static long queries() {
@@ -139,9 +149,21 @@ public final class MixinTargetIndex {
     }
 
     public static void publish(Object value, Object environment, Object coprocessors, Object hotSwapper, List<?> generators) {
-        State state = (State) value;
-        if (hotSwapper != null || state.disabled || state.revision != REVISION.get()
-                || state.publishedRevision == state.revision) return;
+        publish(value, environment, null, coprocessors, hotSwapper, generators);
+    }
+
+    public static void publish(Object value, Object environment, List<?> configurations,
+            Object coprocessors, Object hotSwapper, List<?> generators) {
+        State state = state(value);
+        if (hotSwapper != null || state.disabled || state.building) return;
+        long revision = REVISION.get();
+        if (state.revision != revision) {
+            if (configurations == null || configurations.isEmpty() || !trackingInstalled
+                    || !buildIndex(configurations, state, revision)) {
+                return;
+            }
+        }
+        if (state.revision != REVISION.get() || state.publishedRevision == state.revision) return;
         try {
             if (ClassPassThrough.publish(state.loader, environment, state.targets.keySet(), state.packages,
                     (Iterable<?>) coprocessors, generators, state.revision)) {
@@ -152,6 +174,10 @@ public final class MixinTargetIndex {
             FAILURES.increment();
             System.err.println("[Lightspeed Agent] Mixin class eligibility unavailable: " + exception);
         }
+    }
+
+    private static State state(Object owner) {
+        return owner instanceof State state ? state : STATES.computeIfAbsent(owner, ignored -> new State());
     }
 
     private static final class State {

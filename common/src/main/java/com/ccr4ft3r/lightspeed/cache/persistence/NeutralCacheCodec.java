@@ -210,7 +210,6 @@ final class NeutralCacheCodec {
 
     private static final class Budget {
         private int objects;
-
         private void take(int depth) throws IOException {
             if (depth > MAX_DEPTH || ++objects > MAX_OBJECTS) {
                 throw new IOException("neutral cache object graph exceeds bounds");

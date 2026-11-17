@@ -1,3 +1,25 @@
 {
-  "lightspeed.startup_time": "Lightspeed: JVM to menu %s s"
+  "lightspeed.startup_time": "Lightspeed: JVM to menu %s s",
+  "screen.lightspeed.startup_advice.title": "Lightspeed Agent Configuration",
+  "screen.lightspeed.startup_advice.message.consent": "Lightspeed's early Bootstrap Agent (-javaagent) is not active yet. Clicking \"Write Agent Arguments\" adds the required JVM arguments to your launcher profile so early class-loading, module-graph, and scanner optimizations take effect on your next launch. You can also choose \"Skip\" to continue playing as-is.",
+  "screen.lightspeed.startup_advice.message.supported_list": "Automatically supported launchers: PCL2, HMCL, Prism Launcher / MultiMC / PolyMC, Official Launcher, CurseForge App, ATLauncher.\nFor other launchers or custom launch scripts, open \"Manual Guide\" below.",
+  "screen.lightspeed.startup_advice.message.installed": "Agent arguments have been written (%s). Restart the game to activate them; if your launcher caches instance settings (such as PCL2), reopen the launcher first.",
+  "screen.lightspeed.startup_advice.message.manual": "Lightspeed could not detect or update your launcher profile automatically. The Bootstrap Agent JAR has been prepared locally—please follow the manual tutorial below.",
+  "screen.lightspeed.startup_advice.message.java_note": "Note: Current Java feature version is %s (< 21). Switching to Java 21 enables additional module-graph and runtime startup optimizations.",
+  "screen.lightspeed.startup_advice.message.java_only": "Lightspeed Agent is active. Your current Java version is below 21; consider using Java 21 for additional startup optimizations.",
+  "screen.lightspeed.startup_advice.tutorial_title": "Manual Configuration Guide (For Other / Custom Launchers)",
+  "screen.lightspeed.startup_advice.tutorial_steps": "Step 1: Click \"Copy JVM Arguments\" below (keep existing -Xmx memory flags intact).\nStep 2: Open your launcher's Instance/Profile Settings -> Java -> JVM Arguments, add a space after existing arguments, and paste.\nStep 3: Save settings and restart the game.\n\nLauncher JVM Argument Locations:\n- PCL2: Version Settings -> Settings -> Advanced Launch Options -> JVM Arguments\n- HMCL: Version Settings -> Specific Game Settings -> JVM Arguments\n- Prism Launcher / MultiMC / PolyMC: Edit Instance -> Settings -> Java -> check \"Java arguments\"\n- BakaXL: Version Settings -> Advanced Settings -> JVM Arguments\n- CurseForge App: Settings / Profile -> Minecraft -> Additional Arguments\n- ATLauncher: Edit Instance -> Settings -> Java/Minecraft Parameters\n- Modrinth App: Instance Options -> Java -> Custom java arguments\n- Official Launcher: Installations -> Edit -> More Options -> JVM Arguments\n- Other Launchers / Scripts: Append the copied flags, or click \"Open Agent Folder\" to locate the JAR:\n%s",
+  "screen.lightspeed.startup_advice.arguments_label": "Copyable JVM Arguments:",
+  "screen.lightspeed.startup_advice.arguments_unavailable": "Agent arguments are unavailable outside a packaged Mod JAR. Standard loader optimizations remain active.",
+  "screen.lightspeed.startup_advice.scroll_hint": "(Scroll mouse wheel to view more)",
+  "screen.lightspeed.startup_advice.write_agent": "Write Agent Arguments",
+  "screen.lightspeed.startup_advice.skip": "Skip",
+  "screen.lightspeed.startup_advice.close": "Close",
+  "screen.lightspeed.startup_advice.manual_guide": "Manual Guide",
+  "screen.lightspeed.startup_advice.back_overview": "Back to Overview",
+  "screen.lightspeed.startup_advice.copy": "Copy JVM Arguments",
+  "screen.lightspeed.startup_advice.copied": "Copied",
+  "screen.lightspeed.startup_advice.open_dir": "Open Agent Folder",
+  "screen.lightspeed.startup_advice.dont_show_off": "[ ] Don't show this prompt again",
+  "screen.lightspeed.startup_advice.dont_show_on": "[x] Don't show this prompt again"
 }

@@ -38,12 +38,19 @@ final class PackImageFile {
 
     private final Path logicalFile;
     private final String fingerprint;
+    private final String legacyFingerprint;
     private final long maxDataBytes;
     private final int maxEntryBytes;
 
     PackImageFile(Path logicalFile, String fingerprint, long maxDataBytes, int maxEntryBytes) {
+        this(logicalFile, fingerprint, maxDataBytes, maxEntryBytes, null);
+    }
+
+    PackImageFile(Path logicalFile, String fingerprint, long maxDataBytes, int maxEntryBytes,
+                  String legacyFingerprint) {
         this.logicalFile = logicalFile;
         this.fingerprint = fingerprint;
+        this.legacyFingerprint = legacyFingerprint;
         this.maxDataBytes = maxDataBytes;
         this.maxEntryBytes = maxEntryBytes;
     }
@@ -57,8 +64,12 @@ final class PackImageFile {
         if (!generation.getParent().equals(logicalFile.getParent()) || !Files.isRegularFile(generation)) {
             throw new IOException("invalid PackImage generation path");
         }
+        Image image = mapGeneration(generation);
+        if (!pointer.digest().equals(sha256(generation))) {
+            throw new IOException("PackImage generation checksum mismatch " + generation);
+        }
         cleanupGenerations(generation);
-        return mapGeneration(generation);
+        return image;
     }
 
     Image write(Map<String, byte[]> entries) throws IOException {
@@ -176,7 +187,9 @@ final class PackImageFile {
                 throw new IOException("invalid PackImage bounds");
             }
             byte[] fingerprintBytes = readBytes(input, fingerprintLength);
-            if (!fingerprint.equals(strictUtf8(fingerprintBytes))) {
+            String storedFingerprint = strictUtf8(fingerprintBytes);
+            boolean requiresMigration = !fingerprint.equals(storedFingerprint);
+            if (requiresMigration && !storedFingerprint.equals(legacyFingerprint)) {
                 throw new IOException("PackImage fingerprint mismatch");
             }
 
@@ -201,7 +214,7 @@ final class PackImageFile {
             if (input.position() != dataStart || expectedOffset != fileBytes) {
                 throw new IOException("PackImage table and data region disagree");
             }
-            return Image.mapped(input.asReadOnlyBuffer(), Map.copyOf(slices), dataBytes);
+            return Image.mapped(input.asReadOnlyBuffer(), Map.copyOf(slices), dataBytes, requiresMigration);
         } catch (ArithmeticException | java.nio.BufferUnderflowException | java.nio.BufferOverflowException exception) {
             throw new IOException("truncated PackImage", exception);
         }
@@ -354,30 +367,37 @@ final class PackImageFile {
     }
 
     static final class Image {
-        private static final Image EMPTY = new Image(null, Map.of(), Map.of(), 0);
+        private static final Image EMPTY = new Image(null, Map.of(), Map.of(), 0, false);
         private final ByteBuffer mapped;
         private final Map<String, Slice> slices;
         private final Map<String, byte[]> heap;
         private final long dataBytes;
+        private final boolean requiresMigration;
 
-        private Image(ByteBuffer mapped, Map<String, Slice> slices, Map<String, byte[]> heap, long dataBytes) {
+        private Image(ByteBuffer mapped, Map<String, Slice> slices, Map<String, byte[]> heap, long dataBytes,
+                      boolean requiresMigration) {
             this.mapped = mapped;
             this.slices = slices;
             this.heap = heap;
             this.dataBytes = dataBytes;
+            this.requiresMigration = requiresMigration;
         }
 
         static Image empty() {
             return EMPTY;
         }
 
-        static Image mapped(ByteBuffer mapped, Map<String, Slice> slices, long dataBytes) {
-            return new Image(mapped, slices, Map.of(), dataBytes);
+        static Image mapped(ByteBuffer mapped, Map<String, Slice> slices, long dataBytes, boolean requiresMigration) {
+            return new Image(mapped, slices, Map.of(), dataBytes, requiresMigration);
         }
 
         static Image heap(Map<String, byte[]> entries) {
             long bytes = entries.values().stream().mapToLong(value -> value.length).sum();
-            return new Image(null, Map.of(), Map.copyOf(entries), bytes);
+            return new Image(null, Map.of(), Map.copyOf(entries), bytes, false);
+        }
+
+        boolean requiresMigration() {
+            return requiresMigration;
         }
 
         byte[] get(String key) throws IOException {
@@ -447,5 +467,6 @@ final class PackImageFile {
         void forEachKey(java.util.function.Consumer<String> consumer) {
             (heap.isEmpty() ? slices.keySet() : heap.keySet()).forEach(consumer);
         }
+
     }
 }

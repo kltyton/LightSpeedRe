@@ -16,6 +16,8 @@ import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.Type;
 import org.objectweb.asm.util.CheckClassAdapter;
+import org.objectweb.asm.tree.ClassNode;
+import org.objectweb.asm.tree.MethodNode;
 
 import java.io.IOException;
 import java.lang.annotation.ElementType;
@@ -91,9 +93,9 @@ public final class AgentRegressionCheck {
             }
             if (target.className().equals(
                     "net/minecraftforge/fml/loading/moddiscovery/BackgroundScanHandler")) {
-                require(hasSynchronizedMethod(transformed, "submitForScanning"),
+                require(hasMethodMonitor(original, transformed, "submitForScanning"),
                         "parallel scan submission does not protect shared lists");
-                require(hasSynchronizedMethod(transformed, "addCompletedFile"),
+                require(hasMethodMonitor(original, transformed, "addCompletedFile"),
                         "parallel scan completion does not protect shared lists");
             }
             new ClassReader(transformed).accept(new CheckClassAdapter(new ClassWriter(0), true), 0);
@@ -509,13 +511,13 @@ public final class AgentRegressionCheck {
                         "7a94a5ce380ea983a337d5a8e3ea3eb84e88b584fc172c6ab314948967c9083c", "mayProvideTransformerService"),
                 target("lightspeed.target.securejar2", "cpw/mods/jarhandling/impl/Jar",
                         "bba6a4ee9327d364967a3cfec4707d695d5962cb42a20a4b212a26434a5b9055",
-                        "registerResourceRoot", "mightContain", "resourcePackages"),
+                        "registerResourceRoot", "findIndexedResource", "resourcePackages"),
                 target("lightspeed.target.securejar2", "cpw/mods/cl/ModuleClassLoader",
                         "62e3eaa069098d55f5da70e6dbc2a35a1e622d68804b2af6049583151bcb6f16",
-                        "rawClassBytes", "recordRawClassBytes"),
+                        "rawClassBytes", "recordRawClassBytes", "classDefined"),
                 target("lightspeed.target.securejar3", "cpw/mods/cl/ModuleClassLoader",
                         "1ea195fe3b32c95e7232f49c14750b9245a664e3b66c89e298c31371d8b36376",
-                        "rawClassBytes", "recordRawClassBytes"),
+                        "rawClassBytes", "recordRawClassBytes", "classDefined"),
                 target("lightspeed.target.forge.production", "net/minecraftforge/fml/loading/moddiscovery/Scanner",
                         "40475b4b77a9709ac07ef64f00aa234aad403c0f82c4e65b8329ee03f379f495",
                         "replayScanMetadata", "recordScanMetadata"),
@@ -638,19 +640,25 @@ public final class AgentRegressionCheck {
         return found[0];
     }
 
-    private static boolean hasSynchronizedMethod(byte[] bytes, String methodName) {
-        boolean[] found = {false};
-        new ClassReader(bytes).accept(new ClassVisitor(Opcodes.ASM9) {
-            @Override
-            public MethodVisitor visitMethod(int access, String name, String descriptor, String signature,
-                                             String[] exceptions) {
-                if (name.equals(methodName) && (access & Opcodes.ACC_SYNCHRONIZED) != 0) {
-                    found[0] = true;
-                }
-                return null;
+    private static boolean hasMethodMonitor(byte[] original, byte[] transformed, String methodName) {
+        ClassNode before = new ClassNode();
+        ClassNode after = new ClassNode();
+        new ClassReader(original).accept(before, ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+        new ClassReader(transformed).accept(after, ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+        MethodNode source = before.methods.stream().filter(method -> method.name.equals(methodName))
+                .findFirst().orElseThrow();
+        MethodNode result = after.methods.stream().filter(method -> method.name.equals(methodName)
+                && method.desc.equals(source.desc)).findFirst().orElseThrow();
+        int acquisitions = 0;
+        int releases = 0;
+        for (var instruction : result.instructions) {
+            if (instruction.getOpcode() == Opcodes.MONITORENTER) {
+                acquisitions++;
+            } else if (instruction.getOpcode() == Opcodes.MONITOREXIT) {
+                releases++;
             }
-        }, ClassReader.SKIP_CODE | ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
-        return found[0];
+        }
+        return result.access == source.access && acquisitions > 0 && releases >= 2;
     }
 
     private static Path jar(Path path, Map<String, byte[]> entries, boolean multiRelease) throws IOException {

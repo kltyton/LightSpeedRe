@@ -10,6 +10,7 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -43,7 +44,14 @@ public final class ResourceMembershipIndex {
             existing = new Path[]{primary};
         }
         ROOTS.putIfAbsent(root.getFileSystem(),
-                new RootRegistration(root, primary, filter, existing, new ConcurrentHashMap<>()));
+                new RootRegistration(root, primary, filter, true, existing, new ConcurrentHashMap<>()));
+    }
+
+    /** Returns the registered native source count, or UNKNOWN when the registration is incomplete. */
+    public static int sourceCount(Path root) {
+        RootRegistration registration = registration(root);
+        return registration != null && registration.filterKnown() && registration.paths().length > 0
+                ? registration.paths().length : UNKNOWN;
     }
 
     public static boolean mightContain(Path root, Path primary, String name) {
@@ -52,7 +60,7 @@ public final class ResourceMembershipIndex {
             return true;
         }
         RootRegistration registration = ROOTS.computeIfAbsent(root.getFileSystem(), ignored -> new RootRegistration(
-                root, primary, null, primary == null ? new Path[0] : new Path[]{primary}, new ConcurrentHashMap<>()));
+                root, primary, null, false, primary == null ? new Path[0] : new Path[]{primary}, new ConcurrentHashMap<>()));
         JarResourceIndex index = index(registration);
         if (!index.isExact()) {
             return true;
@@ -62,6 +70,54 @@ public final class ResourceMembershipIndex {
             REJECTED.increment();
         }
         return result;
+    }
+
+    /** Null keeps native lookup for unsupported roots, directories and noncanonical names. */
+    public static Optional<Path> findFile(Path root, Path primary, String name) {
+        QUERIES.increment();
+        if (name == null || root == null || !root.getFileSystem().isOpen()) {
+            return null;
+        }
+        RootRegistration registration = ROOTS.computeIfAbsent(root.getFileSystem(), ignored -> new RootRegistration(
+                root, primary, null, false, primary == null ? new Path[0] : new Path[]{primary}, new ConcurrentHashMap<>()));
+        String normalized = normalize(name);
+        Path queryPath = null;
+        if (normalized.startsWith(".") || normalized.contains("/.") || normalized.contains("//")
+                || normalized.endsWith("/")) {
+            queryPath = root.getFileSystem().getPath(name);
+            if (!queryPath.equals(queryPath.normalize()) || !normalized.equals(normalize(queryPath.toString()))) {
+                return null;
+            }
+        }
+        JarResourceIndex index = index(registration);
+        if (!index.isExact()) {
+            return null;
+        }
+        if (index.containsFile(normalized)) {
+            // A merged index cannot reproduce per-source selection and callback order.
+            if (!registration.filterKnown() || registration.paths().length != 1) {
+                return null;
+            }
+            Path relative = queryPath == null ? root.getFileSystem().getPath(name) : queryPath;
+            if (!relative.equals(relative.normalize())) {
+                return null;
+            }
+            BiPredicate<String, String> filter = registration.filter();
+            if (filter != null) {
+                String base = registration.paths()[0].toString().replace('\\', '/');
+                if (base.length() > 1 && base.startsWith("/")) base = base.substring(1);
+                if (!filter.test(normalized, base)) {
+                    REJECTED.increment();
+                    return Optional.empty();
+                }
+            }
+            return Optional.of(root.resolve(relative));
+        }
+        if (index.contains(normalized)) {
+            return null;
+        }
+        REJECTED.increment();
+        return Optional.empty();
     }
 
     public static int bind(Path path) {
@@ -130,10 +186,19 @@ public final class ResourceMembershipIndex {
         if (path == null) {
             return null;
         }
-        RootRegistration registration = new RootRegistration(path, path, (name, base) -> true,
+        RootRegistration registration = new RootRegistration(path, path, (name, base) -> true, true,
                 new Path[]{path}, new ConcurrentHashMap<>());
         JarResourceIndex index = JarResourceIndex.build(registration);
         return index.isExact() ? index.sourceIdentity() + "\0" : null;
+    }
+
+    static String persistentFileKey(Path path) {
+        RootRegistration registration = registration(path);
+        if (registration == null) return null;
+        String relative = relativePrefix(registration, path);
+        JarResourceIndex index = index(registration);
+        return relative != null && index.isExact() && index.containsFile(relative)
+                ? index.sourceIdentity() + '\0' + relative : null;
     }
 
     public static Set<String> activeSourceIdentities() {
@@ -208,8 +273,9 @@ public final class ResourceMembershipIndex {
         synchronized (VIEW_LOCK) {
             JarResourceView[] current = VIEWS;
             int handle = current.length;
-            VIEWS = Arrays.copyOf(current, handle + 1);
-            VIEWS[handle] = view;
+            JarResourceView[] expanded = Arrays.copyOf(current, handle + 1);
+            expanded[handle] = view;
+            VIEWS = expanded;
             return handle;
         }
     }
@@ -293,7 +359,7 @@ public final class ResourceMembershipIndex {
         return QUALIFICATION_CHECKS.sum();
     }
 
-    record RootRegistration(Path root, Path primary, BiPredicate<String, String> filter, Path[] paths,
+    record RootRegistration(Path root, Path primary, BiPredicate<String, String> filter, boolean filterKnown, Path[] paths,
                             ConcurrentHashMap<String, Integer> views) {
     }
 }

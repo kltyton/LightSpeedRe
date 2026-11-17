@@ -1,15 +1,12 @@
 package com.ccr4ft3r.lightspeed.bootstrap.compiler;
 
+import com.ccr4ft3r.lightspeed.bootstrap.runtime.scan.ScanRuntimeTypes;
 import java.io.InputStream;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.util.Set;
 
 final class ForgeScanRuntime {
-    private static final String MOD_CLASS_VISITOR =
-            "net.minecraftforge.fml.loading.moddiscovery.ModClassVisitor";
-    private static final String MOD_FILE_SCAN_DATA =
-            "net.minecraftforge.forgespi.language.ModFileScanData";
 
     private final Constructor<?> scanDataConstructor;
     private final Constructor<?> visitorConstructor;
@@ -21,8 +18,8 @@ final class ForgeScanRuntime {
     private final int readerFlags;
 
     private ForgeScanRuntime(ClassLoader loader) throws ReflectiveOperationException {
-        Class<?> scanData = Class.forName(MOD_FILE_SCAN_DATA, true, loader);
-        Class<?> visitor = Class.forName(MOD_CLASS_VISITOR, true, loader);
+        Class<?> scanData = Class.forName(ScanRuntimeTypes.SCAN_DATA, true, loader);
+        Class<?> visitor = Class.forName(ScanRuntimeTypes.CLASS_VISITOR, true, loader);
         Class<?> classReader = Class.forName(asmClass("ClassReader"), true, loader);
         Class<?> classVisitor = Class.forName(asmClass("ClassVisitor"), true, loader);
 

@@ -3,8 +3,6 @@ package com.ccr4ft3r.lightspeed.compat;
 import com.ccr4ft3r.lightspeed.cache.GlobalCache;
 import com.mojang.logging.LogUtils;
 import net.minecraft.server.packs.resources.PreparableReloadListener;
-import net.minecraft.server.packs.resources.ResourceManager;
-import net.minecraft.util.profiling.ProfilerFiller;
 import org.slf4j.Logger;
 
 import java.util.ArrayDeque;
@@ -14,7 +12,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
-import java.util.function.Supplier;
+import java.util.function.Function;
 
 public final class ResourceReloadFailureGuard {
     private static final Logger LOGGER = LogUtils.getLogger();
@@ -24,27 +22,24 @@ public final class ResourceReloadFailureGuard {
 
     public static <T> CompletableFuture<T> guard(
             PreparableReloadListener listener,
-            Supplier<CompletableFuture<T>> reload) {
+            PreparableReloadListener.PreparationBarrier barrier,
+            Function<PreparableReloadListener.PreparationBarrier, CompletableFuture<T>> reload) {
+        TrackedBarrier tracked = new TrackedBarrier(barrier);
         CompletableFuture<T> future;
         try {
-            future = reload.get();
+            future = reload.apply(tracked);
         } catch (RuntimeException | LinkageError throwable) {
-            return handleFailure(listener, throwable);
+            return handleFailure(listener, throwable, tracked);
         }
         if (!shouldWrap(listener)) {
             return future;
         }
         return future.handle((result, throwable) -> {
             if (throwable == null) {
-                return result;
+                return CompletableFuture.completedFuture(result);
             }
-            Throwable cause = unwrap(throwable);
-            if (shouldIsolate(listener, cause)) {
-                logIsolated(listener, cause);
-                return null;
-            }
-            throw new CompletionException(cause);
-        });
+            return ResourceReloadFailureGuard.<T>handleFailure(listener, throwable, tracked);
+        }).thenCompose(Function.identity());
     }
 
     public static boolean shouldIsolate(Object owner) {
@@ -144,13 +139,39 @@ public final class ResourceReloadFailureGuard {
 
     private static <T> CompletableFuture<T> handleFailure(
             PreparableReloadListener listener,
-            Throwable throwable) {
+            Throwable throwable,
+            TrackedBarrier barrier) {
         Throwable cause = unwrap(throwable);
         if (shouldIsolate(listener, cause)) {
             logIsolated(listener, cause);
-            return CompletableFuture.completedFuture(null);
+            return barrier.completePreparation().thenApply(ignored -> null);
         }
         return CompletableFuture.failedFuture(cause);
+    }
+
+    private static final class TrackedBarrier implements PreparableReloadListener.PreparationBarrier {
+        private final PreparableReloadListener.PreparationBarrier delegate;
+        private CompletableFuture<?> firstWait;
+
+        private TrackedBarrier(PreparableReloadListener.PreparationBarrier delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public synchronized <T> CompletableFuture<T> wait(T value) {
+            CompletableFuture<T> result = delegate.wait(value);
+            if (firstWait == null) {
+                firstWait = result;
+            }
+            return result;
+        }
+
+        private synchronized CompletableFuture<?> completePreparation() {
+            if (firstWait == null) {
+                firstWait = delegate.wait(null);
+            }
+            return firstWait;
+        }
     }
 
     private static void logIsolated(PreparableReloadListener listener, Throwable throwable) {

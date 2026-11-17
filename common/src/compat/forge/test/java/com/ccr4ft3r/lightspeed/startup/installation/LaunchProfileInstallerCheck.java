@@ -42,6 +42,9 @@ public final class LaunchProfileInstallerCheck {
             checkOfficialLauncherRollback(directory, owner, agent);
             checkDirectVersionJsonInstall(directory, owner, agent);
             checkPrism(directory, owner, agent);
+            checkPrismGlobalInherit(directory, owner, agent);
+            checkCurseForge(directory, owner, agent);
+            checkAtLauncher(directory, owner, agent);
             checkManualArgumentLine(directory, owner, agent);
             checkStartupThreadBudget();
             System.out.println("LAUNCH_PROFILE_INSTALLER_OK");
@@ -254,7 +257,8 @@ public final class LaunchProfileInstallerCheck {
         require(!updated.contains("lightspeed.appCds"), "legacy Prism archive marker must be removed");
         require(!updated.contains("old.jsa"), "stale Prism archive must be removed");
         require(!updated.contains("-Xshare:auto"), "Lightspeed-owned stale Prism sharing flag must be removed");
-        require(updated.contains(BootstrapAgentInstaller.agentArgument(agent)), "Prism Agent path must be installed");
+        require(updated.contains(BootstrapAgentInstaller.agentArgument(agent).replace("\\", "\\\\")),
+                "Prism Agent path must be installed with INI-escaped backslashes");
         require(!LaunchProfileInstaller.updatePrism(config, directory, owner, agent), "identical Prism update must be idempotent");
 
         Path inherited = directory.resolve("inherited-instance.cfg");
@@ -495,6 +499,71 @@ public final class LaunchProfileInstallerCheck {
                 "direct isolated version JSON behavior must remain available without an HMCL marker");
         require(readJvmArguments(manifest).contains(new JsonPrimitive("-Xms1G")),
                 "direct version JSON arguments must remain preserved");
+    }
+
+    private static void checkPrismGlobalInherit(Path directory, Path owner, Path agent) throws Exception {
+        Path root = directory.resolve("prism-global-inherit");
+        Files.createDirectories(root.resolve("instances").resolve("pack").resolve("minecraft"));
+        Files.writeString(root.resolve("prismlauncher.cfg"),
+                "[General]\nJvmArgs=-Xmx10G -XX:+UseG1GC\n", StandardCharsets.UTF_8);
+        Path instanceCfg = root.resolve("instances").resolve("pack").resolve("instance.cfg");
+        Files.writeString(instanceCfg, "OverrideJavaArgs=false\nJvmArgs=\n", StandardCharsets.UTF_8);
+        Path gameDir = root.resolve("instances").resolve("pack").resolve("minecraft");
+
+        require(LaunchProfileInstaller.install(gameDir, owner, agent, "1.20.1") == LaunchProfileInstaller.Result.PRISM,
+                "Prism global inheritance must be promoted to instance override when installing");
+        String updated = Files.readString(instanceCfg, StandardCharsets.UTF_8);
+        require(updated.contains("OverrideJavaArgs=true"), "Prism override must be enabled");
+        require(updated.contains("-Xmx10G") && updated.contains("-XX:+UseG1GC"),
+                "Prism global JvmArgs must be carried over");
+        require(updated.contains(BootstrapAgentInstaller.agentArgument(agent).replace("\\", "\\\\")),
+                "Prism inherited instance must receive the INI-escaped Agent argument");
+        require(LaunchProfileInstaller.install(gameDir, owner, agent, "1.20.1")
+                        == LaunchProfileInstaller.Result.PRISM_UNCHANGED,
+                "second Prism install must be idempotent");
+    }
+
+    private static void checkCurseForge(Path directory, Path owner, Path agent) throws Exception {
+        String versionId = "1.20.1-forge-47.4.0";
+        Path cfRoot = directory.resolve("curseforge");
+        Path gameDir = cfRoot.resolve("Instances").resolve("ATM9");
+        Path installDir = cfRoot.resolve("Install");
+        Path manifest = installDir.resolve("versions").resolve(versionId).resolve(versionId + ".json");
+        Files.createDirectories(gameDir);
+        Files.createDirectories(manifest.getParent());
+        Files.writeString(manifest, "{\"arguments\":{\"jvm\":[\"-Xms2G\"]}}", StandardCharsets.UTF_8);
+        Path profiles = installDir.resolve("launcher_profiles.json");
+        Files.writeString(profiles, "{\"profiles\":{\"cf\":{\"lastVersionId\":\"" + versionId
+                + "\",\"gameDir\":\"" + gameDir.toString().replace("\\", "\\\\")
+                + "\",\"javaArgs\":\"-Xmx8G\"}}}", StandardCharsets.UTF_8);
+
+        require(LaunchProfileInstaller.install(gameDir, owner, agent, versionId)
+                        == LaunchProfileInstaller.Result.CURSEFORGE,
+                "CurseForge Install/launcher_profiles.json layout must be detected");
+        JsonObject profile = JsonParser.parseString(Files.readString(profiles, StandardCharsets.UTF_8))
+                .getAsJsonObject().getAsJsonObject("profiles").getAsJsonObject("cf");
+        assertStringArguments(profile.get("javaArgs").getAsString(), gameDir, owner, agent);
+        require(LaunchProfileInstaller.install(gameDir, owner, agent, versionId)
+                        == LaunchProfileInstaller.Result.CURSEFORGE_UNCHANGED,
+                "second CurseForge install must be idempotent");
+    }
+
+    private static void checkAtLauncher(Path directory, Path owner, Path agent) throws Exception {
+        Path gameDir = directory.resolve("atlauncher-root").resolve("atlauncher-pack");
+        Files.createDirectories(gameDir);
+        Path instanceJson = gameDir.resolve("instance.json");
+        Files.writeString(instanceJson, "{\"id\":\"ATM9\",\"launcher\":{\"mcVersion\":\"1.20.1\",\"javaArguments\":\"-Xmx8G\"}}",
+                StandardCharsets.UTF_8);
+
+        var result = LaunchProfileInstaller.install(gameDir, owner, agent, "1.20.1");
+        require(result == LaunchProfileInstaller.Result.ATLAUNCHER,
+                "ATLauncher instance.json layout must be detected, got " + result);
+        JsonObject root = JsonParser.parseString(Files.readString(instanceJson, StandardCharsets.UTF_8)).getAsJsonObject();
+        assertStringArguments(root.getAsJsonObject("launcher").get("javaArguments").getAsString(),
+                gameDir, owner, agent);
+        require(LaunchProfileInstaller.install(gameDir, owner, agent, "1.20.1")
+                        == LaunchProfileInstaller.Result.ATLAUNCHER_UNCHANGED,
+                "second ATLauncher install must be idempotent");
     }
 
     private static Path createHmclMarker(Path instanceRoot) throws Exception {

@@ -5,6 +5,12 @@ import java.util.Locale;
 
 final class StartupThreadBudget {
     private static final String MANAGED_COMPILER_COUNT = "-Dlightspeed.managedCICompilerCount=";
+    private static final String MANAGED_GC_THRESHOLDS = "-Dlightspeed.managedGcThresholds=true";
+    private static final List<String> MANAGED_GC_ARGUMENTS = List.of(
+            MANAGED_GC_THRESHOLDS,
+            "-XX:MetaspaceSize=512m",
+            "-XX:InitialCodeCacheSize=128m",
+            "-XX:ReservedCodeCacheSize=512m");
 
     private StartupThreadBudget() {
     }
@@ -48,5 +54,25 @@ final class StartupThreadBudget {
 
     static boolean isManagedCompilerArgument(String normalizedArgument, int compilerCount) {
         return normalizedArgument.equals("-xx:cicompilercount=" + compilerCount);
+    }
+
+    static List<String> gcThresholdArguments() {
+        return gcThresholdArguments(System.getProperty("java.vm.name", ""));
+    }
+
+    static List<String> gcThresholdArguments(String vmName) {
+        String normalizedName = vmName.toLowerCase(Locale.ROOT);
+        boolean hotspot = normalizedName.contains("hotspot") || normalizedName.contains("openjdk");
+        return hotspot ? MANAGED_GC_ARGUMENTS : List.of();
+    }
+
+    static boolean isManagedGcMarker(String normalizedArgument) {
+        return normalizedArgument.equals("-dlightspeed.managedgcthresholds=true");
+    }
+
+    static boolean isManagedGcArgument(String normalizedArgument) {
+        return normalizedArgument.equals("-xx:metaspacesize=512m")
+                || normalizedArgument.equals("-xx:initialcodecachesize=128m")
+                || normalizedArgument.equals("-xx:reservedcodecachesize=512m");
     }
 }

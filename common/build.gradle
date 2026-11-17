@@ -91,3 +91,4 @@ rootProject.afterEvaluate {
 }
 ext.templeResourceDirectories = resourceDirectories
 ext.templeSourceDirectories = javaDirectories + [constants]
+apply from: new File(templeRoot, 'gradle/target-conventions/ide-sources.gradle')

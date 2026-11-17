@@ -6,6 +6,7 @@ import com.ccr4ft3r.lightspeed.cache.resource.ResourcePackEntry;
 import com.ccr4ft3r.lightspeed.cache.resource.ResourceListingScope;
 import com.ccr4ft3r.lightspeed.compat.FusionPackCompat;
 import com.ccr4ft3r.lightspeed.interfaces.IPathResourcePack;
+import com.ccr4ft3r.lightspeed.interfaces.ICache;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.packs.FilePackResources;
 import net.minecraft.server.packs.PackResources;
@@ -24,6 +25,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.ModifyVariable;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 import java.io.InputStream;
 import java.util.HashMap;
@@ -33,10 +35,15 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Mixin(FallbackResourceManager.class)
-public abstract class FallbackResourceManagerMixin implements ResourcePackLookup.GroupedAccess<ResourceLocation> {
+public abstract class FallbackResourceManagerMixin implements ResourcePackLookup.GroupedAccess<ResourceLocation>, ICache {
     @Shadow @Final public List<?> fallbacks;
     @Shadow @Final private PackType type;
-    @Unique private final Map<ResourceLocation, IndexedPack> lightspeed$routeWinners = new ConcurrentHashMap<>();
+    @Unique private final Map<ResourceLocation, Object> lightspeed$routeWinners = new ConcurrentHashMap<>();
+
+    @Inject(method = "<init>", at = @At("RETURN"))
+    private void lightspeed$registerRoutes(CallbackInfo callback) {
+        if (GlobalCache.isEnabled) GlobalCache.add(this);
+    }
 
     @ModifyVariable(method = "listResources", at = @At("STORE"), ordinal = 2)
     private Map<ResourceLocation, Resource> lightspeed$skipIntermediateSort(Map<ResourceLocation, Resource> resources) {
@@ -56,30 +63,30 @@ public abstract class FallbackResourceManagerMixin implements ResourcePackLookup
     @Inject(method = "getResource", at = @At("HEAD"), cancellable = true)
     private void getResourceHeadInjected(ResourceLocation location, CallbackInfoReturnable<Optional<Resource>> cir) {
         if (GlobalCache.isEnabled) {
-            IndexedPack winner = lightspeed$routeWinners.get(location);
-            if (winner != null) {
-                IoSupplier<InputStream> supplier = winner.pack().getResource(this.type, location);
-                if (supplier != null) {
-                    cir.setReturnValue(Optional.of(lightspeed$createResource(winner.pack(), location, supplier,
-                            lightspeed$createStackMetadataFinder(location, winner.index()))));
-                    return;
-                }
-                lightspeed$routeWinners.remove(location, winner);
+            Object winner = lightspeed$routeWinners.get(location);
+            if (winner instanceof IndexedPack indexedWinner) {
+                Optional<Resource> result = ResourcePackLookup.cached(fallbacks, location,
+                        indexedWinner.index(), indexedWinner.pack(), this);
+                if (result.isEmpty()) lightspeed$routeWinners.remove(location, indexedWinner);
+                cir.setReturnValue(result);
+                return;
             }
         }
         if (!GlobalCache.isEnabled || !GlobalCache.shouldParallelizeResourcePackLookup || this.fallbacks.size() <= 1) {
             return;
         }
 
-        cir.setReturnValue(ResourcePackLookup.grouped(fallbacks, location, this));
+        Optional<Resource> result = ResourcePackLookup.grouped(fallbacks, location, this);
+        cir.setReturnValue(result);
     }
 
     @Inject(method = "getResource", at = @At("RETURN"))
     private void lightspeed$recordRouteWinner(ResourceLocation location,
                                                CallbackInfoReturnable<Optional<Resource>> cir) {
-        if (!GlobalCache.isEnabled || cir.getReturnValue().isEmpty()) {
+        if (!GlobalCache.isEnabled) {
             return;
         }
+        if (cir.getReturnValue().isEmpty()) return;
         String sourcePack = cir.getReturnValue().get().sourcePackId();
         for (int index = this.fallbacks.size() - 1; index >= 0; index--) {
             FallbackResourceManagerPackEntryAccessor entry =
@@ -104,7 +111,13 @@ public abstract class FallbackResourceManagerMixin implements ResourcePackLookup
 
     @Override
     public Resource lightspeed$lookupResource(PackResources pack, ResourceLocation location, IoSupplier<InputStream> stream, int index) {
+        if (GlobalCache.isEnabled) lightspeed$routeWinners.put(location, new IndexedPack(index, pack));
         return lightspeed$createResource(pack, location, stream, lightspeed$createStackMetadataFinder(location, index));
+    }
+
+    @Override
+    public void lightspeed$persistAndClearCache() {
+        lightspeed$routeWinners.clear();
     }
 
     @Override

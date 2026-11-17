@@ -2,7 +2,7 @@ package com.ccr4ft3r.lightspeed.mixin.misc;
 
 import com.ccr4ft3r.lightspeed.cache.GlobalCache;
 import com.ccr4ft3r.lightspeed.interfaces.IPathResourcePack;
-import net.minecraft.server.packs.CompositePackResources;
+import com.ccr4ft3r.lightspeed.mixin.resources.CompositePackResourcesAccessor;
 import net.minecraft.server.packs.PackResources;
 import net.minecraft.server.packs.repository.Pack;
 import net.neoforged.neoforge.resource.ResourcePackLoader;
@@ -11,8 +11,6 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
-
-import java.lang.reflect.Field;
 
 @Mixin(value = ResourcePackLoader.class, remap = false)
 public abstract class ResourcePackLoaderMixin {
@@ -48,19 +46,9 @@ public abstract class ResourcePackLoaderMixin {
     }
 
     private static PackResources lightspeed$getPrimaryResources(PackResources resources) {
-        if (!(resources instanceof CompositePackResources)) {
-            return resources;
+        if (resources instanceof CompositePackResourcesAccessor accessor) {
+            return accessor.lightspeed$getPrimaryPackResources();
         }
-        try {
-            Field field = CompositePackResources.class.getDeclaredField("primaryPackResources");
-            field.setAccessible(true);
-            Object value = field.get(resources);
-            if (value instanceof PackResources primary) {
-                return primary;
-            }
-        } catch (NoSuchFieldException | IllegalAccessException | RuntimeException ignored) {
-            // If the composite layout changes, skip this optimization rather than touching overlay packs.
-        }
-        return null;
+        return resources;
     }
 }

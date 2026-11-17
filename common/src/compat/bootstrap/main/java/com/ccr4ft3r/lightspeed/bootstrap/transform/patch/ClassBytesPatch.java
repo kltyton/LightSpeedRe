@@ -80,6 +80,35 @@ public final class ClassBytesPatch {
         agentBridge.add(ordinaryClass);
         agentBridge.add(new FrameNode(Opcodes.F_SAME, 0, null, 0, null));
         loadClass.instructions.insertBefore(loadClass.instructions.getFirst(), agentBridge);
+        observeClassDefinition(node);
         return AsmPatchSupport.write(node);
+    }
+
+    private static void observeClassDefinition(ClassNode node) {
+        MethodNode reader = AsmPatchSupport.method(node, "readerToClass",
+                "(Ljava/lang/module/ModuleReader;Ljava/lang/module/ModuleReference;Ljava/lang/String;)Ljava/lang/Class;");
+        AsmPatchSupport.uniqueInvocation(reader, Opcodes.INVOKEVIRTUAL, node.name, "defineClass",
+                "(Ljava/lang/String;[BIILjava/security/ProtectionDomain;)Ljava/lang/Class;");
+        AbstractInsnNode successfulReturn = null;
+        int emptyReturns = 0;
+        for (AbstractInsnNode instruction : reader.instructions) {
+            if (instruction.getOpcode() != Opcodes.ARETURN) continue;
+            AbstractInsnNode value = instruction.getPrevious();
+            while (value != null && value.getOpcode() < 0) value = value.getPrevious();
+            if (value != null && value.getOpcode() == Opcodes.ACONST_NULL) {
+                emptyReturns++;
+            } else {
+                if (successfulReturn != null) throw new IllegalStateException("Multiple class definition returns");
+                successfulReturn = instruction;
+            }
+        }
+        if (emptyReturns != 1 || successfulReturn == null) {
+            throw new IllegalStateException("Unexpected module class definition returns");
+        }
+        InsnList observation = new InsnList();
+        observation.add(new InsnNode(Opcodes.DUP));
+        observation.add(new MethodInsnNode(Opcodes.INVOKESTATIC, AsmPatchSupport.HOOK_OWNER,
+                "classDefined", "(Ljava/lang/Class;)V", false));
+        reader.instructions.insertBefore(successfulReturn, observation);
     }
 }

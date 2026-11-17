@@ -131,6 +131,7 @@ final class LauncherRefreshCoordinator {
             case OFFICIAL -> executable.equals("minecraftlauncher.exe")
                     || executable.equals("minecraftlauncher")
                     || executable.contains("minecraft launcher");
+            case ATLAUNCHER -> executable.contains("atlauncher");
         };
     }
 

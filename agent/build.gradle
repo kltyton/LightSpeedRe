@@ -63,9 +63,9 @@ configurations {
 }
 
 dependencies {
-    implementation 'org.ow2.asm:asm:9.7.1'
-    implementation 'org.ow2.asm:asm-tree:9.7.1'
-    testImplementation 'org.ow2.asm:asm-util:9.7.1'
+    implementation 'org.ow2.asm:asm:9.10.1'
+    implementation 'org.ow2.asm:asm-tree:9.10.1'
+    testImplementation 'org.ow2.asm:asm-util:9.10.1'
     testCompileOnly files(configurations.eventBusTarget)
     testImplementation files(configurations.forgeProductionTarget)
     testImplementation files(configurations.forgeSpiTarget)
@@ -89,6 +89,30 @@ dependencies {
     forgeScanGuavaTarget 'com.google.guava:guava:31.1-jre'
 }
 
+sourceSets {
+    serviceDescriptor {
+        java.setSrcDirs(active ? [new File(agentRoot, 'src/serviceDescriptor/java')] : [])
+        compileClasspath = configurations.compileClasspath
+        runtimeClasspath = output + compileClasspath
+    }
+}
+
+tasks.named('compileServiceDescriptorJava', JavaCompile) {
+    source new File(agentRoot, 'src/serviceDescriptor/java')
+}
+
+tasks.register('generateEarlyServiceModule', JavaExec) {
+    dependsOn tasks.named('serviceDescriptorClasses')
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(17) }
+    classpath = sourceSets.serviceDescriptor.runtimeClasspath
+    mainClass = 'com.ccr4ft3r.lightspeed.bootstrap.packaging.EarlyServiceModule'
+    def descriptor = layout.buildDirectory.file('generated/early-service/module-info.class')
+    inputs.property('loader', rootProject.loader)
+    inputs.property('version', project.version.toString())
+    outputs.file(descriptor)
+    args descriptor.get().asFile.absolutePath, rootProject.loader.toString(), project.version.toString()
+}
+
 tasks.named('jar', Jar).configure {
     enabled = false
 }
@@ -103,6 +127,8 @@ tasks.named('shadowJar', com.github.jengelman.gradle.plugins.shadow.tasks.Shadow
         attributes(
                 'Premain-Class': 'com.ccr4ft3r.lightspeed.bootstrap.LightspeedAgent',
                 'Agent-Class': 'com.ccr4ft3r.lightspeed.bootstrap.LightspeedAgent',
+                'Launcher-Agent-Class': 'com.ccr4ft3r.lightspeed.bootstrap.entrypoint.LoaderAgent',
+                'Boot-Class-Path': 'lightspeed-bootstrap-agent.jar',
                 'Can-Redefine-Classes': 'false',
                 'Can-Retransform-Classes': 'true',
                 'Implementation-Title': 'Lightspeed Bootstrap Agent',

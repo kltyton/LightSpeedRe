@@ -54,6 +54,7 @@ minecraft {
     // Use non-default mappings at your own risk. They may not always work.
     // Simply re-run your setup task after changing the mappings to update your workspace.
     mappings channel: mapping_channel, version: mapping_version
+    accessTransformer = file('../../common/src/compat/forge/resources/META-INF/accesstransformer.cfg')
 
     copyIdeResources = true
 
@@ -247,6 +248,9 @@ tasks.named('jar', Jar).configure {
 
 tasks.named('jarJar').configure {
     archiveClassifier = ''
+    manifest.attributes('Automatic-Module-Name': 'com.ccr4ft3r.lightspeed.early')
+    dependsOn project(':agent').tasks.named('generateEarlyServiceModule')
+    from(project(':agent').layout.buildDirectory.dir('generated/early-service'))
     from project(':common').sourceSets.main.output
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     from(file('../../LICENSE')) { rename { "LICENSE_${mod_id}" } }
@@ -414,8 +418,10 @@ tasks.register('verifyDistribution') {
 
         byte[] embedded
         new java.util.zip.ZipFile(release).withCloseable { zip ->
-            ['META-INF/mods.toml', 'META-INF/LICENSE-Lightspeed.txt', 'lightspeed.mixins.json', 'lightspeed.refmap.json',
-             'META-INF/lightspeed/bootstrap-agent.jar'].each { name ->
+            ['META-INF/mods.toml', 'META-INF/LICENSE-Lightspeed.txt', 'META-INF/accesstransformer.cfg', 'lightspeed.mixins.json', 'lightspeed.refmap.json',
+             'META-INF/lightspeed/bootstrap-agent.jar', 'module-info.class',
+             'META-INF/services/cpw.mods.modlauncher.api.ITransformationService',
+             'META-INF/services/net.minecraftforge.forgespi.locating.IModLocator'].each { name ->
                 if (zip.getEntry(name) == null) {
                     throw new GradleException("release JAR is missing ${name}")
                 }
@@ -445,6 +451,8 @@ tasks.register('verifyDistribution') {
             def manifest = input.manifest
             if (manifest == null
                     || manifest.mainAttributes.getValue('Premain-Class') != 'com.ccr4ft3r.lightspeed.bootstrap.LightspeedAgent'
+                    || manifest.mainAttributes.getValue('Launcher-Agent-Class') != 'com.ccr4ft3r.lightspeed.bootstrap.entrypoint.LoaderAgent'
+                    || manifest.mainAttributes.getValue('Boot-Class-Path') != 'lightspeed-bootstrap-agent.jar'
                     || manifest.mainAttributes.getValue('Implementation-Version') != project.version.toString()) {
                 throw new GradleException('embedded Agent manifest is incomplete or version-mismatched')
             }
@@ -491,4 +499,5 @@ tasks.named('check').configure {
             tasks.named('verifyDistribution'), ':agent:shadowJar'
 }
 
+apply from: file('../../gradle/target-conventions/pack-metadata.gradle')
 apply from: file('../../gradle/target-conventions/publish.gradle')

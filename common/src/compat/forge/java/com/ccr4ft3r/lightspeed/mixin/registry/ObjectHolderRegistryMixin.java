@@ -26,7 +26,7 @@ public abstract class ObjectHolderRegistryMixin {
     private static boolean lightspeed$added(Set<Consumer<Predicate<ResourceLocation>>> holders,
                                             Object holder, Operation<Boolean> original) {
         boolean added = original.call(holders, holder);
-        if (added) ObjectHolderDispatch.invalidate();
+        if (added) ObjectHolderDispatch.onAdded(holder);
         return added;
     }
 

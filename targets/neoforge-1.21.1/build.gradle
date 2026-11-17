@@ -23,9 +23,7 @@ base {
 def bootstrapAgentEnabled = providers.gradleProperty('lightspeed.bootstrapAgent')
         .map { value -> value.toBoolean() }
         .getOrElse(false)
-def bootstrapAgentPath = project(':agent').layout.buildDirectory
-        .file("libs/lightspeed-bootstrap-agent-${project.version}.jar")
-        .get().asFile.absolutePath
+def bootstrapAgentPath = embeddedAgentTask.get().archiveFile.get().asFile.absolutePath
 
 java {
     toolchain.languageVersion = JavaLanguageVersion.of(21)
@@ -43,6 +41,7 @@ repositories {
 
 neoForge {
     version = project.neo_version
+    accessTransformers.from file('../../common/src/compat/neoforge/1.21.1/resources/META-INF/accesstransformer.cfg')
 
     runs {
         configureEach {
@@ -50,6 +49,7 @@ neoForge {
             logLevel = org.slf4j.event.Level.DEBUG
             if (bootstrapAgentEnabled) {
                 jvmArgument "-javaagent:${bootstrapAgentPath}"
+                systemProperty 'lightspeed.agent.allowUnowned', 'true'
             }
         }
 
@@ -116,7 +116,12 @@ var generateModMetadata = tasks.register("generateModMetadata", ProcessResources
             mod_description        : mod_description
     ]
     inputs.properties replaceProperties
-    expand replaceProperties
+    def json = new groovy.json.JsonGenerator.Options().disableUnicodeEscaping().build()
+    def escaped = replaceProperties.collectEntries { key, value ->
+        def encoded = json.toJson(value.toString()).replace('\u007f', '\\u007f')
+        [(key): encoded.substring(1, encoded.length() - 1)]
+    }
+    filter { line -> line.replaceAll(/\$\{([a-z_]+)\}/) { match, key -> escaped.containsKey(key) ? escaped[key] : match } }
     from "../../common/src/compat/neoforge/1.21.1/templates"
     into layout.buildDirectory.dir('generated/sources/modMetadata')
 }
@@ -147,6 +152,9 @@ if (bootstrapAgentEnabled) {
 }
 
 tasks.named('jar', Jar).configure {
+    manifest.attributes('Automatic-Module-Name': 'com.ccr4ft3r.lightspeed.early')
+    dependsOn project(':agent').tasks.named('generateEarlyServiceModule')
+    from(project(':agent').layout.buildDirectory.dir('generated/early-service'))
     dependsOn embeddedAgentTask
     from('../../LICENSE') {
         into 'META-INF'
@@ -169,16 +177,21 @@ tasks.named('jar', Jar).configure {
     }
 }
 
+def verificationReleaseFile = tasks.named('jar', Jar).get().archiveFile.get().asFile
+def verificationAgentFile = embeddedAgentTask.get().archiveFile.get().asFile
+
 tasks.register('verifyDistribution') {
     group = 'verification'
     description = 'Verifies the NeoForge Mod JAR and its embedded bootstrap Agent.'
     notCompatibleWithConfigurationCache('Reads the built Mod and Agent task outputs directly.')
     dependsOn tasks.named('jar'), embeddedAgentTask
     doLast {
-        File release = tasks.named('jar').get().archiveFile.get().asFile
+        File release = verificationReleaseFile
         new java.util.zip.ZipFile(release).withCloseable { zip ->
             ['META-INF/neoforge.mods.toml', 'META-INF/LICENSE-Lightspeed.txt', 'lightspeed.mixins.json',
-             'META-INF/lightspeed/bootstrap-agent.jar'].each { name ->
+             'META-INF/lightspeed/bootstrap-agent.jar', 'module-info.class',
+             'META-INF/services/cpw.mods.modlauncher.api.ITransformationService',
+             'META-INF/services/net.neoforged.neoforgespi.locating.IModFileCandidateLocator'].each { name ->
                 if (zip.getEntry(name) == null) {
                     throw new GradleException("release JAR is missing ${name}")
                 }
@@ -188,7 +201,16 @@ tasks.register('verifyDistribution') {
                 throw new GradleException('top-level Mod JAR must not declare Premain-Class')
             }
             byte[] embedded = zip.getInputStream(zip.getEntry('META-INF/lightspeed/bootstrap-agent.jar')).readAllBytes()
-            byte[] builtAgent = embeddedAgentTask.get().archiveFile.get().asFile.bytes
+            new java.util.jar.JarInputStream(new ByteArrayInputStream(embedded)).withCloseable { payload ->
+                def attributes = payload.manifest?.mainAttributes
+                if (attributes == null
+                        || attributes.getValue('Launcher-Agent-Class') != 'com.ccr4ft3r.lightspeed.bootstrap.entrypoint.LoaderAgent'
+                        || attributes.getValue('Boot-Class-Path') != 'lightspeed-bootstrap-agent.jar'
+                        || attributes.getValue('Can-Retransform-Classes') != 'true') {
+                    throw new GradleException('embedded bootstrap launch entry is incomplete')
+                }
+            }
+            byte[] builtAgent = verificationAgentFile.bytes
             if (!java.security.MessageDigest.isEqual(
                     java.security.MessageDigest.getInstance('SHA-256').digest(embedded),
                     java.security.MessageDigest.getInstance('SHA-256').digest(builtAgent))) {

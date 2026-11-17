@@ -20,6 +20,7 @@ public final class LightspeedConfig {
 
     public static final class Common {
         public final ForgeConfigSpec.BooleanValue installBootstrapAgent;
+        public final ForgeConfigSpec.BooleanValue showStartupTime;
         public final ForgeConfigSpec.BooleanValue asyncPreloadPacks;
         public final ForgeConfigSpec.BooleanValue dedicatedResourceReloadExecutor;
         public final ForgeConfigSpec.BooleanValue parallelResourceLookup;
@@ -31,8 +32,11 @@ public final class LightspeedConfig {
 
         private Common(ForgeConfigSpec.Builder builder) {
             builder.push("startup");
+            showStartupTime = builder
+                    .comment("Show the completed JVM-to-menu startup time on the title screen. Does not affect startup timing or log output.")
+                    .define("showStartupTime", true);
             installBootstrapAgent = builder
-                    .comment("Explicitly install bootstrap Agent JVM arguments for the next launch. Disabled by default to keep exported modpacks free of machine-specific startup paths. Restart after changing this option.")
+                    .comment("Enable writing Lightspeed's -javaagent bootstrap arguments into detected launcher profiles for faster startup. Opt-in via the in-game prompt or config.")
                     .define("installBootstrapAgent", false);
             asyncPreloadPacks = builder
                     .comment("Preload Forge path resource pack indexes on Lightspeed worker threads during startup.")
@@ -50,7 +54,7 @@ public final class LightspeedConfig {
                     .comment("Validate persisted per-mod resource caches with the full JAR SHA-256 instead of the default file identity. Reads each JAR once per launch; changing this option requires a restart and rebuilds these caches.")
                     .define("verifyJarHash", false);
             suppressStartupRecommendations = builder
-                    .comment("Do not show Lightspeed's bootstrap Agent recommendation on startup.")
+                    .comment("Do not show the Java runtime recommendation after startup.")
                     .define("suppressStartupRecommendations", false);
             builder.pop();
 

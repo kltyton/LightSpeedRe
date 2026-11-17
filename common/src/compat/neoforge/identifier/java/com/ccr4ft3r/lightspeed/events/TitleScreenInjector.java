@@ -3,6 +3,7 @@ package com.ccr4ft3r.lightspeed.events;
 import com.ccr4ft3r.lightspeed.ModConstants;
 import com.ccr4ft3r.lightspeed.client.startup.ClientStartupState;
 import com.ccr4ft3r.lightspeed.client.startup.StartupTimeText;
+import com.ccr4ft3r.lightspeed.config.LightspeedConfig;
 import com.ccr4ft3r.lightspeed.startup.metrics.StartupMetrics;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.TitleScreen;
@@ -42,7 +43,8 @@ public final class TitleScreenInjector {
     @SubscribeEvent
     public static void onScreenRender(ScreenEvent.Render.Post event) {
         Minecraft client = Minecraft.getInstance();
-        if (event.getScreen() instanceof TitleScreen && ClientStartupState.overlayClear(client)
+        if (LightspeedConfig.COMMON.showStartupTime.get() && event.getScreen() instanceof TitleScreen
+                && ClientStartupState.overlayClear(client)
                 && StartupTimeText.get() != null) {
             event.getGuiGraphics().text(client.font, StartupTimeText.get(), 2,
                     event.getGuiGraphics().guiHeight() - 10 - brandingLines * 10, 0xFFFFFFFF);

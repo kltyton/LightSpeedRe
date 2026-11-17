@@ -1,53 +1,48 @@
 package com.ccr4ft3r.lightspeed.bootstrap;
 
-import java.lang.instrument.ClassFileTransformer;
 import java.lang.instrument.Instrumentation;
 import java.net.URISyntaxException;
+import java.net.JarURLConnection;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.Set;
+import java.util.Arrays;
+import java.util.Comparator;
+import com.ccr4ft3r.lightspeed.bootstrap.transform.LauncherTransformer;
+import com.ccr4ft3r.lightspeed.bootstrap.runtime.BootstrapHooks;
+import com.ccr4ft3r.lightspeed.bootstrap.runtime.transform.ClassHierarchy;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Consumer;
 import java.util.jar.JarFile;
 
 public final class LightspeedAgent {
     private static final AtomicBoolean INITIALIZED = new AtomicBoolean();
-    private static final Set<String> TARGET_CLASSES = Set.of(
-            "java.lang.module.Resolver",
-            "net.minecraftforge.fml.loading.ModDirTransformerDiscoverer",
-            "net.neoforged.fml.loading.ModDirTransformerDiscoverer",
-            "cpw.mods.jarhandling.impl.Jar",
-            "cpw.mods.jarhandling.impl.Jar$JarModuleDataProvider",
-            "cpw.mods.niofs.union.UnionFileSystem",
-            "cpw.mods.niofs.union.UnionFileSystemProvider",
-            "cpw.mods.cl.ModuleClassLoader",
-            "cpw.mods.modlauncher.ClassTransformer",
-            "net.minecraftforge.fml.loading.moddiscovery.Scanner",
-            "net.minecraftforge.fml.loading.moddiscovery.BackgroundScanHandler",
-            "net.minecraftforge.eventbus.EventBus",
-            "net.minecraftforge.eventbus.ModLauncherFactory",
-            "net.minecraftforge.eventbus.ClassLoaderFactory$ASMClassLoader");
+
     private LightspeedAgent() {
     }
 
     public static void premain(String arguments, Instrumentation instrumentation) {
-        initialize(arguments, instrumentation, false);
+        initialize(arguments, instrumentation, false, null);
     }
 
     public static void agentmain(String arguments, Instrumentation instrumentation) {
-        initialize(arguments, instrumentation, true);
+        initialize(arguments, instrumentation, true, null);
     }
 
-    private static void initialize(String arguments, Instrumentation instrumentation, boolean dynamic) {
+    public static void startFromLoader(Instrumentation instrumentation, Path archive) {
+        initialize("loader-early", instrumentation, true, archive);
+    }
+
+    private static void initialize(String arguments, Instrumentation instrumentation, boolean dynamic, Path archive) {
         if (!INITIALIZED.compareAndSet(false, true)) {
             log("already active; ignoring duplicate " + (dynamic ? "agentmain" : "premain"));
             return;
         }
-        Path agentPath = locateAgentJar();
-        if (agentPath == null) {
+        Path agentPath = archive == null ? locateAgentJar() : archive.toAbsolutePath().normalize();
+        if (agentPath == null || !Files.isRegularFile(agentPath)) {
             log("disabled: agent code source is not a regular JAR");
             INITIALIZED.set(false);
             return;
@@ -59,26 +54,35 @@ public final class LightspeedAgent {
             return;
         }
 
+        LauncherTransformer registered = null;
         try {
-            ClassLoader agentLoader = LightspeedAgent.class.getClassLoader();
-            Class<?> hooks = Class.forName(
-                    "com.ccr4ft3r.lightspeed.bootstrap.runtime.BootstrapHooks", true, agentLoader);
-            Class<?> transformerType = Class.forName(
-                    "com.ccr4ft3r.lightspeed.bootstrap.transform.LauncherTransformer", true, agentLoader);
-            hooks.getMethod("installInstrumentation", Instrumentation.class).invoke(null, instrumentation);
-            ClassFileTransformer transformer = (ClassFileTransformer) transformerType
-                    .getConstructor(Consumer.class)
-                    .newInstance((Consumer<String>) LightspeedAgent::log);
-            hooks.getMethod("installSummaryHook").invoke(null);
-            hooks.getMethod("startResourceImageLoad").invoke(null);
+            BootstrapHooks.installInstrumentation(instrumentation);
+            LauncherTransformer transformer = new LauncherTransformer(LightspeedAgent::log);
+            BootstrapHooks.installSummaryHook();
+            BootstrapHooks.startResourceImageLoad();
+            Set<String> targets = LauncherTransformer.targetClassNames();
+            Class<?>[] loaded = instrumentation.getAllLoadedClasses();
+            for (Class<?> type : loaded) {
+                if (dynamic && LauncherTransformer.requiresInitialDefinition(type.getName().replace('.', '/'))) {
+                    throw new IllegalStateException("Early bootstrap started after structural target " + type.getName());
+                }
+                ClassHierarchy.observeDefined(type);
+            }
             instrumentation.addTransformer(transformer, true);
-            for (Class<?> loadedClass : instrumentation.getAllLoadedClasses()) {
-                if (TARGET_CLASSES.contains(loadedClass.getName())) {
+            registered = transformer;
+            Arrays.sort(loaded, Comparator.comparingInt(type ->
+                    type.getName().equals("cpw.mods.cl.ModuleClassLoader") ? 0 :
+                    type.getName().equals("cpw.mods.jarhandling.impl.Jar") ? 1 :
+                    type.getName().equals("cpw.mods.jarhandling.impl.Jar$JarModuleDataProvider") ? 2 : 3));
+            for (Class<?> loadedClass : loaded) {
+                if (targets.contains(loadedClass.getName())) {
                     boolean resolver = loadedClass.getName().equals("java.lang.module.Resolver");
-                    if (resolver && Runtime.version().feature() != 21) {
+                    boolean zipFileSystem = loadedClass.getName().equals("jdk.nio.zipfs.ZipFileSystem");
+                    if ((resolver || zipFileSystem)
+                            && Runtime.version().feature() != 21) {
                         continue;
                     }
-                    if ((dynamic || resolver) && instrumentation.isModifiableClass(loadedClass)) {
+                    if ((dynamic || resolver || zipFileSystem) && instrumentation.isModifiableClass(loadedClass)) {
                         try {
                             instrumentation.retransformClasses(loadedClass);
                             log("retransformed target: " + loadedClass.getName());
@@ -86,19 +90,29 @@ public final class LightspeedAgent {
                             if (resolver) {
                                 System.clearProperty("lightspeed.bootstrapAgent.moduleGraph");
                             }
-                            log("could not retransform late target " + loadedClass.getName() + ": " + exception);
+                            throw new IllegalStateException("Cannot retransform early target " + loadedClass.getName(), exception);
                         }
+                    } else if (dynamic) {
+                        throw new IllegalStateException("JVM cannot retransform the loaded target " + loadedClass.getName());
                     } else {
                         log("target was already loaded before transformer registration: " + loadedClass.getName());
                     }
                 }
             }
-            System.setProperty("lightspeed.bootstrapAgent.active", "true");
+            String patchFailure = System.getProperty("lightspeed.bootstrapAgent.patchFailure");
+            if (patchFailure != null) throw new IllegalStateException(patchFailure);
             System.setProperty("lightspeed.bootstrapAgent.digest", agentDigest);
             System.setProperty("lightspeed.bootstrapAgent.dynamic", Boolean.toString(dynamic));
-            if (!dynamic) hooks.getMethod("startStartupHttpWindow").invoke(null);
+            boolean early = !dynamic || "loader-early".equals(arguments);
+            System.setProperty("lightspeed.bootstrapAgent.early", Boolean.toString(early));
+            if (early) BootstrapHooks.startStartupArchiveWindow();
+            System.setProperty("lightspeed.bootstrapAgent.active", "true");
             log("active (" + (dynamic ? "agentmain" : "premain") + "): " + agentPath.getFileName());
-        } catch (ReflectiveOperationException | RuntimeException exception) {
+        } catch (RuntimeException | LinkageError exception) {
+            if (registered != null) instrumentation.removeTransformer(registered);
+            System.clearProperty("lightspeed.bootstrapAgent.active");
+            System.clearProperty("lightspeed.bootstrapAgent.digest");
+            System.setProperty("lightspeed.bootstrapAgent.failure", exception.toString());
             INITIALIZED.set(false);
             log("disabled: bootstrap initialization failed: " + exception);
         }
@@ -106,9 +120,19 @@ public final class LightspeedAgent {
 
     private static Path locateAgentJar() {
         try {
-            Path path = Path.of(LightspeedAgent.class.getProtectionDomain().getCodeSource().getLocation().toURI());
+            var source = LightspeedAgent.class.getProtectionDomain().getCodeSource();
+            Path path;
+            if (source != null) {
+                path = Path.of(source.getLocation().toURI());
+            } else {
+                var resource = LightspeedAgent.class.getResource("LightspeedAgent.class");
+                if (resource == null || !(resource.openConnection() instanceof JarURLConnection jar)) {
+                    throw new IOException("Bootstrap class does not have an archive resource");
+                }
+                path = Path.of(jar.getJarFileURL().toURI());
+            }
             return Files.isRegularFile(path) ? path : null;
-        } catch (URISyntaxException | RuntimeException exception) {
+        } catch (URISyntaxException | IOException | RuntimeException exception) {
             log("cannot resolve agent code source: " + exception);
             return null;
         }

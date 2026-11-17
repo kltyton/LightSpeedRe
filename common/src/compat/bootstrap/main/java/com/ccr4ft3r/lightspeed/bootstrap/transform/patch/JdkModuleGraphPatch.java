@@ -16,6 +16,7 @@ import org.objectweb.asm.tree.VarInsnNode;
 
 public final class JdkModuleGraphPatch {
     private static final String DESCRIPTOR = "(Ljava/lang/module/Configuration;)Ljava/util/Map;";
+    private static final String CHECK_EXPORT_DESCRIPTOR = "(Ljava/util/Map;)V";
 
     private JdkModuleGraphPatch() {
     }
@@ -74,18 +75,31 @@ public final class JdkModuleGraphPatch {
         graph.instructions.remove(values);
         graph.maxLocals += 7;
 
+        MethodNode checkExport = AsmPatchSupport.method(node, "checkExportSuppliers", CHECK_EXPORT_DESCRIPTOR);
+        if (checkExport != null && checkExport.instructions.getFirst() != null) {
+            int base = checkExport.maxLocals;
+            checkExport.instructions.insertBefore(checkExport.instructions.getFirst(), checkExportPrefix(base));
+            checkExport.maxLocals += 14;
+        }
+
         ClassReader reader = new ClassReader(bytes);
         ClassWriter writer = new ClassWriter(reader, ClassWriter.COMPUTE_FRAMES);
         reader.accept(new ClassVisitor(Opcodes.ASM9, writer) {
             @Override
             public MethodVisitor visitMethod(int access, String name, String descriptor, String signature,
                     String[] exceptions) {
-                MethodVisitor visitor = super.visitMethod(access, name, descriptor, signature, exceptions);
                 if (name.equals("makeGraph") && descriptor.equals(DESCRIPTOR)) {
+                    MethodVisitor visitor = super.visitMethod(access, name, descriptor, signature, exceptions);
                     graph.accept(visitor);
                     return null;
                 }
-                return visitor;
+                if (checkExport != null && name.equals("checkExportSuppliers")
+                        && descriptor.equals(CHECK_EXPORT_DESCRIPTOR)) {
+                    MethodVisitor visitor = super.visitMethod(access, name, descriptor, signature, exceptions);
+                    checkExport.accept(visitor);
+                    return null;
+                }
+                return super.visitMethod(access, name, descriptor, signature, exceptions);
             }
         }, 0);
         return writer.toByteArray();
@@ -169,5 +183,205 @@ public final class JdkModuleGraphPatch {
     private static void next(MethodVisitor code, int iterator) {
         code.visitVarInsn(Opcodes.ALOAD, iterator);
         code.visitMethodInsn(Opcodes.INVOKEINTERFACE, "java/util/Iterator", "next", "()Ljava/lang/Object;", true);
+    }
+
+    private static InsnList checkExportPrefix(int base) {
+        String resolvedModule = "java/lang/module/ResolvedModule";
+        String descriptor = "java/lang/module/ModuleDescriptor";
+        String exports = "java/lang/module/ModuleDescriptor$Exports";
+        MethodNode mv = new MethodNode();
+        Label originalCheck = new Label();
+        Label findA0Loop = new Label();
+        Label afterFindA0 = new Label();
+        Label qualOuterLoop = new Label();
+        Label qualInnerLoop = new Label();
+        Label afterQual = new Label();
+        Label remLoop = new Label();
+        Label checkKeepExtra = new Label();
+        Label addToRem = new Label();
+        Label afterRem = new Label();
+
+        int a0 = base;
+        int reads0 = base + 1;
+        int iter = base + 2;
+        int entry = base + 3;
+        int mod = base + 4;
+        int baseSet = base + 5;
+        int qualTargets = base + 6;
+        int desc = base + 7;
+        int expIter = base + 8;
+        int exp = base + 9;
+        int filtered = base + 10;
+        int reads = base + 11;
+        int keptExtras = base + 12;
+
+        // if (graph.size() <= 16) proceed directly with original graph
+        mv.visitVarInsn(Opcodes.ALOAD, 1);
+        mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, "java/util/Map", "size", "()I", true);
+        mv.visitIntInsn(Opcodes.BIPUSH, 16);
+        mv.visitJumpInsn(Opcodes.IF_ICMPLE, originalCheck);
+
+        // Find first automatic module (a0, reads0)
+        mv.visitInsn(Opcodes.ACONST_NULL);
+        mv.visitVarInsn(Opcodes.ASTORE, a0);
+        mv.visitInsn(Opcodes.ACONST_NULL);
+        mv.visitVarInsn(Opcodes.ASTORE, reads0);
+        mv.visitVarInsn(Opcodes.ALOAD, 1);
+        mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, "java/util/Map", "entrySet", "()Ljava/util/Set;", true);
+        iterator(mv, iter);
+        mv.visitLabel(findA0Loop);
+        hasNext(mv, iter, afterFindA0);
+        next(mv, iter);
+        mv.visitTypeInsn(Opcodes.CHECKCAST, "java/util/Map$Entry");
+        mv.visitVarInsn(Opcodes.ASTORE, entry);
+        mv.visitVarInsn(Opcodes.ALOAD, entry);
+        mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, "java/util/Map$Entry", "getKey", "()Ljava/lang/Object;", true);
+        mv.visitTypeInsn(Opcodes.CHECKCAST, resolvedModule);
+        mv.visitVarInsn(Opcodes.ASTORE, mod);
+        mv.visitVarInsn(Opcodes.ALOAD, mod);
+        mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, resolvedModule, "descriptor", "()L" + descriptor + ";", false);
+        mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, descriptor, "isAutomatic", "()Z", false);
+        mv.visitJumpInsn(Opcodes.IFEQ, findA0Loop);
+        mv.visitVarInsn(Opcodes.ALOAD, mod);
+        mv.visitVarInsn(Opcodes.ASTORE, a0);
+        mv.visitVarInsn(Opcodes.ALOAD, entry);
+        mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, "java/util/Map$Entry", "getValue", "()Ljava/lang/Object;", true);
+        mv.visitTypeInsn(Opcodes.CHECKCAST, "java/util/Set");
+        mv.visitVarInsn(Opcodes.ASTORE, reads0);
+        mv.visitJumpInsn(Opcodes.GOTO, afterFindA0);
+
+        mv.visitLabel(afterFindA0);
+        mv.visitVarInsn(Opcodes.ALOAD, a0);
+        mv.visitJumpInsn(Opcodes.IFNULL, originalCheck);
+
+        // baseSet = new HashSet(reads0); baseSet.add(a0);
+        mv.visitTypeInsn(Opcodes.NEW, "java/util/HashSet");
+        mv.visitInsn(Opcodes.DUP);
+        mv.visitVarInsn(Opcodes.ALOAD, reads0);
+        mv.visitMethodInsn(Opcodes.INVOKESPECIAL, "java/util/HashSet", "<init>", "(Ljava/util/Collection;)V", false);
+        mv.visitVarInsn(Opcodes.ASTORE, baseSet);
+        mv.visitVarInsn(Opcodes.ALOAD, baseSet);
+        mv.visitVarInsn(Opcodes.ALOAD, a0);
+        mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, "java/util/Set", "add", "(Ljava/lang/Object;)Z", true);
+        mv.visitInsn(Opcodes.POP);
+
+        // qualifiedTargets = new HashSet()
+        mv.visitTypeInsn(Opcodes.NEW, "java/util/HashSet");
+        mv.visitInsn(Opcodes.DUP);
+        mv.visitMethodInsn(Opcodes.INVOKESPECIAL, "java/util/HashSet", "<init>", "()V", false);
+        mv.visitVarInsn(Opcodes.ASTORE, qualTargets);
+        mv.visitVarInsn(Opcodes.ALOAD, baseSet);
+        iterator(mv, iter);
+        mv.visitLabel(qualOuterLoop);
+        hasNext(mv, iter, afterQual);
+        next(mv, iter);
+        mv.visitTypeInsn(Opcodes.CHECKCAST, resolvedModule);
+        mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, resolvedModule, "descriptor", "()L" + descriptor + ";", false);
+        mv.visitVarInsn(Opcodes.ASTORE, desc);
+        mv.visitVarInsn(Opcodes.ALOAD, desc);
+        mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, descriptor, "isAutomatic", "()Z", false);
+        mv.visitJumpInsn(Opcodes.IFNE, qualOuterLoop);
+        mv.visitVarInsn(Opcodes.ALOAD, desc);
+        mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, descriptor, "exports", "()Ljava/util/Set;", false);
+        iterator(mv, expIter);
+        mv.visitLabel(qualInnerLoop);
+        hasNext(mv, expIter, qualOuterLoop);
+        next(mv, expIter);
+        mv.visitTypeInsn(Opcodes.CHECKCAST, exports);
+        mv.visitVarInsn(Opcodes.ASTORE, exp);
+        mv.visitVarInsn(Opcodes.ALOAD, exp);
+        mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, exports, "isQualified", "()Z", false);
+        mv.visitJumpInsn(Opcodes.IFEQ, qualInnerLoop);
+        mv.visitVarInsn(Opcodes.ALOAD, qualTargets);
+        mv.visitVarInsn(Opcodes.ALOAD, exp);
+        mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, exports, "targets", "()Ljava/util/Set;", false);
+        mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, "java/util/Set", "addAll", "(Ljava/util/Collection;)Z", true);
+        mv.visitInsn(Opcodes.POP);
+        mv.visitJumpInsn(Opcodes.GOTO, qualInnerLoop);
+
+        // If a0 itself is targeted by a qualified export, keep original graph
+        mv.visitLabel(afterQual);
+        mv.visitVarInsn(Opcodes.ALOAD, qualTargets);
+        mv.visitVarInsn(Opcodes.ALOAD, a0);
+        mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, resolvedModule, "descriptor", "()L" + descriptor + ";", false);
+        mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, descriptor, "name", "()Ljava/lang/String;", false);
+        mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, "java/util/Set", "contains", "(Ljava/lang/Object;)Z", true);
+        mv.visitJumpInsn(Opcodes.IFNE, originalCheck);
+
+        // Build filtered graph: keep a0 + 2 extra equivalent automatic modules + all non-equivalent modules
+        mv.visitTypeInsn(Opcodes.NEW, "java/util/HashMap");
+        mv.visitInsn(Opcodes.DUP);
+        mv.visitMethodInsn(Opcodes.INVOKESPECIAL, "java/util/HashMap", "<init>", "()V", false);
+        mv.visitVarInsn(Opcodes.ASTORE, filtered);
+        mv.visitInsn(Opcodes.ICONST_0);
+        mv.visitVarInsn(Opcodes.ISTORE, keptExtras);
+        mv.visitVarInsn(Opcodes.ALOAD, 1);
+        mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, "java/util/Map", "entrySet", "()Ljava/util/Set;", true);
+        iterator(mv, iter);
+        mv.visitLabel(remLoop);
+        hasNext(mv, iter, afterRem);
+        next(mv, iter);
+        mv.visitTypeInsn(Opcodes.CHECKCAST, "java/util/Map$Entry");
+        mv.visitVarInsn(Opcodes.ASTORE, entry);
+        mv.visitVarInsn(Opcodes.ALOAD, entry);
+        mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, "java/util/Map$Entry", "getKey", "()Ljava/lang/Object;", true);
+        mv.visitTypeInsn(Opcodes.CHECKCAST, resolvedModule);
+        mv.visitVarInsn(Opcodes.ASTORE, mod);
+        mv.visitVarInsn(Opcodes.ALOAD, entry);
+        mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, "java/util/Map$Entry", "getValue", "()Ljava/lang/Object;", true);
+        mv.visitTypeInsn(Opcodes.CHECKCAST, "java/util/Set");
+        mv.visitVarInsn(Opcodes.ASTORE, reads);
+        mv.visitVarInsn(Opcodes.ALOAD, mod);
+        mv.visitVarInsn(Opcodes.ALOAD, a0);
+        mv.visitJumpInsn(Opcodes.IF_ACMPEQ, addToRem);
+        mv.visitVarInsn(Opcodes.ALOAD, mod);
+        mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, resolvedModule, "descriptor", "()L" + descriptor + ";", false);
+        mv.visitVarInsn(Opcodes.ASTORE, desc);
+        mv.visitVarInsn(Opcodes.ALOAD, desc);
+        mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, descriptor, "isAutomatic", "()Z", false);
+        mv.visitJumpInsn(Opcodes.IFEQ, addToRem);
+        mv.visitVarInsn(Opcodes.ALOAD, qualTargets);
+        mv.visitVarInsn(Opcodes.ALOAD, desc);
+        mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, descriptor, "name", "()Ljava/lang/String;", false);
+        mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, "java/util/Set", "contains", "(Ljava/lang/Object;)Z", true);
+        mv.visitJumpInsn(Opcodes.IFNE, addToRem);
+        mv.visitVarInsn(Opcodes.ALOAD, baseSet);
+        mv.visitVarInsn(Opcodes.ALOAD, mod);
+        mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, "java/util/Set", "contains", "(Ljava/lang/Object;)Z", true);
+        mv.visitJumpInsn(Opcodes.IFEQ, addToRem);
+        mv.visitVarInsn(Opcodes.ALOAD, reads);
+        mv.visitVarInsn(Opcodes.ALOAD, reads0);
+        mv.visitJumpInsn(Opcodes.IF_ACMPEQ, checkKeepExtra);
+        mv.visitVarInsn(Opcodes.ALOAD, reads);
+        mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, "java/util/Set", "size", "()I", true);
+        mv.visitVarInsn(Opcodes.ALOAD, baseSet);
+        mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, "java/util/Set", "size", "()I", true);
+        mv.visitJumpInsn(Opcodes.IF_ICMPGT, addToRem);
+        mv.visitVarInsn(Opcodes.ALOAD, baseSet);
+        mv.visitVarInsn(Opcodes.ALOAD, reads);
+        mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, "java/util/Set", "containsAll", "(Ljava/util/Collection;)Z", true);
+        mv.visitJumpInsn(Opcodes.IFEQ, addToRem);
+
+        mv.visitLabel(checkKeepExtra);
+        mv.visitVarInsn(Opcodes.ILOAD, keptExtras);
+        mv.visitInsn(Opcodes.ICONST_2);
+        mv.visitJumpInsn(Opcodes.IF_ICMPGE, remLoop);
+        mv.visitIincInsn(keptExtras, 1);
+
+        mv.visitLabel(addToRem);
+        mv.visitVarInsn(Opcodes.ALOAD, filtered);
+        mv.visitVarInsn(Opcodes.ALOAD, mod);
+        mv.visitVarInsn(Opcodes.ALOAD, reads);
+        mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, "java/util/Map", "put",
+                "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", true);
+        mv.visitInsn(Opcodes.POP);
+        mv.visitJumpInsn(Opcodes.GOTO, remLoop);
+
+        mv.visitLabel(afterRem);
+        mv.visitVarInsn(Opcodes.ALOAD, filtered);
+        mv.visitVarInsn(Opcodes.ASTORE, 1);
+
+        mv.visitLabel(originalCheck);
+        return mv.instructions;
     }
 }

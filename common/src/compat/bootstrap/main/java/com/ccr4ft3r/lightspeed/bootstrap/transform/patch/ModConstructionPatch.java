@@ -68,6 +68,98 @@ public final class ModConstructionPatch {
         prepare.add(new FieldInsnNode(Opcodes.GETFIELD, node.name, "lightspeed$gameLayer", "Ljava/lang/ModuleLayer;"));
         prepare.add(new MethodInsnNode(Opcodes.INVOKESPECIAL, node.name, load.name, ARGUMENTS, false));
         construct.instructions.insert(prepare);
+        selectConstructorWithoutExpectedException(node, construct);
         return AsmPatchSupport.write(node);
+    }
+
+    private static void selectConstructorWithoutExpectedException(ClassNode node, MethodNode construct) {
+        MethodInsnNode lookup = null;
+        for (AbstractInsnNode instruction : construct.instructions) {
+            if (!(instruction instanceof MethodInsnNode call)
+                    || call.getOpcode() != Opcodes.INVOKEVIRTUAL || !call.owner.equals("java/lang/Class")
+                    || !call.name.equals("getDeclaredConstructor")
+                    || !call.desc.equals("([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;")) continue;
+            AbstractInsnNode previous = call.getPrevious();
+            while (previous != null && previous.getOpcode() < 0) previous = previous.getPrevious();
+            if (previous == null || previous.getOpcode() != Opcodes.AASTORE) continue;
+            if (lookup != null) throw new IllegalStateException("Multiple context constructor lookups");
+            lookup = call;
+        }
+        // Older FML versions only perform the no-argument lookup.
+        if (lookup == null) return;
+
+        MethodNode select = new MethodNode(Opcodes.ACC_PRIVATE | Opcodes.ACC_STATIC | Opcodes.ACC_SYNTHETIC,
+                "lightspeed$findModConstructor", "(Ljava/lang/Class;[Ljava/lang/Class;)Ljava/lang/reflect/Constructor;",
+                null, new String[]{"java/lang/NoSuchMethodException"});
+        InsnList code = select.instructions;
+        LabelNode next = new LabelNode();
+        LabelNode different = new LabelNode();
+        LabelNode advance = new LabelNode();
+        LabelNode exhausted = new LabelNode();
+        LabelNode missing = new LabelNode();
+        code.add(new InsnNode(Opcodes.ACONST_NULL));
+        code.add(new VarInsnNode(Opcodes.ASTORE, 2));
+        // Keep reflection in FMLModContainer, including its caller-sensitive access check.
+        code.add(new VarInsnNode(Opcodes.ALOAD, 0));
+        code.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL, "java/lang/Class", "getDeclaredConstructors",
+                "()[Ljava/lang/reflect/Constructor;", false));
+        code.add(new VarInsnNode(Opcodes.ASTORE, 3));
+        code.add(new InsnNode(Opcodes.ICONST_0));
+        code.add(new VarInsnNode(Opcodes.ISTORE, 4));
+        code.add(next);
+        code.add(new FrameNode(Opcodes.F_FULL, 5, new Object[]{"java/lang/Class", "[Ljava/lang/Class;",
+                "java/lang/reflect/Constructor", "[Ljava/lang/reflect/Constructor;", Opcodes.INTEGER}, 0, null));
+        code.add(new VarInsnNode(Opcodes.ILOAD, 4));
+        code.add(new VarInsnNode(Opcodes.ALOAD, 3));
+        code.add(new InsnNode(Opcodes.ARRAYLENGTH));
+        code.add(new JumpInsnNode(Opcodes.IF_ICMPGE, exhausted));
+        code.add(new VarInsnNode(Opcodes.ALOAD, 3));
+        code.add(new VarInsnNode(Opcodes.ILOAD, 4));
+        code.add(new InsnNode(Opcodes.AALOAD));
+        code.add(new VarInsnNode(Opcodes.ASTORE, 5));
+        code.add(new VarInsnNode(Opcodes.ALOAD, 5));
+        code.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL, "java/lang/reflect/Constructor", "getParameterTypes",
+                "()[Ljava/lang/Class;", false));
+        code.add(new VarInsnNode(Opcodes.ALOAD, 1));
+        code.add(new MethodInsnNode(Opcodes.INVOKESTATIC, "java/util/Arrays", "equals",
+                "([Ljava/lang/Object;[Ljava/lang/Object;)Z", false));
+        code.add(new JumpInsnNode(Opcodes.IFEQ, different));
+        code.add(new VarInsnNode(Opcodes.ALOAD, 5));
+        code.add(new InsnNode(Opcodes.ARETURN));
+        code.add(different);
+        code.add(new FrameNode(Opcodes.F_APPEND, 1, new Object[]{"java/lang/reflect/Constructor"}, 0, null));
+        code.add(new VarInsnNode(Opcodes.ALOAD, 1));
+        code.add(new InsnNode(Opcodes.ARRAYLENGTH));
+        code.add(new InsnNode(Opcodes.ICONST_1));
+        code.add(new JumpInsnNode(Opcodes.IF_ICMPNE, advance));
+        code.add(new VarInsnNode(Opcodes.ALOAD, 5));
+        code.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL, "java/lang/reflect/Constructor", "getParameterCount", "()I", false));
+        code.add(new JumpInsnNode(Opcodes.IFNE, advance));
+        code.add(new VarInsnNode(Opcodes.ALOAD, 5));
+        code.add(new VarInsnNode(Opcodes.ASTORE, 2));
+        code.add(advance);
+        code.add(new FrameNode(Opcodes.F_SAME, 0, null, 0, null));
+        code.add(new IincInsnNode(4, 1));
+        code.add(new JumpInsnNode(Opcodes.GOTO, next));
+        code.add(exhausted);
+        code.add(new FrameNode(Opcodes.F_CHOP, 1, null, 0, null));
+        code.add(new VarInsnNode(Opcodes.ALOAD, 2));
+        code.add(new JumpInsnNode(Opcodes.IFNULL, missing));
+        code.add(new VarInsnNode(Opcodes.ALOAD, 2));
+        code.add(new InsnNode(Opcodes.ARETURN));
+        code.add(missing);
+        code.add(new FrameNode(Opcodes.F_SAME, 0, null, 0, null));
+        code.add(new VarInsnNode(Opcodes.ALOAD, 0));
+        code.add(new VarInsnNode(Opcodes.ALOAD, 1));
+        code.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL, "java/lang/Class", "getDeclaredConstructor",
+                "([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;", false));
+        code.add(new InsnNode(Opcodes.ARETURN));
+        select.maxLocals = 6;
+        node.methods.add(select);
+        lookup.setOpcode(Opcodes.INVOKESTATIC);
+        lookup.owner = node.name;
+        lookup.name = select.name;
+        lookup.desc = select.desc;
+        lookup.itf = false;
     }
 }

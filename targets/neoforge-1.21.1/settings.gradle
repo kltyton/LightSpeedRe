@@ -10,12 +10,12 @@ plugins {
     id 'org.gradle.toolchains.foojay-resolver-convention' version '0.8.0'
 }
 
-rootProject.name = 'lightspeed-neoforge-1.21.1'
 include 'agent'
 
 project(':agent').projectDir = file('../../agent')
 def identity = new Properties()
 file('../../gradle.properties').withReader('UTF-8') { identity.load(it) }
+rootProject.name = identity.getProperty('mod_id') + '-' + rootDir.name
 def selection = file('../../.temple/active-target')
 def activeTarget = selection.isFile() ? selection.getText('UTF-8').trim() : identity.getProperty('temple_default_target')
 def active = activeTarget == rootDir.name

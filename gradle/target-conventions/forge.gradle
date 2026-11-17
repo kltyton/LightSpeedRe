@@ -19,4 +19,5 @@ legacyForge {
         }
     }
 }
+apply from: file('../../gradle/target-conventions/pack-metadata.gradle')
 apply from: file('../../gradle/target-conventions/publish.gradle')

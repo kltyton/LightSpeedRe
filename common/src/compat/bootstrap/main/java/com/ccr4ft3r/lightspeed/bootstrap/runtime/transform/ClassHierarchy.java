@@ -1,32 +1,39 @@
 package com.ccr4ft3r.lightspeed.bootstrap.runtime.transform;
 
-import org.objectweb.asm.ClassReader;
-
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
-/** Superclasses observed after ModLauncher has finished transforming their bytes. */
+/** Event ancestry of classes successfully defined by the module loader. */
 public final class ClassHierarchy {
-    private static final String EVENT = "net/minecraftforge/eventbus/api/Event";
+    private static final Set<String> EVENTS = Set.of(
+            "net/minecraftforge/eventbus/api/Event",
+            "net/neoforged/bus/api/Event");
     private static final Map<ClassLoader, Map<String, Boolean>> NON_EVENTS = new ConcurrentHashMap<>();
 
     private ClassHierarchy() { }
 
-    public static void observe(ClassLoader loader, String name, byte[] bytes) {
-        if (loader == null || name == null) return;
+    public static void observeDefined(Class<?> type) {
+        if (type.isArray()) return;
+        ClassLoader loader = type.getClassLoader();
+        if (loader == null) return;
         String loaderType = loader.getClass().getName();
         if (!loaderType.equals("cpw.mods.modlauncher.TransformingClassLoader")
                 && !loaderType.equals("cpw.mods.cl.ModuleClassLoader")) return;
-        String parent = new ClassReader(bytes).getSuperName();
         Map<String, Boolean> known = NON_EVENTS.computeIfAbsent(loader, ignored -> new ConcurrentHashMap<>());
-        Boolean nonEvent = name.equals(EVENT) ? Boolean.FALSE
-                : parent == null ? null : parent.startsWith("java/") ? Boolean.TRUE : known.get(parent);
-        if (nonEvent != null) known.put(name, nonEvent);
-        else known.remove(name);
+        String name = type.getName().replace('.', '/');
+        boolean nonEvent = true;
+        for (Class<?> ancestor = type; ancestor != null; ancestor = ancestor.getSuperclass()) {
+            if (EVENTS.contains(ancestor.getName().replace('.', '/'))) {
+                nonEvent = false;
+                break;
+            }
+        }
+        known.put(name, nonEvent);
     }
 
     public static boolean excludesEvent(ClassLoader loader, String parent) {
-        if (parent == null || parent.equals(EVENT)) return false;
+        if (parent == null || EVENTS.contains(parent)) return false;
         if (parent.startsWith("java/")) return true;
         Map<String, Boolean> known = NON_EVENTS.get(loader);
         return known != null && Boolean.TRUE.equals(known.get(parent));

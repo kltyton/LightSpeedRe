@@ -3,7 +3,7 @@ plugins { id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0' 
 
 def identity = new Properties()
 file('gradle.properties').withReader('UTF-8') { identity.load(it) }
-rootProject.name = identity.getProperty('mod_name', 'KltytonTemple')
+rootProject.name = identity.getProperty('mod_id')
 def wrapperRoots = [file('gradle/wrapper')]
 file('targets').listFiles()?.findAll { it.isDirectory() }?.each { wrapperRoots.add(new File(it, 'gradle/wrapper')) }
 wrapperRoots.each { directory ->

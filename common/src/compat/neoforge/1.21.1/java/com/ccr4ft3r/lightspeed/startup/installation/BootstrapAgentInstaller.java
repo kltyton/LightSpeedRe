@@ -25,11 +25,28 @@ public final class BootstrapAgentInstaller {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final String EMBEDDED_AGENT = "/META-INF/lightspeed/bootstrap-agent.jar";
     private static volatile InstallationState installationState = InstallationState.NOT_ATTEMPTED;
+    private static volatile LaunchProfileInstaller.Result lastInstallResult = LaunchProfileInstaller.Result.UNSUPPORTED;
 
     private BootstrapAgentInstaller() {
     }
 
     public static void installForNextLaunch() {
+        installForNextLaunch(true);
+    }
+
+    public static void installFromUserConsent() {
+        installForNextLaunch(false);
+    }
+
+    public static String installedLauncherDescription() {
+        return lastInstallResult.description();
+    }
+
+    public static Path agentDirectory() {
+        return FMLPaths.GAMEDIR.get().resolve(".lightspeed").resolve("bootstrap").toAbsolutePath().normalize();
+    }
+
+    private static void installForNextLaunch(boolean refreshLauncher) {
         installationState = InstallationState.IN_PROGRESS;
         try {
             Path gameDirectory = FMLPaths.GAMEDIR.get().toAbsolutePath().normalize();
@@ -51,6 +68,7 @@ public final class BootstrapAgentInstaller {
 
             List<String> arguments = launchArguments(gameDirectory, prepared);
             LaunchProfileInstaller.Result result = LaunchProfileInstaller.install(gameDirectory, arguments);
+            lastInstallResult = result;
             if (result.changed()) {
                 installationState = InstallationState.CONFIGURED;
                 LOGGER.info("Lightspeed installed the embedded bootstrap Agent for the next launch via {}",
@@ -62,7 +80,9 @@ public final class BootstrapAgentInstaller {
             } else {
                 installationState = InstallationState.CONFIGURED;
             }
-            LauncherRefreshCoordinator.refreshAfterInstall(result);
+            if (refreshLauncher) {
+                LauncherRefreshCoordinator.refreshAfterInstall(result);
+            }
         } catch (Exception exception) {
             installationState = InstallationState.MANUAL_REQUIRED;
             LOGGER.warn("Lightspeed was unable to install its embedded bootstrap automatically; the ordinary Mod optimizations remain active",
@@ -132,6 +152,7 @@ public final class BootstrapAgentInstaller {
         arguments.add(ownerArgument(prepared.owner()));
         arguments.add(agentArgument(prepared.agent()));
         arguments.addAll(StartupThreadBudget.arguments());
+        arguments.addAll(StartupThreadBudget.gcThresholdArguments());
         return List.copyOf(arguments);
     }
 

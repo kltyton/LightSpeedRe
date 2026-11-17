@@ -66,6 +66,12 @@ final class LaunchProfileInstaller {
         }
 
         Path prismConfig = locatePrismConfig(gameDirectory);
+        if (prismConfig != null && !desiredArguments.isEmpty() && !prismUsesInstanceArguments(prismConfig)) {
+            String original = Files.readString(prismConfig, StandardCharsets.UTF_8);
+            String promoted = ExtendedLauncherProfiles.enablePrismOverrideWithGlobalArgs(prismConfig, original);
+            return updatePrism(prismConfig, desiredArguments, preLaunchCommand, original, promoted)
+                    ? Result.PRISM : Result.PRISM_UNCHANGED;
+        }
         if (prismConfig != null && prismUsesInstanceArguments(prismConfig)) {
             return updatePrism(prismConfig, desiredArguments, preLaunchCommand)
                     ? Result.PRISM : Result.PRISM_UNCHANGED;
@@ -94,7 +100,15 @@ final class LaunchProfileInstaller {
                     () -> updateOfficialLauncherProfiles(
                             officialProfiles, gameDirectory, resolvedVersionId, desiredArguments),
                     officialVersionJson, () -> updateVersionJson(officialVersionJson, List.of()));
+            if (ExtendedLauncherProfiles.isCurseForgeInstance(gameDirectory, officialProfiles)) {
+                return changed ? Result.CURSEFORGE : Result.CURSEFORGE_UNCHANGED;
+            }
             return changed ? Result.OFFICIAL : Result.OFFICIAL_UNCHANGED;
+        }
+
+        Boolean atLauncherChanged = ExtendedLauncherProfiles.tryUpdateAtLauncher(gameDirectory, desiredArguments);
+        if (atLauncherChanged != null) {
+            return atLauncherChanged ? Result.ATLAUNCHER : Result.ATLAUNCHER_UNCHANGED;
         }
 
         Path versionJson = locateVersionJson(gameDirectory, resolvedVersionId);
@@ -171,9 +185,20 @@ final class LaunchProfileInstaller {
                 .map(value -> value.toLowerCase(Locale.ROOT))
                 .anyMatch(LaunchProfileInstaller::isLegacyArchiveArgument);
         Integer managedCompilerCount = null;
+        int managedGcRemaining = 0;
         for (JsonElement element : current) {
             String normalized = element.isJsonPrimitive() && element.getAsJsonPrimitive().isString()
                     ? element.getAsString().toLowerCase(Locale.ROOT) : null;
+            if (normalized != null && managedGcRemaining > 0
+                    && StartupThreadBudget.isManagedGcArgument(normalized)) {
+                managedGcRemaining--;
+                continue;
+            }
+            if (normalized != null && StartupThreadBudget.isManagedGcMarker(normalized)) {
+                managedGcRemaining = 3;
+                continue;
+            }
+            managedGcRemaining = 0;
             if (normalized != null && managedCompilerCount != null
                     && StartupThreadBudget.isManagedCompilerArgument(normalized, managedCompilerCount)) {
                 managedCompilerCount = null;
@@ -211,6 +236,12 @@ final class LaunchProfileInstaller {
     private static boolean updatePrism(Path config, List<String> desiredArguments,
                                        String preLaunchCommand) throws Exception {
         String content = Files.readString(config, StandardCharsets.UTF_8);
+        return updatePrism(config, desiredArguments, preLaunchCommand, content, content);
+    }
+
+    private static boolean updatePrism(Path config, List<String> desiredArguments,
+                                       String preLaunchCommand, String original, String content) throws Exception {
+        ExtendedLauncherProfiles.validatePrismInstanceSettings(config, content);
         if (content.lines().noneMatch(line -> line.equals("OverrideJavaArgs=true"))) {
             return false;
         }
@@ -218,21 +249,28 @@ final class LaunchProfileInstaller {
         List<String> lines = new ArrayList<>(content.lines().toList());
         List<String> quotedArguments = desiredArguments.stream().map(LaunchProfileInstaller::quote).toList();
         boolean foundArguments = false;
-        boolean changed = false;
+        boolean changed = !original.equals(content);
 
         for (int index = 0; index < lines.size(); index++) {
             String line = lines.get(index);
             if (line.startsWith("JvmArgs=")) {
+                if (foundArguments) {
+                    throw new IllegalStateException("Multiple JvmArgs entries in " + config);
+                }
                 foundArguments = true;
-                String updated = append(removeLightspeedArguments(line.substring("JvmArgs=".length()), desiredArguments.isEmpty()),
+                String existing = ExtendedLauncherProfiles.decodePrismValue(config,
+                        line.substring("JvmArgs=".length()));
+                String updated = append(removeLightspeedArguments(existing, desiredArguments.isEmpty()),
                         quotedArguments);
-                String replacement = "JvmArgs=" + updated;
+                String replacement = existing.equals(updated) ? line
+                        : "JvmArgs=" + ExtendedLauncherProfiles.encodePrismValue(config, updated);
                 changed |= !replacement.equals(line);
                 lines.set(index, replacement);
             }
         }
         if (!foundArguments && !desiredArguments.isEmpty()) {
-            lines.add("JvmArgs=" + append("", quotedArguments));
+            ExtendedLauncherProfiles.insertPrismGeneralSetting(lines,
+                    "JvmArgs=" + ExtendedLauncherProfiles.encodePrismValue(config, append("", quotedArguments)));
             changed = true;
         }
         changed |= updateManagedCommand(lines, "PreLaunchCommand=", "OverrideCommands=",
@@ -462,6 +500,7 @@ final class LaunchProfileInstaller {
         Path current = gameDirectory.toAbsolutePath().normalize();
         for (int depth = 0; current != null && depth < 5; depth++) {
             candidates.add(current.resolve(OFFICIAL_LAUNCHER_PROFILES));
+            candidates.add(current.resolve("Install").resolve(OFFICIAL_LAUNCHER_PROFILES));
             current = current.getParent();
         }
         String appData = System.getenv("APPDATA");
@@ -643,8 +682,18 @@ final class LaunchProfileInstaller {
                 .anyMatch(LaunchProfileInstaller::isLegacyArchiveArgument);
         List<String> retained = new ArrayList<>();
         Integer managedCompilerCount = null;
+        int managedGcRemaining = 0;
         for (String token : tokens) {
             String normalized = unquote(token).toLowerCase(Locale.ROOT);
+            if (managedGcRemaining > 0 && StartupThreadBudget.isManagedGcArgument(normalized)) {
+                managedGcRemaining--;
+                continue;
+            }
+            if (StartupThreadBudget.isManagedGcMarker(normalized)) {
+                managedGcRemaining = 3;
+                continue;
+            }
+            managedGcRemaining = 0;
             if (managedCompilerCount != null
                     && StartupThreadBudget.isManagedCompilerArgument(normalized, managedCompilerCount)) {
                 managedCompilerCount = null;
@@ -705,6 +754,11 @@ final class LaunchProfileInstaller {
     static String formatArgumentLine(List<String> arguments) {
         return arguments.stream().map(LaunchProfileInstaller::quote)
                 .collect(java.util.stream.Collectors.joining(" "));
+    }
+
+    static String mergeArgumentLine(String existing, List<String> desiredArguments) {
+        List<String> quoted = desiredArguments.stream().map(LaunchProfileInstaller::quote).toList();
+        return append(removeLightspeedArguments(existing == null ? "" : existing, desiredArguments.isEmpty()), quoted);
     }
 
     private static List<String> ownedAgentArguments(Path gameDirectory, Path owner, Path agent) {
@@ -776,6 +830,10 @@ final class LaunchProfileInstaller {
         HMCL_UNCHANGED("existing HMCL JVM arguments", false, LauncherFamily.HMCL),
         OFFICIAL("official Minecraft Launcher installation JVM arguments", true, LauncherFamily.OFFICIAL),
         OFFICIAL_UNCHANGED("existing official Minecraft Launcher JVM arguments", false, LauncherFamily.OFFICIAL),
+        CURSEFORGE("CurseForge installation JVM arguments", true, LauncherFamily.OFFICIAL),
+        CURSEFORGE_UNCHANGED("existing CurseForge installation JVM arguments", false, LauncherFamily.OFFICIAL),
+        ATLAUNCHER("ATLauncher instance JVM arguments", true, LauncherFamily.ATLAUNCHER),
+        ATLAUNCHER_UNCHANGED("existing ATLauncher instance JVM arguments", false, LauncherFamily.ATLAUNCHER),
         VERSION_JSON("Minecraft version JSON", true, null),
         VERSION_JSON_UNCHANGED("existing Minecraft version JSON", false, null),
         UNSUPPORTED("unsupported launcher configuration", false, null);
@@ -807,6 +865,7 @@ final class LaunchProfileInstaller {
         PCL,
         PRISM,
         HMCL,
-        OFFICIAL
+        OFFICIAL,
+        ATLAUNCHER
     }
 }

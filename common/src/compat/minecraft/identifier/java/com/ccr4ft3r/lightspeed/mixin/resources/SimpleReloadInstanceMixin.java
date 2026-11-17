@@ -24,7 +24,7 @@ public abstract class SimpleReloadInstanceMixin {
         if (!ResourceReloadFailureGuard.shouldIsolate(listener)) {
             return original.call(factory, shared, barrier, listener, preparation, application);
         }
-        return ResourceReloadFailureGuard.guard(listener,
-                () -> original.call(factory, shared, barrier, listener, preparation, application));
+        return ResourceReloadFailureGuard.guard(listener, barrier,
+                tracked -> original.call(factory, shared, tracked, listener, preparation, application));
     }
 }

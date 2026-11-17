@@ -5,7 +5,6 @@ import org.objectweb.asm.Type;
 import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.FieldInsnNode;
-import org.objectweb.asm.tree.FieldNode;
 import org.objectweb.asm.tree.InsnList;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
@@ -18,29 +17,14 @@ import org.objectweb.asm.tree.JumpInsnNode;
 import java.util.List;
 
 public final class MixinTargetIndexPatch {
-    private static final String INDEX = "lightspeed$targetIndex";
-
     private MixinTargetIndexPatch() {
     }
 
     public static byte[] processor(byte[] bytes) {
         ClassNode node = AsmPatchSupport.read(bytes);
-        MethodNode constructor = uniqueMethod(node, "<init>");
         MethodNode apply = uniqueMethod(node, "applyMixins");
         if ((apply.access & Opcodes.ACC_SYNCHRONIZED) == 0) {
             throw new IllegalStateException("Mixin processor no longer holds its monitor");
-        }
-        node.fields.add(new FieldNode(Opcodes.ACC_PRIVATE | Opcodes.ACC_SYNTHETIC,
-                INDEX, "Ljava/lang/Object;", null, null));
-        for (AbstractInsnNode instruction : constructor.instructions.toArray()) {
-            if (instruction.getOpcode() == Opcodes.RETURN) {
-                InsnList initialize = new InsnList();
-                initialize.add(new VarInsnNode(Opcodes.ALOAD, 0));
-                initialize.add(new MethodInsnNode(Opcodes.INVOKESTATIC, AsmPatchSupport.HOOK_OWNER,
-                        "createMixinTargetIndex", "()Ljava/lang/Object;", false));
-                initialize.add(new FieldInsnNode(Opcodes.PUTFIELD, node.name, INDEX, "Ljava/lang/Object;"));
-                constructor.instructions.insertBefore(instruction, initialize);
-            }
         }
         int reads = 0;
         for (AbstractInsnNode instruction : apply.instructions.toArray()) {
@@ -49,7 +33,6 @@ public final class MixinTargetIndexPatch {
                 if (++reads == 2) {
                     InsnList select = new InsnList();
                     select.add(new VarInsnNode(Opcodes.ALOAD, 0));
-                    select.add(new FieldInsnNode(Opcodes.GETFIELD, node.name, INDEX, "Ljava/lang/Object;"));
                     select.add(new VarInsnNode(Opcodes.ALOAD, 2));
                     select.add(new MethodInsnNode(Opcodes.INVOKESTATIC, AsmPatchSupport.HOOK_OWNER,
                             "mixinConfigsFor", "(Ljava/util/List;Ljava/lang/Object;Ljava/lang/String;)Ljava/util/List;", false));
@@ -63,24 +46,13 @@ public final class MixinTargetIndexPatch {
         for (AbstractInsnNode instruction : apply.instructions.toArray()) {
             if (instruction instanceof FieldInsnNode field && field.getOpcode() == Opcodes.PUTFIELD
                     && field.owner.equals(node.name) && field.name.equals("transformedCount")) {
-                InsnList publish = new InsnList();
-                publish.add(new VarInsnNode(Opcodes.ALOAD, 0));
-                publish.add(new FieldInsnNode(Opcodes.GETFIELD, node.name, INDEX, "Ljava/lang/Object;"));
-                publish.add(new VarInsnNode(Opcodes.ALOAD, 1));
-                publish.add(new VarInsnNode(Opcodes.ALOAD, 0));
-                publish.add(new FieldInsnNode(Opcodes.GETFIELD, node.name, "coprocessors",
-                        "Lorg/spongepowered/asm/mixin/transformer/MixinCoprocessors;"));
-                publish.add(new VarInsnNode(Opcodes.ALOAD, 0));
-                publish.add(new FieldInsnNode(Opcodes.GETFIELD, node.name, "hotSwapper",
-                        "Lorg/spongepowered/asm/mixin/transformer/ext/IHotSwap;"));
-                publish.add(new VarInsnNode(Opcodes.ALOAD, 0));
-                publish.add(new FieldInsnNode(Opcodes.GETFIELD, node.name, "extensions",
-                        "Lorg/spongepowered/asm/mixin/transformer/ext/Extensions;"));
-                publish.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL,
-                        "org/spongepowered/asm/mixin/transformer/ext/Extensions", "getGenerators", "()Ljava/util/List;", false));
-                publish.add(new MethodInsnNode(Opcodes.INVOKESTATIC, AsmPatchSupport.HOOK_OWNER,
-                        "publishMixinClassIndex", "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/util/List;)V", false));
-                apply.instructions.insert(instruction, publish);
+                apply.instructions.insert(instruction, publishCall(node.name));
+            }
+        }
+        MethodNode select = uniqueMethod(node, "select");
+        for (AbstractInsnNode instruction : select.instructions.toArray()) {
+            if (instruction.getOpcode() == Opcodes.RETURN) {
+                select.instructions.insertBefore(instruction, publishCall(node.name));
             }
         }
         MethodNode prepare = uniqueMethod(node, "prepareConfigs");
@@ -152,6 +124,28 @@ public final class MixinTargetIndexPatch {
         skip.add(new FrameNode(Opcodes.F_SAME, 0, null, 0, null));
         process.instructions.insert(skip);
         return AsmPatchSupport.write(node);
+    }
+
+    private static InsnList publishCall(String owner) {
+        InsnList publish = new InsnList();
+        publish.add(new VarInsnNode(Opcodes.ALOAD, 0));
+        publish.add(new VarInsnNode(Opcodes.ALOAD, 1));
+        publish.add(new VarInsnNode(Opcodes.ALOAD, 0));
+        publish.add(new FieldInsnNode(Opcodes.GETFIELD, owner, "configs", "Ljava/util/List;"));
+        publish.add(new VarInsnNode(Opcodes.ALOAD, 0));
+        publish.add(new FieldInsnNode(Opcodes.GETFIELD, owner, "coprocessors",
+                "Lorg/spongepowered/asm/mixin/transformer/MixinCoprocessors;"));
+        publish.add(new VarInsnNode(Opcodes.ALOAD, 0));
+        publish.add(new FieldInsnNode(Opcodes.GETFIELD, owner, "hotSwapper",
+                "Lorg/spongepowered/asm/mixin/transformer/ext/IHotSwap;"));
+        publish.add(new VarInsnNode(Opcodes.ALOAD, 0));
+        publish.add(new FieldInsnNode(Opcodes.GETFIELD, owner, "extensions",
+                "Lorg/spongepowered/asm/mixin/transformer/ext/Extensions;"));
+        publish.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL,
+                "org/spongepowered/asm/mixin/transformer/ext/Extensions", "getGenerators", "()Ljava/util/List;", false));
+        publish.add(new MethodInsnNode(Opcodes.INVOKESTATIC, AsmPatchSupport.HOOK_OWNER,
+                "publishMixinClassIndex", "(Ljava/lang/Object;Ljava/lang/Object;Ljava/util/List;Ljava/lang/Object;Ljava/lang/Object;Ljava/util/List;)V", false));
+        return publish;
     }
 
     private static MethodInsnNode invalidation() {

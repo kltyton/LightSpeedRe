@@ -6,9 +6,11 @@ import net.minecraft.server.packs.resources.IoSupplier;
 import net.minecraft.server.packs.resources.Resource;
 
 import java.io.InputStream;
-import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
+import java.util.NoSuchElementException;
 import java.util.Optional;
+import java.util.Set;
 
 /** Searches in native pack order without crossing filter or custom-pack boundaries. */
 public final class ResourcePackLookup {
@@ -23,9 +25,34 @@ public final class ResourcePackLookup {
         boolean lightspeed$canGroup(PackResources pack);
     }
 
-    private record IndexedPack(int index, PackResources pack) {}
-
     private ResourcePackLookup() {}
+
+    public static Iterator<PackResources> filterDelegates(Iterator<PackResources> original,
+            Set<PackResources> indexed, Set<PackResources> candidates) {
+        return new Iterator<>() {
+            private PackResources next;
+            private boolean ready;
+
+            @Override
+            public boolean hasNext() {
+                while (!ready && original.hasNext()) {
+                    PackResources candidate = original.next();
+                    if (!indexed.contains(candidate) || candidates.contains(candidate)) {
+                        next = candidate;
+                        ready = true;
+                    }
+                }
+                return ready;
+            }
+
+            @Override
+            public PackResources next() {
+                if (!hasNext()) throw new NoSuchElementException();
+                ready = false;
+                return next;
+            }
+        };
+    }
 
     public static <L> Optional<Resource> indexed(List<?> entries, L location, Access<L> access) {
         for (int index = entries.size() - 1; index >= 0; index--) {
@@ -44,20 +71,58 @@ public final class ResourcePackLookup {
         return Optional.empty();
     }
 
+    /** Higher pack contents and filters remain live even when a lower source was cached. */
+    public static <L> Optional<Resource> cached(List<?> entries, L location, int cachedIndex,
+            PackResources cachedPack, Access<L> access) {
+        if (cachedIndex < 0 || cachedIndex >= entries.size()
+                || entry(entries, cachedIndex).lightspeed$resources() != cachedPack) {
+            return direct(entries, location, access, entries.size() - 1);
+        }
+        for (int index = entries.size() - 1; index > cachedIndex; index--) {
+            ResourcePackEntry entry = entry(entries, index);
+            PackResources pack = entry.lightspeed$resources();
+            if (pack != null) {
+                IoSupplier<InputStream> stream = access.lightspeed$lookupRead(pack, location);
+                if (stream != null) return Optional.of(access.lightspeed$lookupResource(pack, location, stream, index));
+            }
+            if (filtered(entry, location, access)) return Optional.empty();
+        }
+        IoSupplier<InputStream> stream = access.lightspeed$lookupRead(cachedPack, location);
+        if (stream != null) {
+            return Optional.of(access.lightspeed$lookupResource(cachedPack, location, stream, cachedIndex));
+        }
+        if (filtered(entry(entries, cachedIndex), location, access)) return Optional.empty();
+        return direct(entries, location, access, cachedIndex - 1);
+    }
+
+    private static <L> Optional<Resource> direct(List<?> entries, L location, Access<L> access, int lastIndex) {
+        for (int index = lastIndex; index >= 0; index--) {
+            ResourcePackEntry entry = entry(entries, index);
+            PackResources pack = entry.lightspeed$resources();
+            if (pack != null) {
+                IoSupplier<InputStream> stream = access.lightspeed$lookupRead(pack, location);
+                if (stream != null) return Optional.of(access.lightspeed$lookupResource(pack, location, stream, index));
+            }
+            if (filtered(entry, location, access)) return Optional.empty();
+        }
+        return Optional.empty();
+    }
+
+    public static final Object MISS = new Object();
+
     public static <L> Optional<Resource> grouped(List<?> entries, L location, GroupedAccess<L> access) {
-        List<IndexedPack> segment = new ArrayList<>();
         for (int index = entries.size() - 1; index >= 0; index--) {
             ResourcePackEntry entry = entry(entries, index);
             PackResources pack = entry.lightspeed$resources();
             if (pack != null && entry.lightspeed$filter() == null && access.lightspeed$canGroup(pack)) {
-                segment.add(new IndexedPack(index, pack));
+                Boolean present = access.lightspeed$lookupContains(pack, location);
+                if (Boolean.FALSE.equals(present)) continue;
+                IoSupplier<InputStream> stream = access.lightspeed$lookupRead(pack, location);
+                if (stream != null) {
+                    return Optional.of(access.lightspeed$lookupResource(pack, location, stream, index));
+                }
                 continue;
             }
-            Resource resource = segment(segment, location, access);
-            if (resource != null) {
-                return Optional.of(resource);
-            }
-            segment.clear();
             if (pack != null) {
                 IoSupplier<InputStream> stream = access.lightspeed$lookupRead(pack, location);
                 if (stream != null) {
@@ -68,35 +133,7 @@ public final class ResourcePackLookup {
                 return Optional.empty();
             }
         }
-        return Optional.ofNullable(segment(segment, location, access));
-    }
-
-    private static <L> Resource segment(List<IndexedPack> packs, L location, Access<L> access) {
-        boolean completeIndex = true;
-        for (IndexedPack pack : packs) {
-            Boolean present = access.lightspeed$lookupContains(pack.pack(), location);
-            if (present == null) {
-                completeIndex = false;
-                break;
-            }
-            if (present) {
-                IoSupplier<InputStream> stream = access.lightspeed$lookupRead(pack.pack(), location);
-                if (stream != null) {
-                    return access.lightspeed$lookupResource(pack.pack(), location, stream, pack.index());
-                }
-                completeIndex = false;
-                break;
-            }
-        }
-        if (!completeIndex) {
-            for (IndexedPack pack : packs) {
-                IoSupplier<InputStream> stream = access.lightspeed$lookupRead(pack.pack(), location);
-                if (stream != null) {
-                    return access.lightspeed$lookupResource(pack.pack(), location, stream, pack.index());
-                }
-            }
-        }
-        return null;
+        return Optional.empty();
     }
 
     private static <L> boolean filtered(ResourcePackEntry entry, L location, Access<L> access) {
