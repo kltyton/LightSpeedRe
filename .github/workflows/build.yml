@@ -1,0 +1,40 @@
+name: Build 26.3
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - fabric-26.3
+          - neoforge-26.3
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x targets/${{ matrix.target }}/gradlew
+
+      - name: Build ${{ matrix.target }}
+        working-directory: targets/${{ matrix.target }}
+        run: ./gradlew build --stacktrace
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            targets/${{ matrix.target }}/build/libs/
+            targets/${{ matrix.target }}/**/build/libs/
+          if-no-files-found: warn

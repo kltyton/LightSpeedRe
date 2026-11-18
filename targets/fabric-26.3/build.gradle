@@ -1,0 +1,6 @@
+plugins {
+    id 'net.fabricmc.fabric-loom' version '1.18.2'
+    id 'me.modmuss50.mod-publish-plugin' version '2.1.1'
+}
+ext.lightspeedProductionRunType = net.fabricmc.loom.task.prod.ClientProductionRunTask
+apply from: file('../../gradle/target-conventions/fabric.gradle')
