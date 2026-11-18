@@ -24,7 +24,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -55,7 +54,7 @@ public final class GlobalCache {
     public static final int WORKER_COUNT = StartupCachePlatform.workerCount();
     public static final Map<String, Map<PackType, Set<String>>> PERSISTED_NAMESPACES_BY_MOD = Maps.newConcurrentMap();
     public static final Map<String, Map<PackType, Map<String, List<String>>>> PERSISTED_RESOURCE_LISTS_BY_MOD = Maps.newConcurrentMap();
-    private static final AtomicBoolean PERSISTED_CACHE_LOAD_STARTED = new AtomicBoolean(false);
+    private static boolean persistedCacheLoadStarted;
     private static final CompletableFuture<Void> persistedCacheLoad = new CompletableFuture<>();
     private static final Map<PersistedCacheFileKey, CompletableFuture<Void>> PERSISTED_FILE_LOADS = Maps.newConcurrentMap();
 
@@ -76,26 +75,31 @@ public final class GlobalCache {
     private GlobalCache() {
     }
 
-    public static void add(ICache cache) {
-        CACHES.add(cache);
+    public static synchronized void add(ICache cache) {
+        if (isEnabled) {
+            CACHES.add(cache);
+        }
     }
 
     public static <K, V> CompletableFuture<Void> loadPersistedCacheAsync(File directory, String id,
                                                                          Map<K, V> targetMap) {
-        if (id == null || id.isBlank()) {
+        if (!isEnabled || id == null || id.isBlank()) {
             return CompletableFuture.completedFuture(null);
         }
         File file = CacheFiles.cacheFile(directory, id);
-        return loadPersistedCacheFileAsync(file, targetMap);
-    }
-
-    private static <K, V> CompletableFuture<Void> loadPersistedCacheFileAsync(File file, Map<K, V> targetMap) {
         if (!file.isFile()) {
             return CompletableFuture.completedFuture(null);
         }
+        synchronized (GlobalCache.class) {
+            // Closing startup and admitting a cache read must agree even across resource reopeners.
+            return isEnabled ? queuePersistedCacheFile(file, targetMap) : CompletableFuture.completedFuture(null);
+        }
+    }
+
+    private static <K, V> CompletableFuture<Void> queuePersistedCacheFile(File file, Map<K, V> targetMap) {
         PersistedCacheFileKey key = new PersistedCacheFileKey(file, targetMap);
         return PERSISTED_FILE_LOADS.computeIfAbsent(key, ignored ->
-                executeCacheLogged("load cache file " + file.getName(), () ->
+                runCacheLoad("load cache file " + file.getName(), () ->
                         mergePersistedEntries(targetMap, CacheFiles.<K, V>load(file))));
     }
 
@@ -124,12 +128,10 @@ public final class GlobalCache {
         }, EXECUTOR);
     }
 
-    public static CompletableFuture<Void> executeCacheLogged(String taskName, Runnable task) {
+    private static CompletableFuture<Void> runCacheLoad(String taskName, Runnable task) {
         CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
             try {
-                if (isEnabled) {
-                    task.run();
-                }
+                task.run();
             } catch (Exception exception) {
                 LOGGER.error("Lightspeed cache task failed: {}", taskName, exception);
             }
@@ -158,7 +160,7 @@ public final class GlobalCache {
         if (startupPersistence != null) {
             return;
         }
-        beginShutdown();
+        isEnabled = false;
         CompletableFuture<Void> completion = new CompletableFuture<>();
         startupPersistence = completion;
         try {
@@ -195,8 +197,11 @@ public final class GlobalCache {
         }
     }
 
-    public static <T> CompletableFuture<T> supplyStartupAfter(CompletableFuture<?> prerequisite,
-                                                               String taskName, Supplier<T> task) {
+    public static synchronized <T> CompletableFuture<T> supplyStartupAfter(CompletableFuture<?> prerequisite,
+                                                                           String taskName, Supplier<T> task) {
+        if (!isEnabled) {
+            return CompletableFuture.completedFuture(null);
+        }
         CompletableFuture<T> future = prerequisite.thenApplyAsync(ignored -> {
             try {
                 return isEnabled ? task.get() : null;
@@ -223,8 +228,7 @@ public final class GlobalCache {
         return null;
     }
 
-    public static void disablePersistAndClear() {
-        isEnabled = false;
+    private static void disablePersistAndClear() {
         if (StartupCachePlatform.SHARED_PERSISTENCE) {
             awaitPersistedCachesLoaded();
         }
@@ -262,13 +266,9 @@ public final class GlobalCache {
         PERSISTED_FILE_LOADS.clear();
     }
 
-    public static void shutdownExecutors() {
+    private static void shutdownExecutors() {
         EXECUTOR.shutdown();
         CACHE_EXECUTOR.shutdown();
-    }
-
-    public static void beginShutdown() {
-        isEnabled = false;
     }
 
     private static <T> CompletableFuture<T> trackBackgroundTask(CompletableFuture<T> future) {
@@ -309,8 +309,13 @@ public final class GlobalCache {
         }
     }
 
-    public static CompletableFuture<Void> loadPersistedCachesAsync() {
-        if (PERSISTED_CACHE_LOAD_STARTED.compareAndSet(false, true)) {
+    public static synchronized CompletableFuture<Void> loadPersistedCachesAsync() {
+        return isEnabled ? startPersistedCacheLoad() : CompletableFuture.completedFuture(null);
+    }
+
+    private static synchronized CompletableFuture<Void> startPersistedCacheLoad() {
+        if (!persistedCacheLoadStarted) {
+            persistedCacheLoadStarted = true;
             try {
                 CompletableFuture.allOf(
                         loadPersistedCaches(NAMESPACE_CACHE_DIR, PERSISTED_NAMESPACES_BY_MOD),
@@ -327,9 +332,10 @@ public final class GlobalCache {
         return persistedCacheLoad;
     }
 
-    public static void awaitPersistedCachesLoaded() {
+    private static void awaitPersistedCachesLoaded() {
         try {
-            loadPersistedCachesAsync().get(30, TimeUnit.SECONDS);
+            // Complete a bulk load for persistence even if startup lookup admission is closed.
+            startPersistedCacheLoad().get(30, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             LOGGER.warn("Lightspeed cache loading interrupted; continuing without waiting for all cache files", e);
@@ -344,8 +350,11 @@ public final class GlobalCache {
         return supplyCacheAfter(loadPersistedCachesAsync(), taskName, task);
     }
 
-    public static <T> CompletableFuture<T> supplyCacheAfter(CompletableFuture<?> prerequisite,
-                                                          String taskName, Supplier<T> task) {
+    public static synchronized <T> CompletableFuture<T> supplyCacheAfter(CompletableFuture<?> prerequisite,
+                                                                        String taskName, Supplier<T> task) {
+        if (!isEnabled) {
+            return CompletableFuture.completedFuture(null);
+        }
         CompletableFuture<T> future = prerequisite.thenApplyAsync(ignored -> {
             try {
                 return isEnabled ? task.get() : null;
@@ -363,7 +372,7 @@ public final class GlobalCache {
                 .map(file -> {
                     String id = org.apache.commons.io.FilenameUtils.getBaseName(file.getName());
                     Map<K, V> target = targetMap.computeIfAbsent(id, ignored -> Maps.newConcurrentMap());
-                    return loadPersistedCacheFileAsync(file, target);
+                    return queuePersistedCacheFile(file, target);
                 })
                 .toArray(CompletableFuture[]::new);
         return CompletableFuture.allOf(futures);

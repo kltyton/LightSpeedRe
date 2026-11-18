@@ -38,6 +38,10 @@ public abstract class ResourcePackLoaderMixin {
     }
 
     private static void lightspeed$preparePackResources(PackResources resources, IModFileInfo modFileInfo) {
+        // FML retains the supplier and can open it again while loading a world after startup.
+        if (!GlobalCache.isEnabled) {
+            return;
+        }
         PackResources primary = lightspeed$getPrimaryResources(resources);
         if (!(primary instanceof IPathResourcePack lightspeedPack)) {
             return;

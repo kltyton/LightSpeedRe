@@ -15,6 +15,7 @@ import com.ccr4ft3r.lightspeed.startup.bootstrap.transform.compat.PackResourcesC
 import com.ccr4ft3r.lightspeed.startup.bootstrap.transform.loading.LoadingQueueTransformer;
 import com.ccr4ft3r.lightspeed.startup.bootstrap.transform.loading.ModContainerPreparationTransformer;
 import com.ccr4ft3r.lightspeed.startup.bootstrap.transform.minecraft.BlockStateIdMapperTransformer;
+import com.ccr4ft3r.lightspeed.startup.bootstrap.transform.forge.BiomeFieldRedirects;
 import com.ccr4ft3r.lightspeed.startup.bootstrap.transform.forge.ForgeRegistrySlaveCacheTransformer;
 import com.ccr4ft3r.lightspeed.startup.bootstrap.transform.forge.ForgeRegistrySyncTransformer;
 import com.ccr4ft3r.lightspeed.startup.bootstrap.transform.forge.NamespacedWrapperCapacityTransformer;
@@ -22,7 +23,10 @@ import com.ccr4ft3r.lightspeed.startup.bootstrap.transform.forge.PathPackResourc
 import com.ccr4ft3r.lightspeed.startup.bootstrap.transform.minecraft.ModelResourceLocationHashTransformer;
 import com.ccr4ft3r.lightspeed.startup.bootstrap.transform.minecraft.ResourceLocationHashTransformer;
 import cpw.mods.modlauncher.api.ITransformer;
+import net.minecraftforge.fml.loading.FMLLoader;
+
 import java.util.List;
+import java.util.stream.Stream;
 
 /**
  * Forge ModLauncher transformation service registering pure {@code Layer.GAME} class transformers
@@ -32,7 +36,7 @@ public final class BootstrapTransformationService extends EarlyBootstrapService 
     @Override
     @SuppressWarnings("rawtypes")
     public List<ITransformer> transformers() {
-        return List.<ITransformer>of(
+        Stream<ITransformer> registered = Stream.of(
                 new LoadingQueueTransformer(),
                 new ModContainerPreparationTransformer(),
                 new ModWorkManagerQueueTransformer(),
@@ -53,6 +57,11 @@ public final class BootstrapTransformationService extends EarlyBootstrapService 
                 new ForgeRegistrySlaveCacheTransformer(),
                 new ForgeRegistrySyncTransformer(),
                 new StateVariantTransformer()
-        ).stream().map(CompatClassTransformer::ensureDirect).toList();
+        );
+        if ("47.4.28".equals(FMLLoader.versionInfo().forgeVersion())) {
+            BiomeFieldRedirects redirects = new BiomeFieldRedirects();
+            registered = Stream.concat(registered, Stream.of(redirects.prepare(), redirects.restore()));
+        }
+        return registered.map(CompatClassTransformer::ensureDirect).toList();
     }
 }
