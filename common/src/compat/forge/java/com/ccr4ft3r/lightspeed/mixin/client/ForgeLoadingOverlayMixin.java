@@ -2,6 +2,8 @@ package com.ccr4ft3r.lightspeed.mixin.client;
 
 import com.ccr4ft3r.lightspeed.client.startup.ImmediateOverlayClose;
 import com.ccr4ft3r.lightspeed.startup.metrics.StartupMetrics;
+import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
+import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import com.mojang.logging.LogUtils;
 import net.minecraft.Util;
 import net.minecraft.client.Minecraft;
@@ -15,9 +17,13 @@ import net.minecraftforge.fml.earlydisplay.DisplayWindow;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+
+import java.util.Optional;
+import java.util.function.Consumer;
 
 @Mixin(value = ForgeLoadingOverlay.class, priority = 500, remap = false)
 public abstract class ForgeLoadingOverlayMixin implements ImmediateOverlayClose {
@@ -25,6 +31,15 @@ public abstract class ForgeLoadingOverlayMixin implements ImmediateOverlayClose 
     @Shadow @Final private ReloadInstance reload;
     @Shadow @Final private DisplayWindow displayWindow;
     @Shadow private long fadeOutStart;
+    @Unique private boolean lightspeed$completionSucceeded;
+
+    @WrapOperation(method = {"render", "m_88315_"},
+            at = @At(value = "INVOKE", target = "Ljava/util/function/Consumer;accept(Ljava/lang/Object;)V"),
+            remap = false)
+    private void lightspeed$recordCompletion(Consumer<Object> callback, Object result, Operation<Void> original) {
+        original.call(callback, result);
+        lightspeed$completionSucceeded = ((Optional<?>) result).isEmpty();
+    }
 
     @Inject(method = {"render", "m_88315_"}, at = @At("HEAD"), cancellable = true)
     private void lightspeed$finishReadyOverlayHead(GuiGraphics graphics, int mouseX, int mouseY, float partialTick,
@@ -42,7 +57,7 @@ public abstract class ForgeLoadingOverlayMixin implements ImmediateOverlayClose 
 
     @Override
     public boolean lightspeed$closeIfReady() {
-        if (!reload.isDone() || minecraft.getOverlay() != (Object) this
+        if (!lightspeed$completionSucceeded || !reload.isDone() || minecraft.getOverlay() != (Object) this
                 || !(minecraft.screen instanceof TitleScreen)
                 || ClientModLoader.isLoading() || !ModLoader.isLoadingStateValid()
                 || !StartupMetrics.isInitialReloadComplete()) {

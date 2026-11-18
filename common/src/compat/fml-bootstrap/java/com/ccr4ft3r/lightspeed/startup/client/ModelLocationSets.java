@@ -26,8 +26,6 @@ public final class ModelLocationSets {
         boolean isElement(Object obj);
 
         String namespace(T element);
-
-        boolean isInventoryVariant(T element);
     }
 
     /** Append-only flat collector passed per worker chunk to model location builders. */
@@ -35,7 +33,6 @@ public final class ModelLocationSets {
         private final ObjectArrayList<T> list;
         private final ObjectOpenHashSet<T> seen;
         private final LocationAdapter<T> adapter;
-        private boolean sawInventoryVariant;
 
         public ChunkCollectorSet(int initialCapacity, LocationAdapter<T> adapter) {
             this.list = new ObjectArrayList<>(Math.max(16, initialCapacity));
@@ -45,19 +42,11 @@ public final class ModelLocationSets {
 
         @Override
         public boolean add(T loc) {
-            boolean inventory = !sawInventoryVariant && adapter.isInventoryVariant(loc);
             if (!seen.add(loc)) {
                 return false;
             }
-            if (inventory) {
-                sawInventoryVariant = true;
-            }
             list.add(loc);
             return true;
-        }
-
-        public boolean sawInventoryVariant() {
-            return sawInventoryVariant;
         }
 
         @Override

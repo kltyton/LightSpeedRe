@@ -3,7 +3,6 @@ package com.ccr4ft3r.lightspeed.events;
 import com.ccr4ft3r.lightspeed.ModConstants;
 import com.ccr4ft3r.lightspeed.cache.GlobalCache;
 import com.ccr4ft3r.lightspeed.client.advice.StartupAdvice;
-import com.ccr4ft3r.lightspeed.client.resources.DeferredWorldReloadCoordinator;
 import com.ccr4ft3r.lightspeed.client.screen.StartupAdviceScreen;
 import com.ccr4ft3r.lightspeed.client.startup.ImmediateOverlayClose;
 import com.ccr4ft3r.lightspeed.startup.compat.EarlyModPackIndexEngine;
@@ -75,7 +74,6 @@ public class TitleScreenInjector {
             launchTime = Component.translatable("lightspeed.startup_time", seconds);
             BrandingControl.forEachLine(true, false, (index, line) -> brandingLines = index + 1);
             LogUtils.getLogger().info("Lightspeed: Launch took {}s (JVM start to title-screen-operable)", seconds);
-            DeferredWorldReloadCoordinator.startIfPending();
             GlobalCache.persistCacheAsync("bootstrap startup image", BootstrapAgentBridge::persistResourceImage);
             GlobalCache.finishStartupCaches();
             EarlyModPackIndexEngine.flushCacheAsync();

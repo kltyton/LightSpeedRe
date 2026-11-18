@@ -2,6 +2,9 @@ package com.ccr4ft3r.lightspeed.mixin.client;
 
 import com.ccr4ft3r.lightspeed.cache.GlobalCache;
 import com.ccr4ft3r.lightspeed.client.resources.PreparedLanguageReload;
+import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
+import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
+import com.llamalad7.mixinextras.sugar.Local;
 import net.minecraft.client.resources.language.ClientLanguage;
 import net.minecraft.client.resources.language.LanguageInfo;
 import net.minecraft.client.resources.language.LanguageManager;
@@ -16,7 +19,6 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
-import org.spongepowered.asm.mixin.injection.Redirect;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -30,7 +32,7 @@ import java.util.stream.Stream;
 public abstract class LanguageManagerMixin implements ResourceManagerReloadListener {
 
     @Unique
-    private static final ThreadLocal<PreparedLanguageReload> LIGHTSPEED$ACTIVE_PREPARED = new ThreadLocal<>();
+    private final ThreadLocal<PreparedLanguageReload> lightspeed$preparedLanguage = new ThreadLocal<>();
 
     @Shadow
     @Final
@@ -80,23 +82,19 @@ public abstract class LanguageManagerMixin implements ResourceManagerReloadListe
             }
             ClientLanguage clientLanguage = ClientLanguage.loadFrom(resourceManager, loadOrder, bidirectional);
             return new PreparedLanguageReload(
-                    selected, discovered, loadOrder, bidirectional, clientLanguage);
+                    resourceManager, selected, discovered, loadOrder, bidirectional, clientLanguage);
         }, backgroundExecutor).thenCompose(barrier::wait).thenAcceptAsync(prepared -> {
             reloadProfiler.startTick();
             reloadProfiler.push("listener");
-            PreparedLanguageReload previous = LIGHTSPEED$ACTIVE_PREPARED.get();
-            if (Objects.equals(prepared.selectedCode(), this.currentCode)) {
-                LIGHTSPEED$ACTIVE_PREPARED.set(prepared);
-            } else {
-                LIGHTSPEED$ACTIVE_PREPARED.remove();
-            }
+            PreparedLanguageReload previous = this.lightspeed$preparedLanguage.get();
             try {
+                this.lightspeed$preparedLanguage.set(prepared);
                 this.onResourceManagerReload(resourceManager);
             } finally {
                 if (previous == null) {
-                    LIGHTSPEED$ACTIVE_PREPARED.remove();
+                    this.lightspeed$preparedLanguage.remove();
                 } else {
-                    LIGHTSPEED$ACTIVE_PREPARED.set(previous);
+                    this.lightspeed$preparedLanguage.set(previous);
                 }
                 reloadProfiler.pop();
                 reloadProfiler.endTick();
@@ -104,36 +102,46 @@ public abstract class LanguageManagerMixin implements ResourceManagerReloadListe
         }, gameExecutor);
     }
 
-    @Redirect(
+    @Unique
+    private PreparedLanguageReload lightspeed$getPreparedLanguage(ResourceManager resourceManager) {
+        PreparedLanguageReload prepared = this.lightspeed$preparedLanguage.get();
+        return prepared != null && prepared.resourceManager() == resourceManager
+                && Objects.equals(prepared.selectedCode(), this.currentCode) ? prepared : null;
+    }
+
+    @WrapOperation(
             method = "onResourceManagerReload",
             at = @At(
                     value = "INVOKE",
                     target = "Lnet/minecraft/client/resources/language/LanguageManager;extractLanguages(Ljava/util/stream/Stream;)Ljava/util/Map;"
             )
     )
-    private static Map<String, LanguageInfo> lightspeed$reuseExtractedLanguages(Stream<PackResources> packs) {
-        PreparedLanguageReload prepared = LIGHTSPEED$ACTIVE_PREPARED.get();
+    private Map<String, LanguageInfo> lightspeed$reuseExtractedLanguages(
+            Stream<PackResources> packs, Operation<Map<String, LanguageInfo>> original,
+            @Local(argsOnly = true) ResourceManager resourceManager) {
+        PreparedLanguageReload prepared = lightspeed$getPreparedLanguage(resourceManager);
         if (prepared != null) {
             return prepared.languages();
         }
-        return extractLanguages(packs);
+        return original.call(packs);
     }
 
-    @Redirect(
+    @WrapOperation(
             method = "onResourceManagerReload",
             at = @At(
                     value = "INVOKE",
                     target = "Lnet/minecraft/client/resources/language/ClientLanguage;loadFrom(Lnet/minecraft/server/packs/resources/ResourceManager;Ljava/util/List;Z)Lnet/minecraft/client/resources/language/ClientLanguage;"
             )
     )
-    private static ClientLanguage lightspeed$reuseClientLanguage(
-            ResourceManager resourceManager, List<String> filenames, boolean defaultRightToLeft) {
-        PreparedLanguageReload prepared = LIGHTSPEED$ACTIVE_PREPARED.get();
+    private ClientLanguage lightspeed$reuseClientLanguage(
+            ResourceManager resourceManager, List<String> filenames, boolean defaultRightToLeft,
+            Operation<ClientLanguage> original) {
+        PreparedLanguageReload prepared = lightspeed$getPreparedLanguage(resourceManager);
         if (prepared != null
                 && prepared.bidirectional() == defaultRightToLeft
                 && prepared.loadOrder().equals(filenames)) {
             return prepared.clientLanguage();
         }
-        return ClientLanguage.loadFrom(resourceManager, filenames, defaultRightToLeft);
+        return original.call(resourceManager, filenames, defaultRightToLeft);
     }
 }

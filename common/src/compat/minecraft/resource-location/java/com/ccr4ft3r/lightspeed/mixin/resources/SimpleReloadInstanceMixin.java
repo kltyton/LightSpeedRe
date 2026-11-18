@@ -30,6 +30,9 @@ public abstract class SimpleReloadInstanceMixin {
             Executor backgroundExecutor,
             Executor gameExecutor,
             Operation<CompletableFuture<?>> original) {
+        if (!ResourceReloadFailureGuard.shouldIsolate(listener)) {
+            return original.call(stateFactory, barrier, resourceManager, listener, backgroundExecutor, gameExecutor);
+        }
         return ResourceReloadFailureGuard.guard(listener, barrier,
                 tracked -> original.call(stateFactory, tracked, resourceManager, listener,
                         backgroundExecutor, gameExecutor));

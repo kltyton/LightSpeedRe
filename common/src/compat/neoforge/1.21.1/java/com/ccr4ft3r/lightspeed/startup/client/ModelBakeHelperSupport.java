@@ -4,35 +4,27 @@ import com.ccr4ft3r.lightspeed.startup.client.ModelLocationSets.ChunkCollectorSe
 import com.ccr4ft3r.lightspeed.startup.client.ModelLocationSets.CompactArrayLocationSet;
 import com.ccr4ft3r.lightspeed.startup.client.ModelLocationSets.IndexedLocationSet;
 import com.ccr4ft3r.lightspeed.startup.client.ModelLocationSets.LocationAdapter;
-import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
+import com.google.common.collect.Sets;
 import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
-import net.minecraft.client.resources.model.BakedModel;
 import net.minecraft.client.resources.model.ModelResourceLocation;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.block.Block;
-import net.neoforged.fml.ModContainer;
-import net.neoforged.fml.ModList;
-import net.neoforged.fml.ModLoadingContext;
-import net.neoforged.neoforgespi.language.IModInfo;
 
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.WeakHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.BiConsumer;
 
 /**
  * Runtime support for ModernFix 1.21.1 {@code ModelBakeEventHelper} and {@code ClientHooks.onModifyBakingResult}:
@@ -49,11 +41,6 @@ public final class ModelBakeHelperSupport {
         @Override
         public String namespace(ModelResourceLocation element) {
             return element.id().getNamespace();
-        }
-
-        @Override
-        public boolean isInventoryVariant(ModelResourceLocation element) {
-            return ModelResourceLocation.INVENTORY_VARIANT.equals(element.variant());
         }
     };
 
@@ -80,9 +67,6 @@ public final class ModelBakeHelperSupport {
         MODEL_LOCATION_BUILDER_GENERATE_BLOCK = generate;
     }
 
-    private static final Map<Object, BucketCache> HELPER_BUCKETS =
-            Collections.synchronizedMap(new WeakHashMap<>());
-
     private ModelBakeHelperSupport() {
     }
 
@@ -91,278 +75,35 @@ public final class ModelBakeHelperSupport {
         return new IndexedLocationSet<>(padded, MODEL_ADAPTER);
     }
 
-    public static void dispatchModifyBakingResult(
-            ModList modList, BiConsumer<String, ModContainer> original) {
-        List<ListenerEntry> listeners = new ArrayList<>(32);
-        modList.forEachModContainer((modId, container) ->
-                listeners.add(new ListenerEntry(modId, container)));
-        int count = listeners.size();
-        int parallelism = Math.max(1, Math.min(count, Runtime.getRuntime().availableProcessors()));
-        for (List<ListenerEntry> wave : partitionModifyBakingWaves(listeners)) {
-            int workers = Math.min(wave.size(), parallelism);
-            if (workers <= 1) {
-                for (ListenerEntry entry : wave) {
-                    invokeOriginalConsumer(original, entry);
-                }
-                continue;
-            }
-            AtomicInteger cursor = new AtomicInteger();
-            AtomicReference<Throwable> failure = new AtomicReference<>();
-            CountDownLatch done = new CountDownLatch(workers - 1);
-            Runnable workerTask = () -> {
-                for (;;) {
-                    if (failure.get() != null) return;
-                    int index = cursor.getAndIncrement();
-                    if (index >= wave.size()) return;
-                    try {
-                        invokeOriginalConsumer(original, wave.get(index));
-                    } catch (Throwable error) {
-                        failure.compareAndSet(null, error);
-                        return;
-                    }
-                }
-            };
-            for (int i = 1; i < workers; i++) {
-                ForkJoinPool.commonPool().execute(withGameContextClassLoader(() -> {
-                    try {
-                        workerTask.run();
-                    } finally {
-                        done.countDown();
-                    }
-                }));
-            }
-            workerTask.run();
-            boolean interrupted = false;
-            for (;;) {
-                try {
-                    done.await();
-                    break;
-                } catch (InterruptedException error) {
-                    interrupted = true;
-                }
-            }
-            if (interrupted) Thread.currentThread().interrupt();
-            Throwable error = failure.get();
-            if (error != null) throw propagateDispatchFailure(error);
-            if (interrupted) throw new IllegalStateException("Interrupted while dispatching ModelEvent.ModifyBakingResult");
-        }
-    }
-
-    private static void invokeOriginalConsumer(BiConsumer<String, ModContainer> original, ListenerEntry entry) {
-        ModLoadingContext context = ModLoadingContext.get();
-        ModContainer previous = context.getActiveContainer();
-        context.setActiveContainer(entry.container);
-        try {
-            original.accept(entry.modId, entry.container);
-        } finally {
-            context.setActiveContainer(previous);
-        }
-    }
-
-    private static RuntimeException propagateDispatchFailure(Throwable error) {
-        if (error instanceof RuntimeException runtime) return runtime;
-        if (error instanceof Error fatal) throw fatal;
-        return new RuntimeException(error);
-    }
-
-    private static List<List<ListenerEntry>> partitionModifyBakingWaves(List<ListenerEntry> listeners) {
-        int count = listeners.size();
-        Object2IntOpenHashMap<String> indexByModId = new Object2IntOpenHashMap<>(count);
-        indexByModId.defaultReturnValue(-1);
-        for (int i = 0; i < count; i++) {
-            indexByModId.put(listeners.get(i).modId, i);
-        }
-        int[] waveIndex = new int[count];
-        for (int i = 0; i < count; i++) {
-            int maxDepWave = -1;
-            List<? extends IModInfo.ModVersion> deps = listeners.get(i).container.getModInfo().getDependencies();
-            for (int d = 0, dLen = deps.size(); d < dLen; d++) {
-                int depIdx = indexByModId.getInt(deps.get(d).getModId());
-                if (depIdx >= 0 && depIdx < i) {
-                    maxDepWave = Math.max(maxDepWave, waveIndex[depIdx]);
-                }
-            }
-            waveIndex[i] = maxDepWave + 1;
-        }
-        for (int i = 0; i < count; i++) {
-            List<? extends IModInfo.ModVersion> deps = listeners.get(i).container.getModInfo().getDependencies();
-            for (int d = 0, dLen = deps.size(); d < dLen; d++) {
-                int targetIdx = indexByModId.getInt(deps.get(d).getModId());
-                if (targetIdx > i && waveIndex[targetIdx] <= waveIndex[i]) {
-                    waveIndex[targetIdx] = waveIndex[i] + 1;
-                }
-            }
-        }
-        int totalWaves = 1;
-        for (int i = 0; i < count; i++) {
-            totalWaves = Math.max(totalWaves, waveIndex[i] + 1);
-        }
-        List<List<ListenerEntry>> waves = new ArrayList<>(totalWaves);
-        for (int w = 0; w < totalWaves; w++) {
-            waves.add(new ArrayList<>());
-        }
-        for (int i = 0; i < count; i++) {
-            waves.get(waveIndex[i]).add(listeners.get(i));
-        }
-        waves.removeIf(List::isEmpty);
-        return waves;
-    }
-
     /** Only replace ModernFix's native constructor when both builder operations are available. */
     public static boolean canPopulateLocations() {
         return MODEL_LOCATION_BUILDER_CTOR != null && MODEL_LOCATION_BUILDER_GENERATE_BLOCK != null;
     }
 
-    public static void populateLocations(
-            Object helper,
-            Map<ModelResourceLocation, BakedModel> modelRegistry,
-            Set<ModelResourceLocation> topLevelModelLocations,
-            Set<String> namespacesWithModels
-    ) {
-        if (!canPopulateLocations()) {
-            throw new IllegalStateException("ModernFix model location builder ABI is unavailable");
-        }
-        if (topLevelModelLocations instanceof IndexedLocationSet<?> raw && raw.isEmpty()) {
-            populateIndexedLocations(helper, modelRegistry, (IndexedLocationSet<ModelResourceLocation>) raw, namespacesWithModels);
-            return;
-        }
-        if (MODEL_LOCATION_BUILDER_CTOR != null && MODEL_LOCATION_BUILDER_GENERATE_BLOCK != null) {
-            populateBlocksParallel(topLevelModelLocations, namespacesWithModels);
-        }
-        for (ResourceLocation key : BuiltInRegistries.ITEM.keySet()) {
-            topLevelModelLocations.add(ModelResourceLocation.inventory(key));
-            namespacesWithModels.add(key.getNamespace());
-        }
-        for (ModelResourceLocation key : modelRegistry.keySet()) {
-            topLevelModelLocations.add(key);
-            namespacesWithModels.add(key.id().getNamespace());
-        }
-
-        Map<String, ObjectArrayList<ModelResourceLocation>> rawBuckets = partitionByNamespace(
-                null, topLevelModelLocations, false
-        );
-        publishBuckets(helper, topLevelModelLocations.size(), rawBuckets);
+    public static void populateBlockLocations(Set<ModelResourceLocation> locations, Set<String> namespaces) {
+        populateBlocksParallel(locations, namespaces);
     }
 
-    private static void populateIndexedLocations(
-            Object helper,
-            Map<ModelResourceLocation, BakedModel> modelRegistry,
-            IndexedLocationSet<ModelResourceLocation> indexed,
-            Set<String> namespacesWithModels
-    ) {
-        boolean blocksHadInventory = false;
-        if (MODEL_LOCATION_BUILDER_CTOR != null && MODEL_LOCATION_BUILDER_GENERATE_BLOCK != null) {
-            blocksHadInventory = populateBlocksParallel(indexed, namespacesWithModels);
+    private static Map<String, CompactArrayLocationSet<ModelResourceLocation>> indexLocations(IndexedLocationSet<ModelResourceLocation> locations) {
+        Map<String, ObjectArrayList<ModelResourceLocation>> grouped = new Object2ObjectOpenHashMap<>();
+        for (ModelResourceLocation loc : locations) {
+            grouped.computeIfAbsent(loc.id().getNamespace(), ignored -> new ObjectArrayList<>()).add(loc);
         }
-        for (ResourceLocation key : BuiltInRegistries.ITEM.keySet()) {
-            ModelResourceLocation itemLoc = ModelResourceLocation.inventory(key);
-            if (blocksHadInventory) {
-                indexed.add(itemLoc);
-            } else {
-                indexed.appendUnchecked(itemLoc);
-            }
-            namespacesWithModels.add(key.getNamespace());
-        }
-
-        Map<String, ObjectArrayList<ModelResourceLocation>> rawBuckets = partitionByNamespace(indexed, null, true);
-
-        Map<String, ObjectOpenHashSet<ModelResourceLocation>> dedupByNs = null;
-        for (ModelResourceLocation key : modelRegistry.keySet()) {
-            String ns = key.id().getNamespace();
-            ObjectArrayList<ModelResourceLocation> bucket = rawBuckets.get(ns);
-            if (bucket == null) {
-                bucket = new ObjectArrayList<>(16);
-                rawBuckets.put(ns, bucket);
-                bucket.add(key);
-                indexed.appendUnchecked(key);
-                namespacesWithModels.add(ns);
-            } else {
-                if (dedupByNs == null) {
-                    dedupByNs = new Object2ObjectOpenHashMap<>(16);
-                }
-                ObjectOpenHashSet<ModelResourceLocation> seen = dedupByNs.get(ns);
-                if (seen == null) {
-                    seen = new ObjectOpenHashSet<>(bucket, 0.75f);
-                    dedupByNs.put(ns, seen);
-                }
-                if (seen.add(key)) {
-                    bucket.add(key);
-                    indexed.appendUnchecked(key);
-                }
-            }
-        }
-
-        indexed.attachBuckets(publishBuckets(helper, indexed.size(), rawBuckets));
-    }
-
-    private static Map<String, ObjectArrayList<ModelResourceLocation>> partitionByNamespace(
-            IndexedLocationSet<ModelResourceLocation> indexed,
-            Set<ModelResourceLocation> genericSet,
-            boolean indexedFast
-    ) {
-        Map<String, ObjectArrayList<ModelResourceLocation>> rawBuckets = new Object2ObjectOpenHashMap<>(256);
-        String lastNs = null;
-        ObjectArrayList<ModelResourceLocation> lastBucket = null;
-        if (indexedFast) {
-            Object[] elements = indexed.rawElements();
-            int count = indexed.size();
-            for (int i = 0; i < count; i++) {
-                ModelResourceLocation loc = (ModelResourceLocation) elements[i];
-                String ns = loc.id().getNamespace();
-                if (!ns.equals(lastNs)) {
-                    lastBucket = rawBuckets.get(ns);
-                    if (lastBucket == null) {
-                        lastBucket = new ObjectArrayList<>(32);
-                        rawBuckets.put(ns, lastBucket);
-                    }
-                    lastNs = ns;
-                }
-                lastBucket.add(loc);
-            }
-        } else {
-            for (ModelResourceLocation loc : genericSet) {
-                String ns = loc.id().getNamespace();
-                if (!ns.equals(lastNs)) {
-                    lastBucket = rawBuckets.get(ns);
-                    if (lastBucket == null) {
-                        lastBucket = new ObjectArrayList<>(32);
-                        rawBuckets.put(ns, lastBucket);
-                    }
-                    lastNs = ns;
-                }
-                lastBucket.add(loc);
-            }
-        }
-        return rawBuckets;
-    }
-
-    private static Map<String, CompactArrayLocationSet<ModelResourceLocation>> publishBuckets(
-            Object helper,
-            int expectedTotalSize,
-            Map<String, ObjectArrayList<ModelResourceLocation>> rawBuckets
-    ) {
-        Map<String, CompactArrayLocationSet<ModelResourceLocation>> buckets =
-                new Object2ObjectOpenHashMap<>(rawBuckets.size() * 2);
-        for (Map.Entry<String, ObjectArrayList<ModelResourceLocation>> entry : rawBuckets.entrySet()) {
-            ObjectArrayList<ModelResourceLocation> list = entry.getValue();
-            buckets.put(entry.getKey(),
-                    new CompactArrayLocationSet<>(list.toArray(ModelResourceLocation[]::new), MODEL_ADAPTER));
-        }
-        if (helper != null) {
-            HELPER_BUCKETS.put(helper, new BucketCache(expectedTotalSize, buckets));
-        }
+        Map<String, CompactArrayLocationSet<ModelResourceLocation>> buckets = new Object2ObjectOpenHashMap<>(grouped.size());
+        grouped.forEach((namespace, list) -> buckets.put(namespace, new CompactArrayLocationSet<>(list.toArray(ModelResourceLocation[]::new), MODEL_ADAPTER)));
+        locations.attachBuckets(buckets);
         return buckets;
     }
 
     @SuppressWarnings("unchecked")
-    private static boolean populateBlocksParallel(
+    private static void populateBlocksParallel(
             Set<ModelResourceLocation> topLevelModelLocations,
             Set<String> namespacesWithModels
     ) {
         Set<Map.Entry<ResourceKey<Block>, Block>> entrySet = BuiltInRegistries.BLOCK.entrySet();
         int total = entrySet.size();
         if (total == 0) {
-            return false;
+            return;
         }
         List<Map.Entry<ResourceKey<Block>, Block>> entries = new ArrayList<>(entrySet);
         int workers = Math.max(1, ForkJoinPool.commonPool().getParallelism());
@@ -387,13 +128,12 @@ public final class ModelBakeHelperSupport {
                 } else {
                     topLevelModelLocations.addAll(singleSet);
                 }
-                return singleSet.sawInventoryVariant();
+                return;
             } catch (Throwable t) {
                 throw propagate(t);
             }
         }
 
-        int chunkSize = (total + chunkCount - 1) / chunkCount;
         @SuppressWarnings("unchecked")
         ChunkCollectorSet<ModelResourceLocation>[] chunkLocs = new ChunkCollectorSet[chunkCount];
         String[][] chunkNamespaces = new String[chunkCount][];
@@ -404,7 +144,7 @@ public final class ModelBakeHelperSupport {
         CountDownLatch latch = new CountDownLatch(poolThreads);
         Runnable worker = withGameContextClassLoader(() -> {
             try {
-                runBlockChunks(entries, total, chunkSize, chunkCount, chunkLocs, chunkNamespaces, nextChunk, failure);
+                runBlockChunks(entries, total, chunkCount, chunkLocs, chunkNamespaces, nextChunk, failure);
             } finally {
                 latch.countDown();
             }
@@ -414,7 +154,7 @@ public final class ModelBakeHelperSupport {
         for (int i = 0; i < poolThreads; i++) {
             pool.execute(worker);
         }
-        runBlockChunks(entries, total, chunkSize, chunkCount, chunkLocs, chunkNamespaces, nextChunk, failure);
+        runBlockChunks(entries, total, chunkCount, chunkLocs, chunkNamespaces, nextChunk, failure);
 
         boolean interrupted = false;
         while (true) {
@@ -437,12 +177,10 @@ public final class ModelBakeHelperSupport {
         IndexedLocationSet<ModelResourceLocation> indexedTarget = topLevelModelLocations instanceof IndexedLocationSet<?> raw
                 ? (IndexedLocationSet<ModelResourceLocation>) raw
                 : null;
-        boolean sawInventory = false;
         String lastNs = null;
         for (int c = 0; c < chunkCount; c++) {
             ChunkCollectorSet<ModelResourceLocation> locs = chunkLocs[c];
             if (locs != null && !locs.isEmpty()) {
-                sawInventory |= locs.sawInventoryVariant();
                 if (indexedTarget != null) {
                     indexedTarget.appendArrayUnchecked(locs.rawElements(), locs.size());
                 } else {
@@ -459,27 +197,25 @@ public final class ModelBakeHelperSupport {
                 }
             }
         }
-        return sawInventory;
     }
 
     private static void runBlockChunks(
             List<Map.Entry<ResourceKey<Block>, Block>> entries,
             int total,
-            int chunkSize,
             int chunkCount,
-            ChunkCollectorSet<ModelResourceLocation>[] chunkLocs,
-            String[][] chunkNamespaces,
-            AtomicInteger nextChunk,
-            AtomicReference<Throwable> failure
-    ) {
-        Object builder = null;
-        while (failure.get() == null) {
-            int chunk = nextChunk.getAndIncrement();
-            if (chunk >= chunkCount) {
-                return;
-            }
-            int start = chunk * chunkSize;
-            int end = Math.min(total, start + chunkSize);
+                ChunkCollectorSet<ModelResourceLocation>[] chunkLocs,
+                String[][] chunkNamespaces,
+                AtomicInteger nextChunk,
+                AtomicReference<Throwable> failure
+        ) {
+            Object builder = null;
+            while (failure.get() == null) {
+                int chunk = nextChunk.getAndIncrement();
+                if (chunk >= chunkCount) {
+                    return;
+                }
+                int start = (int) ((long) chunk * total / chunkCount);
+                int end = (int) ((long) (chunk + 1) * total / chunkCount);
             ChunkCollectorSet<ModelResourceLocation> localSet = new ChunkCollectorSet<>((end - start) * 2, MODEL_ADAPTER);
             String[] localNs = new String[end - start];
             try {
@@ -503,32 +239,14 @@ public final class ModelBakeHelperSupport {
 
     @SuppressWarnings("unchecked")
     public static Set<ModelResourceLocation> wrapVisibleLocations(
-            Set<ModelResourceLocation> topLevelModelLocations,
-            Set<String> visibleNamespaces,
-            Object helper
-    ) {
-        if (visibleNamespaces == null || visibleNamespaces.isEmpty()) {
-            return Set.of();
+            Set<ModelResourceLocation> topLevelModelLocations, Set<String> visibleNamespaces) {
+        if (!(topLevelModelLocations instanceof IndexedLocationSet<?> raw)) {
+            return Sets.filter(topLevelModelLocations, loc -> visibleNamespaces.contains(loc.id().getNamespace()));
         }
-        Map<String, CompactArrayLocationSet<ModelResourceLocation>> buckets = null;
-        int currentSize = topLevelModelLocations.size();
-        if (topLevelModelLocations instanceof IndexedLocationSet<?> raw) {
-            buckets = ((IndexedLocationSet<ModelResourceLocation>) raw).buckets();
-        }
-        if (buckets == null && helper != null) {
-            BucketCache cached = HELPER_BUCKETS.get(helper);
-            if (cached != null && cached.expectedTotalSize == currentSize) {
-                buckets = cached.buckets;
-            }
-        }
+        IndexedLocationSet<ModelResourceLocation> indexed = (IndexedLocationSet<ModelResourceLocation>) raw;
+        Map<String, CompactArrayLocationSet<ModelResourceLocation>> buckets = indexed.buckets();
         if (buckets == null) {
-            Map<String, ObjectArrayList<ModelResourceLocation>> rawBuckets = partitionByNamespace(
-                    null, topLevelModelLocations, false
-            );
-            buckets = publishBuckets(helper, currentSize, rawBuckets);
-            if (topLevelModelLocations instanceof IndexedLocationSet<?> raw) {
-                ((IndexedLocationSet<ModelResourceLocation>) raw).attachBuckets(buckets);
-            }
+            buckets = indexLocations(indexed);
         }
         return new NamespaceSliceSet(buckets, visibleNamespaces);
     }
@@ -559,12 +277,6 @@ public final class ModelBakeHelperSupport {
             throw err;
         }
         return new RuntimeException(t);
-    }
-
-    private record ListenerEntry(String modId, ModContainer container) {
-    }
-
-    private record BucketCache(int expectedTotalSize, Map<String, CompactArrayLocationSet<ModelResourceLocation>> buckets) {
     }
 
     private static final class NamespaceSliceSet extends java.util.AbstractSet<ModelResourceLocation> {

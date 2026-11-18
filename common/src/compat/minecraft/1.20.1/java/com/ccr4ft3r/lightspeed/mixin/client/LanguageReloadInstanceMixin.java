@@ -1,7 +1,6 @@
 package com.ccr4ft3r.lightspeed.mixin.client;
 
 import com.ccr4ft3r.lightspeed.client.resources.AsyncLanguageReload;
-import com.ccr4ft3r.lightspeed.client.resources.DeferredWorldReloadCoordinator;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import net.minecraft.client.resources.language.LanguageManager;
@@ -32,20 +31,24 @@ public abstract class LanguageReloadInstanceMixin {
             Executor backgroundExecutor,
             Executor gameExecutor,
             Operation<CompletableFuture<?>> original) {
-        PreparableReloadListener actualListener = DeferredWorldReloadCoordinator.unwrapImmediateListener(listener);
-        if (!(actualListener instanceof LanguageManager) || !(actualListener instanceof AsyncLanguageReload.PreparedHost host)) {
+        if (!(listener instanceof LanguageManager languageManager)
+                || !(listener instanceof AsyncLanguageReload.PreparedHost host)) {
             return original.call(stateFactory, barrier, resourceManager, listener, backgroundExecutor, gameExecutor);
         }
+        String selectedCode = languageManager.getSelected();
         CompletableFuture<AsyncLanguageReload.PreparedLanguage> preparedFuture = CompletableFuture.supplyAsync(
-                () -> host.lightspeed$prepareLanguage(resourceManager),
-                DeferredWorldReloadCoordinator.wrapImmediateExecutor(actualListener, backgroundExecutor));
-        host.lightspeed$beginAsyncPrepare(resourceManager, preparedFuture);
+                () -> host.lightspeed$prepareLanguage(resourceManager, selectedCode), backgroundExecutor);
         PreparableReloadListener.PreparationBarrier gatedBarrier = new PreparableReloadListener.PreparationBarrier() {
             @Override
             public <T> CompletableFuture<T> wait(T preparation) {
                 return preparedFuture.thenCompose(ignored -> barrier.wait(preparation));
             }
         };
-        return original.call(stateFactory, gatedBarrier, resourceManager, listener, backgroundExecutor, gameExecutor);
+        Executor languageApplyExecutor = task -> gameExecutor.execute(() -> {
+            AsyncLanguageReload.PreparedLanguage prepared = preparedFuture.isCompletedExceptionally()
+                    ? null : preparedFuture.getNow(null);
+            host.lightspeed$runWithPreparedLanguage(prepared, task);
+        });
+        return original.call(stateFactory, gatedBarrier, resourceManager, listener, backgroundExecutor, languageApplyExecutor);
     }
 }

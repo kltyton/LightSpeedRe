@@ -141,29 +141,28 @@ public final class ModelBakeEventHelperTransformer extends CompatClassTransforme
             return;
         }
 
-        MethodInsnNode buildDepCall = null;
+        AbstractInsnNode afterBlockEnumeration = null;
+        String blockConsumer = "(L" + targetInternal + ";L" + modelLocationBuilderInternal
+                + ";)Ljava/util/function/Consumer;";
         for (AbstractInsnNode cur = builderNew.getNext(); cur != null; cur = cur.getNext()) {
-            if (cur instanceof MethodInsnNode call
-                    && targetInternal.equals(call.owner)
-                    && "buildDependencyGraph".equals(call.name)
-                    && "()Lcom/google/common/graph/MutableGraph;".equals(call.desc)) {
-                buildDepCall = call;
+            if (cur instanceof MethodInsnNode call && "forEach".equals(call.name)) {
+                AbstractInsnNode argument = TransformAsmHelper.previousRealInsn(call);
+                if (call.getOpcode() == Opcodes.INVOKEINTERFACE && "java/util/Set".equals(call.owner)
+                        && "(Ljava/util/function/Consumer;)V".equals(call.desc)
+                        && argument instanceof InvokeDynamicInsnNode lambda
+                        && "accept".equals(lambda.name) && blockConsumer.equals(lambda.desc)) {
+                    afterBlockEnumeration = call.getNext();
+                }
                 break;
             }
         }
-        if (buildDepCall == null) {
-            return;
-        }
-        AbstractInsnNode recvForBuild = TransformAsmHelper.previousRealInsn(buildDepCall);
-        AbstractInsnNode recvForPut = recvForBuild == null ? null : TransformAsmHelper.previousRealInsn(recvForBuild);
-        if (!(recvForBuild instanceof VarInsnNode v1 && v1.getOpcode() == Opcodes.ALOAD && v1.var == 0)
-                || !(recvForPut instanceof VarInsnNode v2 && v2.getOpcode() == Opcodes.ALOAD && v2.var == 0)) {
+        if (afterBlockEnumeration == null) {
             return;
         }
 
         List<AbstractInsnNode> span = new ArrayList<>();
         Set<LabelNode> innerLabels = new HashSet<>();
-        for (AbstractInsnNode cur = builderNew; cur != null && cur != recvForPut; cur = cur.getNext()) {
+        for (AbstractInsnNode cur = builderNew; cur != null && cur != afterBlockEnumeration; cur = cur.getNext()) {
             span.add(cur);
             if (cur != builderNew && cur instanceof LabelNode label) {
                 innerLabels.add(label);
@@ -176,8 +175,7 @@ public final class ModelBakeEventHelperTransformer extends CompatClassTransforme
             return;
         }
 
-        // Keep the native constructor span available if the runtime cannot resolve the
-        // builder ABI; the original path still produces the full block location set.
+        // Keep native item enumeration, model registry keys and resource discovery after this loop.
         LabelNode originalPath = new LabelNode();
         LabelNode afterPopulation = new LabelNode();
         InsnList replacement = new InsnList();
@@ -185,17 +183,15 @@ public final class ModelBakeEventHelperTransformer extends CompatClassTransforme
                 "canPopulateLocations", "()Z", false));
         replacement.add(new JumpInsnNode(Opcodes.IFEQ, originalPath));
         replacement.add(new VarInsnNode(Opcodes.ALOAD, 0));
-        replacement.add(new VarInsnNode(Opcodes.ALOAD, 1));
-        replacement.add(new VarInsnNode(Opcodes.ALOAD, 0));
         replacement.add(new FieldInsnNode(Opcodes.GETFIELD, targetInternal, "topLevelModelLocations", "Ljava/util/Set;"));
         replacement.add(new VarInsnNode(Opcodes.ALOAD, 0));
         replacement.add(new FieldInsnNode(Opcodes.GETFIELD, targetInternal, "namespacesWithModels", "Ljava/util/Set;"));
-        replacement.add(new MethodInsnNode(Opcodes.INVOKESTATIC, SUPPORT, "populateLocations",
-                "(Ljava/lang/Object;Ljava/util/Map;Ljava/util/Set;Ljava/util/Set;)V", false));
+        replacement.add(new MethodInsnNode(Opcodes.INVOKESTATIC, SUPPORT, "populateBlockLocations",
+                "(Ljava/util/Set;Ljava/util/Set;)V", false));
         replacement.add(new JumpInsnNode(Opcodes.GOTO, afterPopulation));
         replacement.add(originalPath);
         ctor.instructions.insertBefore(builderNew, replacement);
-        ctor.instructions.insertBefore(recvForPut, afterPopulation);
+        ctor.instructions.insertBefore(afterBlockEnumeration, afterPopulation);
         if (ctor.maxStack < 4) {
             ctor.maxStack = 4;
         }
@@ -263,12 +259,11 @@ public final class ModelBakeEventHelperTransformer extends CompatClassTransforme
                 continue;
             }
             InsnList replacement = new InsnList();
-            replacement.add(new VarInsnNode(Opcodes.ALOAD, 0));
             replacement.add(new MethodInsnNode(
                     Opcodes.INVOKESTATIC,
                     SUPPORT,
                     "wrapVisibleLocations",
-                    "(Ljava/util/Set;Ljava/util/Set;Ljava/lang/Object;)Ljava/util/Set;",
+                    "(Ljava/util/Set;Ljava/util/Set;)Ljava/util/Set;",
                     false
             ));
             method.instructions.insertBefore(call, replacement);

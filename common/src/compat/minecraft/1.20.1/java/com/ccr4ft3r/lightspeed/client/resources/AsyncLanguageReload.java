@@ -6,7 +6,6 @@ import net.minecraft.server.packs.resources.ResourceManager;
 
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
 
 /** Coordinates background preparation of language metadata and translations ahead of synchronous apply. */
 public final class AsyncLanguageReload {
@@ -14,19 +13,13 @@ public final class AsyncLanguageReload {
     }
 
     public interface PreparedHost {
-        void lightspeed$beginAsyncPrepare(ResourceManager resourceManager,
-                                          CompletableFuture<PreparedLanguage> preparedFuture);
+        PreparedLanguage lightspeed$prepareLanguage(ResourceManager resourceManager, String selectedCode);
 
-        CompletableFuture<PreparedLanguage> lightspeed$consumePreparedFuture();
-
-        PreparedLanguage lightspeed$prepareLanguage(ResourceManager resourceManager);
-
-        void lightspeed$setActivePrepared(PreparedLanguage prepared);
-
-        PreparedLanguage lightspeed$activePrepared();
+        void lightspeed$runWithPreparedLanguage(PreparedLanguage prepared, Runnable apply);
     }
 
     public record PreparedLanguage(
+            ResourceManager resourceManager,
             String expectedCode,
             Map<String, LanguageInfo> languages,
             List<String> loadOrder,
