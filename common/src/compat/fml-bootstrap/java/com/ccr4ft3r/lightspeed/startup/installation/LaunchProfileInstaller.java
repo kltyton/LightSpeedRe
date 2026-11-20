@@ -51,16 +51,41 @@ final class LaunchProfileInstaller {
 
     static Result install(Path gameDirectory, List<String> desiredArguments, String versionId,
                           String preLaunchCommand) throws Exception {
+        return install(gameDirectory, desiredArguments, versionId, preLaunchCommand, false);
+    }
+
+    static Result preparePortableProfile(Path gameDirectory) throws Exception {
+        return preparePortableProfile(gameDirectory, launchVersion());
+    }
+
+    static Result preparePortableProfile(Path gameDirectory, String versionId) throws Exception {
+        if (!usesPortableProfile(gameDirectory)) {
+            return null;
+        }
+        return install(gameDirectory, List.of(), versionId, "", true);
+    }
+
+    private static boolean usesPortableProfile(Path gameDirectory) {
+        return Files.isRegularFile(gameDirectory.resolve("PCL").resolve("Setup.ini"))
+                || locatePrismConfig(gameDirectory) != null;
+    }
+
+    private static Result install(Path gameDirectory, List<String> desiredArguments, String versionId,
+                                  String preLaunchCommand, boolean preservePortableAgent) throws Exception {
         String resolvedVersionId = resolveVersionId(gameDirectory, versionId);
         Path pclSetup = gameDirectory.resolve("PCL").resolve("Setup.ini");
         if (Files.isRegularFile(pclSetup)) {
             Path versionJson = locatePclVersionJson(gameDirectory, resolvedVersionId);
             if (versionJson == null) {
-                return Result.UNSUPPORTED;
+                if (!desiredArguments.isEmpty()) {
+                    return Result.UNSUPPORTED;
+                }
+                return updatePcl(pclSetup, desiredArguments, preLaunchCommand, preservePortableAgent)
+                        ? Result.PCL : Result.PCL_UNCHANGED;
             }
             // PCL concatenates both argument sources, so the Agent belongs in the instance settings only.
             boolean changed = updateBoth(pclSetup,
-                    () -> updatePcl(pclSetup, desiredArguments, preLaunchCommand),
+                    () -> updatePcl(pclSetup, desiredArguments, preLaunchCommand, preservePortableAgent),
                     versionJson, () -> updateVersionJson(versionJson, List.of()));
             return changed ? Result.PCL : Result.PCL_UNCHANGED;
         }
@@ -72,8 +97,10 @@ final class LaunchProfileInstaller {
             return updatePrism(prismConfig, desiredArguments, preLaunchCommand, original, promoted)
                     ? Result.PRISM : Result.PRISM_UNCHANGED;
         }
-        if (prismConfig != null && prismUsesInstanceArguments(prismConfig)) {
-            return updatePrism(prismConfig, desiredArguments, preLaunchCommand)
+        if (prismConfig != null) {
+            String existing = Files.readString(prismConfig, StandardCharsets.UTF_8);
+            return updatePrism(prismConfig, desiredArguments, preLaunchCommand, existing, existing,
+                    preservePortableAgent)
                     ? Result.PRISM : Result.PRISM_UNCHANGED;
         }
 
@@ -129,6 +156,11 @@ final class LaunchProfileInstaller {
 
     private static boolean updatePcl(Path setup, List<String> desiredArguments,
                                      String preLaunchCommand) throws Exception {
+        return updatePcl(setup, desiredArguments, preLaunchCommand, false);
+    }
+
+    private static boolean updatePcl(Path setup, List<String> desiredArguments,
+                                     String preLaunchCommand, boolean preservePortableAgent) throws Exception {
         String content = Files.readString(setup, StandardCharsets.UTF_8);
         String newline = content.contains("\r\n") ? "\r\n" : "\n";
         List<String> lines = new ArrayList<>(content.lines().toList());
@@ -143,7 +175,7 @@ final class LaunchProfileInstaller {
             }
             found = true;
             String existing = line.substring(PCL_JVM_ARGUMENTS.length());
-            String updated = removeLightspeedArguments(existing, desiredArguments.isEmpty());
+            String updated = removeLightspeedArguments(existing, desiredArguments.isEmpty(), preservePortableAgent);
             updated = append(updated, quotedArguments);
             String replacement = PCL_JVM_ARGUMENTS + updated;
             changed = !replacement.equals(line);
@@ -241,13 +273,18 @@ final class LaunchProfileInstaller {
 
     private static boolean updatePrism(Path config, List<String> desiredArguments,
                                        String preLaunchCommand, String original, String content) throws Exception {
+        return updatePrism(config, desiredArguments, preLaunchCommand, original, content, false);
+    }
+
+    private static boolean updatePrism(Path config, List<String> desiredArguments, String preLaunchCommand,
+                                       String original, String content, boolean preservePortableAgent) throws Exception {
         ExtendedLauncherProfiles.validatePrismInstanceSettings(config, content);
-        if (content.lines().noneMatch(line -> line.equals("OverrideJavaArgs=true"))) {
+        if (!desiredArguments.isEmpty() && content.lines().noneMatch(line -> line.equals("OverrideJavaArgs=true"))) {
             return false;
         }
         String newline = content.contains("\r\n") ? "\r\n" : "\n";
         List<String> lines = new ArrayList<>(content.lines().toList());
-        List<String> quotedArguments = desiredArguments.stream().map(LaunchProfileInstaller::quote).toList();
+        List<String> quotedArguments = desiredArguments.stream().map(LaunchProfileInstaller::quoteForPrism).toList();
         boolean foundArguments = false;
         boolean changed = !original.equals(content);
 
@@ -260,7 +297,7 @@ final class LaunchProfileInstaller {
                 foundArguments = true;
                 String existing = ExtendedLauncherProfiles.decodePrismValue(config,
                         line.substring("JvmArgs=".length()));
-                String updated = append(removeLightspeedArguments(existing, desiredArguments.isEmpty()),
+                String updated = append(removeLightspeedArguments(existing, desiredArguments.isEmpty(), preservePortableAgent),
                         quotedArguments);
                 String replacement = existing.equals(updated) ? line
                         : "JvmArgs=" + ExtendedLauncherProfiles.encodePrismValue(config, updated);
@@ -426,9 +463,13 @@ final class LaunchProfileInstaller {
 
     static boolean isOwnedPreLaunchCommand(String command) {
         if (command == null) return false;
-        String normalized = command.trim().replace('\\', '/').toLowerCase(Locale.ROOT);
+        String decoded = command.trim().replace("\\\"", "\"").replace("\\\\", "\\");
+        if (decoded.startsWith("\"") && decoded.length() > 1 && decoded.endsWith("\"")) {
+            decoded = decoded.substring(1, decoded.length() - 1);
+        }
+        String normalized = decoded.replace('\\', '/').toLowerCase(Locale.ROOT);
         return normalized.matches("cmd\\.exe /d /s /c call \"[^\"]*/\\.lightspeed/bootstrap/pack-compiler\\.cmd\"")
-                || normalized.matches("sh '[^']*/\\.lightspeed/bootstrap/pack-compiler\\.sh'");
+                || normalized.matches("(?:/bin/)?sh '[^']*/\\.lightspeed/bootstrap/pack-compiler\\.sh'");
     }
 
     private static Path locateHmclVersionJson(Path gameDirectory, String versionId) {
@@ -675,7 +716,15 @@ final class LaunchProfileInstaller {
     }
 
     private static String removeLightspeedArguments(String arguments, boolean preserveWorkers) {
+        return removeLightspeedArguments(arguments, preserveWorkers, false);
+    }
+
+    private static String removeLightspeedArguments(String arguments, boolean preserveWorkers,
+                                                    boolean preservePortableAgent) {
         List<String> tokens = tokenize(arguments);
+        if (preservePortableAgent && hasSinglePortableAgent(tokens)) {
+            return arguments;
+        }
         boolean hasLegacyArchiveArguments = tokens.stream()
                 .map(LaunchProfileInstaller::unquote)
                 .map(value -> value.toLowerCase(Locale.ROOT))
@@ -711,6 +760,15 @@ final class LaunchProfileInstaller {
             retained.add(token);
         }
         return retained.size() == tokens.size() ? arguments : String.join(" ", retained);
+    }
+
+    private static boolean hasSinglePortableAgent(List<String> tokens) {
+        List<String> lightspeedAgents = tokens.stream().map(LaunchProfileInstaller::unquote)
+                .map(value -> value.toLowerCase(Locale.ROOT))
+                .filter(value -> value.startsWith("-javaagent:") && isOwnedAgentArgument(value))
+                .toList();
+        return lightspeedAgents.size() == 1 && lightspeedAgents.get(0)
+                .matches("-javaagent:\\./\\.lightspeed/bootstrap/lightspeed-bootstrap-agent-[0-9a-f]{16}\\.jar");
     }
 
     private static String unquote(String value) {
@@ -756,6 +814,32 @@ final class LaunchProfileInstaller {
                 .collect(java.util.stream.Collectors.joining(" "));
     }
 
+    static String formatManualAgentArguments(Path gameDirectory, Path owner, Path agent) {
+        Path prismConfig = locatePrismConfig(gameDirectory);
+        List<String> arguments = new ArrayList<>();
+        if (usesPortableProfile(gameDirectory)) {
+            arguments.add("-Dlightspeed.bootstrapCacheDir=./lightspeed-cache/bootstrap");
+            arguments.add("-D" + BootstrapAgentInstaller.OWNER_PROPERTY + '=' + pathForLauncher(gameDirectory, owner));
+            arguments.add("-javaagent:" + pathForLauncher(gameDirectory, agent));
+        } else {
+            arguments.addAll(ownedAgentArguments(gameDirectory, owner, agent));
+        }
+        arguments.addAll(StartupThreadBudget.arguments());
+        arguments.addAll(StartupThreadBudget.gcThresholdArguments());
+        if (prismConfig == null) {
+            return formatArgumentLine(arguments);
+        }
+        return arguments.stream().map(LaunchProfileInstaller::quoteForPrism)
+                .collect(java.util.stream.Collectors.joining(" "));
+    }
+
+    private static String pathForLauncher(Path gameDirectory, Path path) {
+        Path root = gameDirectory.toAbsolutePath().normalize();
+        Path absolute = path.toAbsolutePath().normalize();
+        String pathText = absolute.startsWith(root) ? "./" + root.relativize(absolute) : absolute.toString();
+        return pathText.replace(path.getFileSystem().getSeparator(), "/");
+    }
+
     static String mergeArgumentLine(String existing, List<String> desiredArguments) {
         List<String> quoted = desiredArguments.stream().map(LaunchProfileInstaller::quote).toList();
         return append(removeLightspeedArguments(existing == null ? "" : existing, desiredArguments.isEmpty()), quoted);
@@ -770,6 +854,10 @@ final class LaunchProfileInstaller {
 
     private static String quote(String argument) {
         return '"' + argument.replace("\"", "\\\"") + '"';
+    }
+
+    private static String quoteForPrism(String argument) {
+        return quote(argument.replace("\\", "\\\\"));
     }
 
     private static boolean isXShareAuto(JsonElement element) {

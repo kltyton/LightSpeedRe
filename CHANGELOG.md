@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.0.7
+
+- Use instance-relative paths for optional local Agent setup in PCL and Prism. Remove the previous automatic Agent settings from these launcher profiles.
+- Restore old instances with missing Agent files by following the launcher recovery guide. The supplied repair script preserves unrelated JVM arguments.
+- Keep the Forge Pack Compiler working with non-ASCII Windows paths.
+
+- PCL 和 Prism 的可选本机 Agent 配置使用实例相对路径，并清理旧版自动写入的参数。
+- 旧实例缺少 Agent 文件时可按启动器修复教程恢复。修复脚本保留无关的 JVM 参数。
+- 修复 Windows 非 ASCII 路径下的 Forge Pack Compiler。
+
 ## 2.0.4 (NeoForge 1.21.1)
 
 - Preserve configured resource caches and parallel loading with Connector or Continuity.

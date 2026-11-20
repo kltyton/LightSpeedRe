@@ -59,10 +59,23 @@ public final class BootstrapAgentInstaller {
                 }
                 return;
             }
+            // A copied launcher profile may outlive the extracted JAR. Expose portable Agent
+            // arguments as a local opt-in; a saved automatic -javaagent can abort the VM outright.
+            LaunchProfileInstaller.Result portableProfile = LaunchProfileInstaller.preparePortableProfile(gameDirectory);
             PreparedAgent prepared = prepareEmbeddedAgent();
             if (prepared == null) {
                 installationState = InstallationState.MANUAL_REQUIRED;
                 LOGGER.debug("Lightspeed embedded bootstrap installation skipped outside a packaged Mod JAR");
+                return;
+            }
+
+            if (portableProfile != null) {
+                lastInstallResult = portableProfile;
+                installationState = InstallationState.MANUAL_REQUIRED;
+                if (portableProfile.changed()) {
+                    LOGGER.info("Lightspeed removed its old automatic bootstrap settings from {}. Reopen the launcher to refresh its settings.",
+                            portableProfile.description());
+                }
                 return;
             }
 
@@ -107,7 +120,7 @@ public final class BootstrapAgentInstaller {
                 return "";
             }
             Path gameDirectory = FMLPaths.GAMEDIR.get().toAbsolutePath().normalize();
-            return LaunchProfileInstaller.formatArgumentLine(launchArguments(gameDirectory, prepared));
+            return LaunchProfileInstaller.formatManualAgentArguments(gameDirectory, prepared.owner(), prepared.agent());
         } catch (Exception exception) {
             LOGGER.warn("Lightspeed manual bootstrap Agent arguments are currently unavailable", exception);
             return "";

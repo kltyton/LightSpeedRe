@@ -43,6 +43,7 @@ public final class LaunchProfileInstallerCheck {
             checkDirectVersionJsonInstall(directory, owner, agent);
             checkPrism(directory, owner, agent);
             checkPrismGlobalInherit(directory, owner, agent);
+            checkPortableProfiles(directory);
             checkCurseForge(directory, owner, agent);
             checkAtLauncher(directory, owner, agent);
             checkManualArgumentLine(directory, owner, agent);
@@ -257,8 +258,8 @@ public final class LaunchProfileInstallerCheck {
         require(!updated.contains("lightspeed.appCds"), "legacy Prism archive marker must be removed");
         require(!updated.contains("old.jsa"), "stale Prism archive must be removed");
         require(!updated.contains("-Xshare:auto"), "Lightspeed-owned stale Prism sharing flag must be removed");
-        require(updated.contains(BootstrapAgentInstaller.agentArgument(agent).replace("\\", "\\\\")),
-                "Prism Agent path must be installed with INI-escaped backslashes");
+        require(updated.contains(BootstrapAgentInstaller.agentArgument(agent).replace("\\", "\\\\\\\\")),
+                "Prism Agent path must survive both INI decoding and argument splitting");
         require(!LaunchProfileInstaller.updatePrism(config, directory, owner, agent), "identical Prism update must be idempotent");
 
         Path inherited = directory.resolve("inherited-instance.cfg");
@@ -516,11 +517,71 @@ public final class LaunchProfileInstallerCheck {
         require(updated.contains("OverrideJavaArgs=true"), "Prism override must be enabled");
         require(updated.contains("-Xmx10G") && updated.contains("-XX:+UseG1GC"),
                 "Prism global JvmArgs must be carried over");
-        require(updated.contains(BootstrapAgentInstaller.agentArgument(agent).replace("\\", "\\\\")),
+        require(updated.contains(BootstrapAgentInstaller.agentArgument(agent).replace("\\", "\\\\\\\\")),
                 "Prism inherited instance must receive the INI-escaped Agent argument");
         require(LaunchProfileInstaller.install(gameDir, owner, agent, "1.20.1")
                         == LaunchProfileInstaller.Result.PRISM_UNCHANGED,
                 "second Prism install must be idempotent");
+    }
+
+    private static void checkPortableProfiles(Path root) throws Exception {
+        String agentPath = ".lightspeed/bootstrap/lightspeed-bootstrap-agent-da541acb71bd8e9a.jar";
+        String ownerPath = "mods/光速 Mod.jar";
+        String foreignArgument = "-javaagent:/tools/another-agent.jar";
+        for (boolean prism : new boolean[]{false, true}) {
+            String version = prism ? "Prism copy" : "PCL copy";
+            Path instance = root.resolve(version);
+            Path game = prism ? instance.resolve(".minecraft") : instance;
+            Path config = prism ? instance.resolve("instance.cfg") : game.resolve("PCL/Setup.ini");
+            Files.createDirectories(game);
+            Files.createDirectories(config.getParent());
+            String jvmKey = prism ? "JvmArgs=" : "VersionAdvanceJvm:";
+            String commandKey = prism ? "PreLaunchCommand=" : "VersionAdvanceRun:";
+            String header = prism ? "[General]\nConfigVersion=1.3\nOverrideJavaArgs=true\n" : "";
+            String oldArgs = "-Xmx4G " + foreignArgument
+                    + " \"-javaagent:C:\\Users\\someone\\Game Dir\\" + agentPath.replace('/', '\\') + "\"";
+            String oldCommand = prism
+                    ? "/bin/sh '/home/someone/Game Dir/.lightspeed/bootstrap/pack-compiler.sh'"
+                    : "cmd.exe /d /s /c call \"C:\\Users\\someone\\.lightspeed\\bootstrap\\pack-compiler.cmd\"";
+            Files.writeString(config, header);
+            Files.writeString(config, header + jvmKey
+                    + (prism ? ExtendedLauncherProfiles.encodePrismValue(config, oldArgs) : oldArgs)
+                    + "\n" + commandKey + oldCommand + "\n");
+            Path manifest = game.resolve(version + ".json");
+            if (!prism) {
+                Files.writeString(manifest, "{\"arguments\":{\"jvm\":[\"-Xms1G\","
+                        + "\"-javaagent:D:/pack/" + agentPath + "\"]}}");
+            }
+            require(LaunchProfileInstaller.preparePortableProfile(game, version).changed(),
+                    "portable setup must migrate automatic arguments with no extracted Agent present");
+            String migrated = Files.readString(config);
+            require(migrated.contains("-Xmx4G") && migrated.contains(foreignArgument)
+                            && !migrated.contains("someone") && !migrated.contains("-javaagent:./"),
+                    "the imported profile must be launchable without Lightspeed's extracted files");
+            require(!migrated.contains("pack-compiler"), "the copied machine-local compiler command must be removed");
+            if (!prism) {
+                JsonArray jvm = readJvmArguments(manifest);
+                require(jvm.size() == 1 && jvm.get(0).getAsString().equals("-Xms1G"),
+                        "PCL must also remove legacy duplicate Agent arguments from the version manifest");
+            }
+
+            String manual = LaunchProfileInstaller.formatManualAgentArguments(game,
+                    game.resolve(ownerPath), game.resolve(agentPath));
+            require(manual.contains("\"-javaagent:./" + agentPath + "\"")
+                            && manual.contains("\"-Dlightspeed.agent.owner=./" + ownerPath + "\"")
+                            && manual.contains("-Dlightspeed.bootstrapCacheDir=./lightspeed-cache/bootstrap"),
+                    "explicit local arguments must be relative and preserve spaces and non-ASCII characters");
+            Path preparedAgent = game.resolve(agentPath);
+            Files.createDirectories(preparedAgent.getParent());
+            Files.createFile(preparedAgent);
+            String configured = "-Xmx4G " + foreignArgument + " " + manual;
+            Files.writeString(config, header + jvmKey
+                    + (prism ? ExtendedLauncherProfiles.encodePrismValue(config, configured) : configured) + "\n"
+                    + commandKey + "some-user-command\n");
+            require(!LaunchProfileInstaller.preparePortableProfile(game, version).changed()
+                            && Files.readString(config).contains("some-user-command"),
+                    "a manually configured portable Agent and a foreign pre-launch command must be preserved");
+        }
     }
 
     private static void checkCurseForge(Path directory, Path owner, Path agent) throws Exception {

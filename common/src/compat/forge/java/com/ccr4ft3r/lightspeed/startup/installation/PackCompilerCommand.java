@@ -90,8 +90,11 @@ final class PackCompilerCommand {
         List<String> tokens = new ArrayList<>(command.size());
         command.forEach(value -> tokens.add(windowsToken(value)));
         return "@echo off\r\nsetlocal DisableDelayedExpansion\r\n"
+                + "for /f \"tokens=2 delims=:\" %%C in ('chcp') do set \"lightspeedCodePage=%%C\"\r\n"
+                + "chcp 65001 >nul\r\n"
                 + "start \"\" /b /wait /belownormal " + String.join(" ", tokens)
-                + "\r\nexit /b 0\r\n";
+                + "\r\nif defined lightspeedCodePage chcp %lightspeedCodePage% >nul\r\n"
+                + "exit /b 0\r\n";
     }
 
     static String unixScript(List<String> command) {

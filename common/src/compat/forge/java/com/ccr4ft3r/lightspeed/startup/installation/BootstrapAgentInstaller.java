@@ -63,6 +63,9 @@ public final class BootstrapAgentInstaller {
                 }
                 return;
             }
+            // A copied launcher profile may outlive the extracted JAR. Expose portable Agent
+            // arguments as a local opt-in; a saved automatic -javaagent can abort the VM outright.
+            LaunchProfileInstaller.Result portableProfile = LaunchProfileInstaller.preparePortableProfile(gameDirectory);
             PreparedAgent prepared = prepareEmbeddedAgent();
             if (prepared == null) {
                 installationState = InstallationState.MANUAL_REQUIRED;
@@ -70,7 +73,6 @@ public final class BootstrapAgentInstaller {
                 return;
             }
 
-            List<String> arguments = launchArguments(gameDirectory, prepared);
             String preLaunchCommand = null;
             try {
                 packCompiler = PackCompilerCommand.prepare(
@@ -80,6 +82,17 @@ public final class BootstrapAgentInstaller {
                 LOGGER.warn("Lightspeed Pack Compiler pre-launch setup is unavailable; runtime scan caching remains active",
                         exception);
             }
+            if (portableProfile != null) {
+                lastInstallResult = portableProfile;
+                installationState = InstallationState.MANUAL_REQUIRED;
+                if (portableProfile.changed()) {
+                    LOGGER.info("Lightspeed removed its old automatic bootstrap settings from {}. Reopen the launcher to refresh its settings.",
+                            portableProfile.description());
+                }
+                return;
+            }
+
+            List<String> arguments = launchArguments(gameDirectory, prepared);
             LaunchProfileInstaller.Result result = LaunchProfileInstaller.installWithPreLaunch(
                     gameDirectory, arguments, preLaunchCommand);
             lastInstallResult = result;
@@ -150,7 +163,7 @@ public final class BootstrapAgentInstaller {
                 return "";
             }
             Path gameDirectory = FMLPaths.GAMEDIR.get().toAbsolutePath().normalize();
-            return LaunchProfileInstaller.formatArgumentLine(launchArguments(gameDirectory, prepared));
+            return LaunchProfileInstaller.formatManualAgentArguments(gameDirectory, prepared.owner(), prepared.agent());
         } catch (Exception exception) {
             LOGGER.warn("Lightspeed manual bootstrap Agent arguments are currently unavailable", exception);
             return "";
