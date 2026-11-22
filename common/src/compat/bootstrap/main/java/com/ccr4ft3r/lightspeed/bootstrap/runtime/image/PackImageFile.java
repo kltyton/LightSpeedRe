@@ -48,7 +48,7 @@ final class PackImageFile {
 
     PackImageFile(Path logicalFile, String fingerprint, long maxDataBytes, int maxEntryBytes,
                   String legacyFingerprint) {
-        this.logicalFile = logicalFile;
+        this.logicalFile = logicalFile.toAbsolutePath().normalize();
         this.fingerprint = fingerprint;
         this.legacyFingerprint = legacyFingerprint;
         this.maxDataBytes = maxDataBytes;

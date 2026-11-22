@@ -44,6 +44,13 @@ public final class StartupByteImageSegmentCheck {
                     "replacing one source discarded an unrelated segment");
             PackImageFile.Image mapped = new PackImageFile(file, "test", 8, 32 * 1024 * 1024).load();
             require(mapped.isMapped(), "persisted PackImage was not memory mapped");
+            Path relativeFile = Path.of("").toAbsolutePath().relativize(file);
+            for (Path alternate : new Path[]{relativeFile, Path.of(".").resolve(relativeFile),
+                    directory.resolve(".").resolve("image.bin")}) {
+                PackImageFile.Image reopened = new PackImageFile(alternate, "test", 8, 32 * 1024 * 1024).load();
+                require(MessageDigest.isEqual(newBytes, reopened.get(changedSource + '\0' + "entry")),
+                        "equivalent cache path could not reuse persisted bytes: " + alternate);
+            }
             try (var generations = Files.list(directory)) {
                 require(generations.filter(path -> path.getFileName().toString().endsWith(".lspi")).count() == 1,
                         "obsolete PackImage generations were not removed before mapping");
