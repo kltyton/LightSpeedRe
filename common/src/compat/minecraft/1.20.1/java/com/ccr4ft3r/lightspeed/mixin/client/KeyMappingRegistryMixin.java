@@ -12,7 +12,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArraySet;
 
+/** Keeps parallel key registration compatible with Minecraft's nullable category set. */
 @Mixin(KeyMapping.class)
 public abstract class KeyMappingRegistryMixin {
     @Shadow @Final @Mutable private static Map<String, KeyMapping> ALL;
@@ -23,8 +25,6 @@ public abstract class KeyMappingRegistryMixin {
     private static void lightspeed$allowConcurrentRegistration(CallbackInfo callback) {
         ALL = new ConcurrentHashMap<>(ALL);
         CATEGORY_SORT_ORDER = new ConcurrentHashMap<>(CATEGORY_SORT_ORDER);
-        Set<String> categories = ConcurrentHashMap.newKeySet();
-        categories.addAll(CATEGORIES);
-        CATEGORIES = categories;
+        CATEGORIES = new CopyOnWriteArraySet<>(CATEGORIES);
     }
 }

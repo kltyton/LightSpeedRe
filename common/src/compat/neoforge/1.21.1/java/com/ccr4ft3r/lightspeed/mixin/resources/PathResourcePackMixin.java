@@ -15,6 +15,7 @@ import com.google.common.collect.Maps;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import com.llamalad7.mixinextras.sugar.Local;
+import com.mojang.serialization.DataResult;
 import net.minecraft.FileUtil;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.packs.PackLocationInfo;
@@ -37,6 +38,7 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -208,94 +210,89 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
     @Inject(method = "listResources", at = @At("HEAD"), cancellable = true)
     public void listResourcesHeadInjected(PackType type, String namespace, String path, PackResources.ResourceOutput resourceOutput, CallbackInfo ci) {
         ModPackIndex modIndex = lightspeed$earlyModIndex;
-        if (modIndex != null && !FusionPackCompat.hasOverrides(this)) {
+        if ((modIndex == null && (!GlobalCache.isEnabled || !GlobalCache.shouldCacheWalkedPaths))
+                || FusionPackCompat.hasOverrides(this)) {
+            return;
+        }
+
+        List<String> parts = path.isEmpty() ? List.of() : FileUtil.decomposePath(path).result().orElse(null);
+        if (parts == null) {
+            return;
+        }
+        String requestedPath = String.join("/", parts);
+        if (modIndex != null) {
             ResourcePathIndex pathIndex = modIndex.pathIndex(type, namespace);
-            if (pathIndex == null || pathIndex.size() == 0) {
-                ci.cancel();
-                return;
-            }
-            boolean[] cancelHandled = {false};
-            FileUtil.decomposePath(path).ifSuccess(parts -> {
-                String requestedPath = String.join("/", parts);
+            if (pathIndex != null) {
                 pathIndex.forEachAtOrUnder(requestedPath, resourcePath -> {
                     ResourceLocation location = ResourceLocation.tryBuild(namespace, resourcePath);
                     if (location != null) {
                         resourceOutput.accept(location, lightspeed$openResourceFromModIndex(modIndex, type, location));
                     }
                 });
-                cancelHandled[0] = true;
-            }).ifError(dataResult -> LOGGER.error("Invalid path {}: {}", path, dataResult.message()));
-            if (cancelHandled[0]) {
-                ci.cancel();
-                return;
             }
-        }
-        if (!GlobalCache.isEnabled || !GlobalCache.shouldCacheWalkedPaths || FusionPackCompat.hasOverrides(this)) {
+            ci.cancel();
             return;
         }
 
-        boolean[] fallbackToVanilla = {false};
-        FileUtil.decomposePath(path).ifSuccess(parts -> {
-            List<ResourceLocation> locations = new java.util.ArrayList<>();
-            int[] invalidPathCount = {0};
-            String[] firstInvalidPath = {null};
-            try {
-                String requestedPath = String.join("/", parts);
-                Path namespaceRoot = lightspeed$resolve(type.getDirectory(), namespace).toAbsolutePath();
-                List<String> cachedPaths = lightspeed$getCachedFilePaths(type, namespace);
-                if (cachedPaths == null) {
-                    CompletableFuture<List<String>> scan = lightspeed$scheduleFilePathScan(type, namespace, namespaceRoot);
-                    if (scan == null) {
-                        fallbackToVanilla[0] = true;
-                        return;
-                    }
-                    cachedPaths = scan.getNow(null);
+        List<ResourceLocation> locations = new ArrayList<>();
+        int[] invalidPathCount = {0};
+        String[] firstInvalidPath = {null};
+        try {
+            Path namespaceRoot = lightspeed$resolve(type.getDirectory(), namespace).toAbsolutePath();
+            List<String> cachedPaths = lightspeed$getCachedFilePaths(type, namespace);
+            if (cachedPaths == null) {
+                CompletableFuture<List<String>> scan = lightspeed$scheduleFilePathScan(type, namespace, namespaceRoot);
+                if (scan == null) {
+                    return;
                 }
+                cachedPaths = scan.getNow(null);
+            }
 
-                OrderedResourcePathIndex index;
-                if (cachedPaths != null) {
-                    List<String> paths = cachedPaths;
-                    index = lightspeed$cache().orderedIndexes()
-                            .computeIfAbsent(type, ignored -> Maps.newConcurrentMap())
-                            .computeIfAbsent(namespace, ignored -> OrderedResourcePathIndex.from(paths));
+            OrderedResourcePathIndex index;
+            if (cachedPaths != null) {
+                List<String> paths = cachedPaths;
+                index = lightspeed$cache().orderedIndexes()
+                        .computeIfAbsent(type, ignored -> Maps.newConcurrentMap())
+                        .computeIfAbsent(namespace, ignored -> OrderedResourcePathIndex.from(paths));
+            } else {
+                ResourceDirectoryScan scan = lightspeed$scans().get(type.name() + "|" + namespace);
+                List<String> selected = scan == null ? null : scan.scan(requestedPath);
+                if (selected == null) {
+                    return;
+                }
+                // A subtree snapshot must not populate the namespace index.
+                index = OrderedResourcePathIndex.from(selected);
+            }
+            index.forEachAtOrUnder(requestedPath, resourcePath -> {
+                ResourceLocation location = ResourceLocation.tryBuild(namespace, resourcePath);
+                if (location == null) {
+                    if (invalidPathCount[0]++ == 0) {
+                        firstInvalidPath[0] = resourcePath;
+                    }
                 } else {
-                    ResourceDirectoryScan scan = lightspeed$scans().get(type.name() + "|" + namespace);
-                    List<String> selected = scan == null ? null : scan.scan(requestedPath);
-                    if (selected == null) {
-                        fallbackToVanilla[0] = true;
-                        return;
-                    }
-                    // A subtree snapshot must not populate the namespace index.
-                    index = OrderedResourcePathIndex.from(selected);
+                    locations.add(location);
                 }
-                index.forEachAtOrUnder(requestedPath, resourcePath -> {
-                    ResourceLocation location = ResourceLocation.tryBuild(namespace, resourcePath);
-                    if (location == null) {
-                        if (invalidPathCount[0]++ == 0) {
-                            firstInvalidPath[0] = resourcePath;
-                        }
-                    } else {
-                        locations.add(location);
-                    }
-                });
-            } catch (RuntimeException e) {
-                fallbackToVanilla[0] = true;
-                LOGGER.warn("Lightspeed path index lookup failed for {}:{}; falling back to vanilla resource enumeration",
-                        namespace, path, e);
-                return;
-            }
-            if (invalidPathCount[0] > 0) {
-                LOGGER.warn("Ignoring {} invalid resource paths in {}:{} (first: {})",
-                        invalidPathCount[0], namespace, path, firstInvalidPath[0]);
-            }
-            for (ResourceLocation location : locations) {
-                resourceOutput.accept(location, lightspeed$openResource(type, location));
-            }
-        }).ifError(dataResult -> LOGGER.error("Invalid path {}: {}", path, dataResult.message()));
-
-        if (!fallbackToVanilla[0]) {
-            ci.cancel();
+            });
+        } catch (RuntimeException e) {
+            LOGGER.warn("Lightspeed path index lookup failed for {}:{}; falling back to vanilla resource enumeration",
+                    namespace, path, e);
+            return;
         }
+        if (invalidPathCount[0] > 0) {
+            LOGGER.warn("Ignoring {} invalid resource paths in {}:{} (first: {})",
+                    invalidPathCount[0], namespace, path, firstInvalidPath[0]);
+        }
+        for (ResourceLocation location : locations) {
+            resourceOutput.accept(location, lightspeed$openResource(type, location));
+        }
+        ci.cancel();
+    }
+
+    @WrapOperation(method = "listResources", at = @At(value = "INVOKE",
+            target = "Lnet/minecraft/FileUtil;decomposePath(Ljava/lang/String;)Lcom/mojang/serialization/DataResult;"))
+    private DataResult<List<String>> lightspeed$allowNamespaceRootListing(String path,
+            Operation<DataResult<List<String>>> original) {
+        return path.isEmpty() ? DataResult.success(List.of()) : original.call(path);
     }
 
     @Override
