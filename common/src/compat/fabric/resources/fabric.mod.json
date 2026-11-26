@@ -14,7 +14,7 @@
   "mixins": ["lightspeed.mixins.json"],
   "depends": {
     "fabricloader": "${loader_version_range}",
-    "minecraft": "${minecraft_version}",
+    "minecraft": "${minecraft_version_range}",
     "java": ">=${java_version}",
     "fabric-api": "*"
   }

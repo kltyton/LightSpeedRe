@@ -32,9 +32,11 @@ import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.ResourceLookupPatch;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.JarModuleReaderPatch;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.ReadOnlyArchiveOpenPatch;
 import com.ccr4ft3r.lightspeed.bootstrap.runtime.filesystem.ReadOnlyArchiveOpen;
+import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.UnionFsLockPatch;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.UnionInputStreamPatch;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.ServiceDiscoveryPatch;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.EarlyDisplayVsyncPatch;
+import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.ModSchedulePatch;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.TypeHashPatch;
 
 import java.lang.instrument.ClassFileTransformer;
@@ -90,6 +92,7 @@ public final class LauncherTransformer implements ClassFileTransformer {
     private static final String KEY_LOOKUP = "net/minecraftforge/client/settings/KeyMappingLookup";
     private static final String MOD_CONTAINER = "net/minecraftforge/fml/ModContainer";
     private static final String MOD_LOADER = "net/minecraftforge/fml/ModLoader";
+    private static final String NEOFORGE_MOD_WORK_MANAGER = "net/neoforged/fml/ModWorkManager";
     private static final String ACCESS_TRANSFORMER_LIST = "net/minecraftforge/accesstransformer/parser/AccessTransformerList";
     private static final String NEOFORGE_ACCESS_TRANSFORMER_LIST =
             "net/neoforged/accesstransformer/parser/AccessTransformerList";
@@ -168,6 +171,9 @@ public final class LauncherTransformer implements ClassFileTransformer {
             Map.entry(NEOFORGE_EARLY_WINDOW, List.of(
                     targetWithoutAgentRead("bd1a0a80ac030ddf88f473571857ef8a56e48853043e1b5ec4d1bfd580fb4860",
                             EarlyDisplayVsyncPatch::apply))),
+            Map.entry(NEOFORGE_MOD_WORK_MANAGER, List.of(
+                    targetWithoutAgentRead("9230c8f54194d4a79d6c72f49cddd2699278f686cb3879480a0346edd61975db",
+                            ModSchedulePatch::workManagerFifo))),
             Map.entry(NEOFORGE_DISCOVERY, List.of(
                     target("7a94a5ce380ea983a337d5a8e3ea3eb84e88b584fc172c6ab314948967c9083c", ServiceDiscoveryPatch::neoForge))),
             Map.entry(SECURE_JAR, List.of(
@@ -178,6 +184,9 @@ public final class LauncherTransformer implements ClassFileTransformer {
             Map.entry(UNION_FILE_SYSTEM, List.of(
                     target("f08bb177b6950b7a6c47a8db5a0a814293d180b01bfbbdf28eeffe546f66645f",
                             bytes -> ReadOnlyArchiveOpenPatch.union(UnionFileSystemRootPatch.apply(bytes))))),
+            Map.entry(UNION_FILE_SYSTEM_PROVIDER, List.of(
+                    targetWithoutAgentRead("7d007396baf8b4576d281926451dcf540d7c452997483d340d2c8ecaa5020bb1",
+                            UnionFsLockPatch::apply))),
             Map.entry(SECURE_JAR_MODULE_READER, List.of(
                     targetWithLoader("045c87e04bf053c21da1cd06ea9d3a2426eed5bdc3464069d0191e1758401ab0",
                             (loader, bytes) -> JarModuleReaderPatch.apply(bytes, loader)))),

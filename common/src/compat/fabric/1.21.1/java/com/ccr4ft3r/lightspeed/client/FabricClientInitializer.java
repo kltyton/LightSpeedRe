@@ -1,6 +1,7 @@
 package com.ccr4ft3r.lightspeed.client;
 
 import com.ccr4ft3r.lightspeed.cache.GlobalCache;
+import com.ccr4ft3r.lightspeed.client.cache.assets.ShaderProgramSnapshot;
 import com.ccr4ft3r.lightspeed.client.startup.StartupTimeText;
 import com.ccr4ft3r.lightspeed.startup.metrics.StartupMetrics;
 import com.mojang.logging.LogUtils;
@@ -25,6 +26,11 @@ public final class FabricClientInitializer implements ClientModInitializer {
                 return;
             }
             StartupMetrics.mark("title-screen-init");
+            GlobalCache.persistCacheAsync("shader program snapshot", () -> {
+                ShaderProgramSnapshot.persist();
+                LogUtils.getLogger().info("Lightspeed shader snapshot: hits={} misses={} failures={}",
+                        ShaderProgramSnapshot.hits(), ShaderProgramSnapshot.misses(), ShaderProgramSnapshot.failures());
+            });
             GlobalCache.finishStartupCaches();
             StartupMetrics.mark("title-screen-operable");
             LogUtils.getLogger().info("Lightspeed: Launch took {}s (JVM start to title-screen-operable)",

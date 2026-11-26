@@ -29,11 +29,13 @@ import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.ObjectHolderPatch;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.ObjectHolderInteropPatch;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.ResourceLookupPatch;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.JarModuleReaderPatch;
+import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.UnionFsLockPatch;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.UnionInputStreamPatch;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.ReadOnlyArchiveOpenPatch;
 import com.ccr4ft3r.lightspeed.bootstrap.runtime.filesystem.ReadOnlyArchiveOpen;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.ServiceDiscoveryPatch;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.EarlyDisplayVsyncPatch;
+import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.ModSchedulePatch;
 import com.ccr4ft3r.lightspeed.bootstrap.transform.patch.TypeHashPatch;
 
 import java.lang.instrument.ClassFileTransformer;
@@ -90,6 +92,7 @@ public final class LauncherTransformer implements ClassFileTransformer {
     private static final String KEY_LOOKUP = "net/minecraftforge/client/settings/KeyMappingLookup";
     private static final String MOD_CONTAINER = "net/minecraftforge/fml/ModContainer";
     private static final String MOD_LOADER = "net/minecraftforge/fml/ModLoader";
+    private static final String MOD_WORK_MANAGER = "net/minecraftforge/fml/ModWorkManager";
     private static final String MOD_SYNC_EXECUTOR = "net/minecraftforge/fml/ModWorkManager$SyncExecutor";
     private static final String ACCESS_TRANSFORMER_LIST = "net/minecraftforge/accesstransformer/parser/AccessTransformerList";
     private static final String ASM_TYPE = String.join("/", "org", "objectweb", "asm", "Type");
@@ -112,6 +115,9 @@ public final class LauncherTransformer implements ClassFileTransformer {
             Map.entry(MOD_CONTAINER, List.of(
                     target("3242e1fdaf9db33edae81640288392f8a83acdb0d6ef32cacf4f6b56038a1955",
                             ModTransitionPatch::apply))),
+            Map.entry(MOD_WORK_MANAGER, List.of(
+                    targetWithoutAgentRead("743a5dc76bbd18a9fe3b88dc623dbdbb9ee36c9b310ae2a2d73cf377d1c6adb7",
+                            ModSchedulePatch::workManagerFifo))),
             Map.entry(MIXIN_LAUNCH_PLUGIN, List.of(
                     target("eebe20b521483335da9fdce6b7a52a46581d6727faa207d5c3e41555badc992e",
                             MixinTargetIndexPatch::launchPlugin))),
@@ -138,6 +144,9 @@ public final class LauncherTransformer implements ClassFileTransformer {
             Map.entry(UNION_FILE_SYSTEM, List.of(
                     target("de67081ffbb73a4db7cddfbed23b397cdceea4cfe59938cf3ee16318018434c4",
                             ReadOnlyArchiveOpenPatch::union))),
+            Map.entry(UNION_FILE_SYSTEM_PROVIDER, List.of(
+                    targetWithoutAgentRead("4385f3c63f714548e56f6ebcad2d8b490b9b54132159040c270ab677b48c3504",
+                            UnionFsLockPatch::apply))),
             Map.entry(MIXIN_PROCESSOR, List.of(
                     target("c354f62d30691abf138619853ece6c8f242250384ab77013fab36a3c2b6b427c",
                             MixinTargetIndexPatch::processor))),

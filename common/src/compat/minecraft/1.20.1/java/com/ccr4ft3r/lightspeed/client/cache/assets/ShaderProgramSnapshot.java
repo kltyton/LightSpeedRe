@@ -2,33 +2,39 @@ package com.ccr4ft3r.lightspeed.client.cache.assets;
 
 import com.ccr4ft3r.lightspeed.cache.assets.SnapshotFileStore;
 import com.ccr4ft3r.lightspeed.cache.assets.SnapshotMode;
-import com.mojang.blaze3d.shaders.Shader;
+import com.ccr4ft3r.lightspeed.platform.LoaderEnvironment;
 import com.mojang.blaze3d.shaders.Program;
+import com.mojang.blaze3d.shaders.Shader;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import com.mojang.blaze3d.vertex.VertexFormatElement;
 import net.minecraft.SharedConstants;
-import com.ccr4ft3r.lightspeed.platform.LoaderEnvironment;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL41;
+import org.lwjgl.opengl.GLCapabilities;
 import org.lwjgl.system.MemoryUtil;
 
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.Arrays;
 import java.util.HexFormat;
 
 public final class ShaderProgramSnapshot {
     private static final int MAX_BINARY_BYTES = 64 * 1024 * 1024;
+    private static final String PROCESSED_SCHEMA = "lightspeed-shader-program-v2";
+    private static final String RAW_SCHEMA = "lightspeed-shader-program-raw-v1";
     private static final boolean ENABLED = SnapshotMode.shaderProgramsEnabled(
             System.getProperty("lightspeed.shaderProgramSnapshot"));
     private static final SnapshotFileStore STORE = ENABLED ? new SnapshotFileStore(
             assetDirectory().resolve("shader-programs-v2.bin"), 0x4c535348, 2,
             16_384, MAX_BINARY_BYTES + Integer.BYTES, 512L * 1024L * 1024L) : null;
+    private static volatile DriverProfile cachedDriverProfile;
 
     private ShaderProgramSnapshot() {
     }
@@ -37,11 +43,47 @@ public final class ShaderProgramSnapshot {
         return ENABLED;
     }
 
+    public static boolean supported() {
+        return driverProfile() != null;
+    }
+
+    public static Program createDummyProgram(Program.Type type, String name) {
+        return new DummyProgram(type, name);
+    }
+
     public static boolean restore(Shader shader, VertexFormat vertexFormat, boolean bindAttributes) {
-        if (!supported()) {
+        DriverProfile profile = driverProfile();
+        if (profile == null) {
             return false;
         }
-        String key = key(shader, vertexFormat, bindAttributes);
+        String vertexDigest = ShaderSourceIdentity.digest(Program.Type.VERTEX, shader.getVertexProgram());
+        String fragmentDigest = ShaderSourceIdentity.digest(Program.Type.FRAGMENT, shader.getFragmentProgram());
+        if (vertexDigest == null || fragmentDigest == null) {
+            return false;
+        }
+        String key = contentKey(PROCESSED_SCHEMA, profile.vendor(), profile.renderer(),
+                profile.glVersion(), profile.glslVersion(), profile.binaryFormats(),
+                vertexDigest, fragmentDigest, vertexFormat, bindAttributes);
+        return restoreByKey(shader, key);
+    }
+
+    public static boolean restoreRaw(
+            Shader shader,
+            String vertexDigest,
+            String fragmentDigest,
+            VertexFormat vertexFormat,
+            boolean bindAttributes) {
+        DriverProfile profile = driverProfile();
+        if (profile == null || vertexDigest == null || fragmentDigest == null) {
+            return false;
+        }
+        String key = contentKey(RAW_SCHEMA, profile.vendor(), profile.renderer(),
+                profile.glVersion(), profile.glslVersion(), profile.binaryFormats(),
+                vertexDigest, fragmentDigest, vertexFormat, bindAttributes);
+        return restoreByKey(shader, key);
+    }
+
+    private static boolean restoreByKey(Shader shader, String key) {
         if (key == null) {
             return false;
         }
@@ -55,7 +97,13 @@ public final class ShaderProgramSnapshot {
             int format = encoded.getInt();
             data.put(encoded).flip();
             GL41.glProgramBinary(shader.getId(), format, data);
-            return GL20.glGetProgrami(shader.getId(), GL20.GL_LINK_STATUS) != 0;
+            boolean linked = GL20.glGetProgrami(shader.getId(), GL20.GL_LINK_STATUS) != 0;
+            if (!linked) {
+                while (GL11.glGetError() != GL11.GL_NO_ERROR) {
+                    // Drain driver binary rejection errors before falling back to full compilation.
+                }
+            }
+            return linked;
         } finally {
             MemoryUtil.memFree(data);
         }
@@ -68,7 +116,39 @@ public final class ShaderProgramSnapshot {
     }
 
     public static void capture(Shader shader, VertexFormat vertexFormat, boolean bindAttributes) {
-        if (!supported() || GL20.glGetProgrami(shader.getId(), GL20.GL_LINK_STATUS) == 0) {
+        DriverProfile profile = driverProfile();
+        if (profile == null) {
+            return;
+        }
+        String vertexDigest = ShaderSourceIdentity.digest(Program.Type.VERTEX, shader.getVertexProgram());
+        String fragmentDigest = ShaderSourceIdentity.digest(Program.Type.FRAGMENT, shader.getFragmentProgram());
+        if (vertexDigest == null || fragmentDigest == null) {
+            return;
+        }
+        String key = contentKey(PROCESSED_SCHEMA, profile.vendor(), profile.renderer(),
+                profile.glVersion(), profile.glslVersion(), profile.binaryFormats(),
+                vertexDigest, fragmentDigest, vertexFormat, bindAttributes);
+        captureByKey(shader, key);
+    }
+
+    public static void captureRaw(
+            Shader shader,
+            String vertexDigest,
+            String fragmentDigest,
+            VertexFormat vertexFormat,
+            boolean bindAttributes) {
+        DriverProfile profile = driverProfile();
+        if (profile == null || vertexDigest == null || fragmentDigest == null) {
+            return;
+        }
+        String key = contentKey(RAW_SCHEMA, profile.vendor(), profile.renderer(),
+                profile.glVersion(), profile.glslVersion(), profile.binaryFormats(),
+                vertexDigest, fragmentDigest, vertexFormat, bindAttributes);
+        captureByKey(shader, key);
+    }
+
+    private static void captureByKey(Shader shader, String key) {
+        if (key == null || GL20.glGetProgrami(shader.getId(), GL20.GL_LINK_STATUS) == 0) {
             return;
         }
         int capacity = GL20.glGetProgrami(shader.getId(), GL41.GL_PROGRAM_BINARY_LENGTH);
@@ -89,10 +169,7 @@ public final class ShaderProgramSnapshot {
             output.putInt(format.get(0));
             binary.limit(actual).position(0);
             output.put(binary);
-            String key = key(shader, vertexFormat, bindAttributes);
-            if (key != null) {
-                STORE.put(key, encoded);
-            }
+            STORE.put(key, encoded);
         } finally {
             MemoryUtil.memFree(binary);
         }
@@ -116,37 +193,51 @@ public final class ShaderProgramSnapshot {
         return ENABLED ? STORE.failures() : 0;
     }
 
-    private static boolean supported() {
+    private static DriverProfile driverProfile() {
         if (!ENABLED) {
-            return false;
-        }
-        try {
-            return GL.getCapabilities().OpenGL41 || GL.getCapabilities().GL_ARB_get_program_binary;
-        } catch (IllegalStateException exception) {
-            return false;
-        }
-    }
-
-    private static String key(Shader shader, VertexFormat vertexFormat, boolean bindAttributes) {
-        String vertexDigest = ShaderSourceIdentity.digest(Program.Type.VERTEX, shader.getVertexProgram());
-        String fragmentDigest = ShaderSourceIdentity.digest(Program.Type.FRAGMENT, shader.getFragmentProgram());
-        if (vertexDigest == null || fragmentDigest == null) {
             return null;
         }
-        return contentKey(
+        GLCapabilities capabilities;
+        try {
+            capabilities = GL.getCapabilities();
+        } catch (IllegalStateException exception) {
+            return null;
+        }
+        if (capabilities == null || (!capabilities.OpenGL41 && !capabilities.GL_ARB_get_program_binary)) {
+            return null;
+        }
+        DriverProfile current = cachedDriverProfile;
+        if (current != null && current.capabilities() == capabilities) {
+            return current;
+        }
+        int[] formats = binaryFormats();
+        if (formats.length == 0) {
+            return null;
+        }
+        DriverProfile created = new DriverProfile(
+                capabilities,
                 String.valueOf(GL11.glGetString(GL11.GL_VENDOR)),
                 String.valueOf(GL11.glGetString(GL11.GL_RENDERER)),
                 String.valueOf(GL11.glGetString(GL11.GL_VERSION)),
                 String.valueOf(GL11.glGetString(GL20.GL_SHADING_LANGUAGE_VERSION)),
-                binaryFormats(), vertexDigest, fragmentDigest, vertexFormat, bindAttributes);
+                formats);
+        cachedDriverProfile = created;
+        return created;
     }
 
     static String contentKey(String vendor, String renderer, String glVersion, String glslVersion,
                              int[] binaryFormats, String vertexDigest, String fragmentDigest,
                              VertexFormat vertexFormat, boolean bindAttributes) {
+        return contentKey(PROCESSED_SCHEMA, vendor, renderer, glVersion, glslVersion,
+                binaryFormats, vertexDigest, fragmentDigest, vertexFormat, bindAttributes);
+    }
+
+    private static String contentKey(String schema, String vendor, String renderer, String glVersion, String glslVersion,
+                                     int[] binaryFormats, String vertexDigest, String fragmentDigest,
+                                     VertexFormat vertexFormat, boolean bindAttributes) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            update(digest, "lightspeed-shader-program-v2");
+            update(digest, schema);
             update(digest, vendor);
             update(digest, renderer);
             update(digest, glVersion);
@@ -182,12 +273,12 @@ public final class ShaderProgramSnapshot {
         GL11.glGetIntegerv(GL41.GL_PROGRAM_BINARY_FORMATS, formats);
         int[] result = new int[count];
         formats.get(result);
-        java.util.Arrays.sort(result);
+        Arrays.sort(result);
         return result;
     }
 
     private static void update(MessageDigest digest, String value) {
-        byte[] bytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
         digest.update(ByteBuffer.allocate(Integer.BYTES).putInt(bytes.length).array());
         digest.update(bytes);
     }
@@ -195,5 +286,28 @@ public final class ShaderProgramSnapshot {
     private static Path assetDirectory() {
         return LoaderEnvironment.gameDirectory().resolve("lightspeed-cache")
                 .resolve(SharedConstants.getCurrentVersion().getId()).resolve("client-assets");
+    }
+
+    private record DriverProfile(
+            GLCapabilities capabilities,
+            String vendor,
+            String renderer,
+            String glVersion,
+            String glslVersion,
+            int[] binaryFormats) {
+    }
+
+    private static final class DummyProgram extends Program {
+        private DummyProgram(Program.Type type, String name) {
+            super(type, 0, name);
+        }
+
+        @Override
+        public void attachToShader(Shader shader) {
+        }
+
+        @Override
+        public void close() {
+        }
     }
 }

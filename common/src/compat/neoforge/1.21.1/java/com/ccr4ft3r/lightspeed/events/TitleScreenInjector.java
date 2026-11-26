@@ -3,6 +3,7 @@ package com.ccr4ft3r.lightspeed.events;
 import com.ccr4ft3r.lightspeed.ModConstants;
 import com.ccr4ft3r.lightspeed.cache.GlobalCache;
 import com.ccr4ft3r.lightspeed.client.advice.StartupAdvice;
+import com.ccr4ft3r.lightspeed.client.cache.assets.ShaderProgramSnapshot;
 import com.ccr4ft3r.lightspeed.client.screen.StartupAdviceScreen;
 import com.ccr4ft3r.lightspeed.client.startup.ImmediateOverlayClose;
 import com.ccr4ft3r.lightspeed.startup.compat.EarlyModPackIndexEngine;
@@ -75,6 +76,11 @@ public class TitleScreenInjector {
             BrandingControl.forEachLine(true, false, (index, line) -> brandingLines = index + 1);
             LogUtils.getLogger().info("Lightspeed: Launch took {}s (JVM start to title-screen-operable)", seconds);
             GlobalCache.persistCacheAsync("bootstrap startup image", BootstrapAgentBridge::persistResourceImage);
+            GlobalCache.persistCacheAsync("shader program snapshot", () -> {
+                ShaderProgramSnapshot.persist();
+                LogUtils.getLogger().info("Lightspeed shader snapshot: hits={} misses={} failures={}",
+                        ShaderProgramSnapshot.hits(), ShaderProgramSnapshot.misses(), ShaderProgramSnapshot.failures());
+            });
             GlobalCache.finishStartupCaches();
             EarlyModPackIndexEngine.flushCacheAsync();
             boolean installEnabled = LightspeedConfig.COMMON.installBootstrapAgent.get();

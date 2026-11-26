@@ -6,6 +6,11 @@
   "client": [
     "client.LoadingOverlayMixin",
     "compat.ModernFixAuditMixin",
+    "compat.SodiumSpriteOpaqueFastPathMixin",
+    "client.NativeImageAccessor",
+    "client.MipmapFastPathMixin",
+    "client.SpriteLoaderMipmapMixin",
+    "client.ShaderInstanceSnapshotMixin",
     "resources.MinecraftReloadExecutorMixin",
     "misc.KeyValueConditionMixin",
     "misc.MaterialMixin",

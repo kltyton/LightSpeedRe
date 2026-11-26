@@ -6,6 +6,7 @@
   "client": [
     "client.LoadingOverlayMixin",
     "compat.ModernFixAuditMixin",
+    "compat.SodiumSpriteOpaqueFastPathMixin",
     "resources.MinecraftReloadExecutorMixin",
     "misc.KeyValueConditionMixin",
     "misc.MaterialMixin",
@@ -18,6 +19,8 @@
     "client.InputTypeRegistryMixin",
     "client.NativeImageAccessor",
     "client.NativeImageReadMixin",
+    "client.MipmapFastPathMixin",
+    "client.SpriteLoaderMipmapMixin",
     "client.ModelManagerInputSnapshotMixin",
     "client.ShaderInstanceSnapshotMixin",
     "client.ProgramSourceIdentityMixin",

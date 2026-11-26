@@ -60,6 +60,7 @@ public final class AgentRegressionCheck {
         eventMethodCachePreservesReflectionSemantics();
         ownerGuardRejectsMismatchedAgent();
         packagedAgentIsIsolated();
+        verifiesBootstrapLockAndSchedulePatches();
     }
 
     private static void transformsSupportedLauncherClasses() throws Exception {
@@ -560,6 +561,35 @@ public final class AgentRegressionCheck {
                         "net/minecraftforge/eventbus/ClassLoaderFactory$ASMClassLoader",
                         "e37ab24ca16f279c39b13c78e28ffaba8385f7bf6a94efba68e9c565ff16cb03")
         );
+    }
+
+    private static void verifiesBootstrapLockAndSchedulePatches() throws Exception {
+        List<String> messages = new ArrayList<>();
+        LauncherTransformer transformer = new LauncherTransformer(messages::add);
+        Set<String> names = LauncherTransformer.targetClassNames();
+        List<Target> extras = new ArrayList<>();
+        if (names.contains("net.minecraftforge.fml.ModWorkManager")) {
+            extras.add(target("lightspeed.target.securejar2", "cpw/mods/niofs/union/UnionFileSystemProvider",
+                    "4385f3c63f714548e56f6ebcad2d8b490b9b54132159040c270ab677b48c3504"));
+        }
+        if (names.contains("net.neoforged.fml.ModWorkManager")) {
+            extras.add(target("lightspeed.target.securejar3", "cpw/mods/niofs/union/UnionFileSystemProvider",
+                    "7d007396baf8b4576d281926451dcf540d7c452997483d340d2c8ecaa5020bb1"));
+            extras.add(target("lightspeed.target.neoforge", "net/neoforged/fml/ModWorkManager",
+                    "9230c8f54194d4a79d6c72f49cddd2699278f686cb3879480a0346edd61975db"));
+        }
+        for (Target target : extras) {
+            byte[] original = readEntry(target.jar(), target.entry());
+            require(sha256(original).equals(target.sha256()), "unexpected target bytes for " + target.className());
+            byte[] transformed = transformer.transform(null, null, target.className(), null, null, original);
+            require(transformed != null, "bootstrap target was not transformed: " + target.className());
+            require(!MessageDigest.isEqual(original, transformed), "transform returned unchanged bytes: " + target.className());
+            for (String hookName : target.hookNames()) {
+                require(hasHookCall(transformed, hookName), "transformed class lacks hook " + hookName);
+            }
+            new ClassReader(transformed).accept(new CheckClassAdapter(new ClassWriter(0), true), 0);
+        }
+        require(messages.stream().noneMatch(message -> message.contains("failed")), "extra bootstrap transform logged failure");
     }
 
     private static Target target(String property, String className, String sha256, String... hookNames) {
