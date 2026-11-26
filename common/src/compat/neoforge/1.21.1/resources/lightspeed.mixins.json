@@ -8,6 +8,7 @@
     "compat.emf.EmfThreadLocalModelLoadingContextMixin",
     "compat.LightLoadArchivePersistenceMixin",
     "compat.ModernFixAuditMixin",
+    "compat.netmusic.NetMusicItemRendererMixin",
     "compat.spectrum.SpectrumSkullRendererMixin",
     "client.NeoForgeLoadingOverlayMixin",
     "client.RenderSystemStartupMixin",
