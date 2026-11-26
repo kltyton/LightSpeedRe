@@ -1,5 +1,7 @@
 package com.ccr4ft3r.lightspeed.mixin.registry;
 
+import com.ccr4ft3r.lightspeed.compat.oculus.OculusShaderLanguagePatch;
+import net.minecraftforge.fml.loading.FMLLoader;
 import org.objectweb.asm.tree.ClassNode;
 import org.spongepowered.asm.mixin.extensibility.IMixinConfigPlugin;
 import org.spongepowered.asm.mixin.extensibility.IMixinInfo;
@@ -9,8 +11,10 @@ import java.io.IOException;
 import java.util.List;
 import java.util.Set;
 
-/** Selects the holder routing hooks for Forge's legacy or native per-registry dispatch. */
+/** Selects Forge registry hooks and optional client compatibility hooks. */
 public final class RegistryMixinPlugin implements IMixinConfigPlugin {
+    private static final String OCULUS_LANGUAGE_MIXIN =
+            "com.ccr4ft3r.lightspeed.mixin.compat.oculus.OculusClientLanguageMixin";
     private static final Set<String> LEGACY_HOLDER_MIXINS = Set.of(
             "com.ccr4ft3r.lightspeed.mixin.registry.RegistryObjectAccessor",
             "com.ccr4ft3r.lightspeed.mixin.registry.RegistryObjectHolderMixin",
@@ -20,6 +24,9 @@ public final class RegistryMixinPlugin implements IMixinConfigPlugin {
 
     @Override
     public boolean shouldApplyMixin(String targetClassName, String mixinClassName) {
+        if (OCULUS_LANGUAGE_MIXIN.equals(mixinClassName)) {
+            return FMLLoader.getLoadingModList().getModFileById("oculus") != null;
+        }
         if (mixinClassName.startsWith("com.ccr4ft3r.lightspeed.mixin.compat.emf.")) {
             if (emfModelSelector == null) {
                 try {
@@ -80,5 +87,9 @@ public final class RegistryMixinPlugin implements IMixinConfigPlugin {
     public void preApply(String targetClassName, ClassNode targetClass, String mixinClassName, IMixinInfo mixinInfo) { }
 
     @Override
-    public void postApply(String targetClassName, ClassNode targetClass, String mixinClassName, IMixinInfo mixinInfo) { }
+    public void postApply(String targetClassName, ClassNode targetClass, String mixinClassName, IMixinInfo mixinInfo) {
+        if (OCULUS_LANGUAGE_MIXIN.equals(mixinClassName)) {
+            OculusShaderLanguagePatch.apply(targetClass);
+        }
+    }
 }

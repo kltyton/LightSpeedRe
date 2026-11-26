@@ -15,6 +15,7 @@
     "compat.NetMusicItemRendererMixin",
     "compat.MythicBotanyPylonItemRendererMixin",
     "compat.ldlib.LdlibMetadataLookupMixin",
+    "compat.oculus.OculusClientLanguageMixin",
     "renderer.BlockEntityRenderDispatcherAccessor",
     "renderer.BlockEntityRenderDispatcherMixin",
     "client.ForgeLoadingOverlayMixin",
