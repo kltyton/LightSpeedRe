@@ -66,7 +66,9 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
         if (lightspeed$earlyModIndex == null) {
             lightspeed$earlyModIndex = PackResourcesCacheSupport.tryGetModPackIndex(source);
         }
-        lightspeed$bootstrapIndexHandle = BootstrapAgentBridge.bindResourceIndex(source);
+        if (lightspeed$earlyModIndex == null) {
+            lightspeed$bootstrapIndexHandle = BootstrapAgentBridge.bindResourceIndex(source);
+        }
         if (GlobalCache.isEnabled) {
             lightspeed$resolvedPaths();
             lightspeed$namespaces();
@@ -320,12 +322,12 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
     @Override
     public void lightspeed$setModFile(IModFile modFile) {
         this.lightspeed$modFile = modFile;
-        if (lightspeed$bootstrapIndexHandle == BootstrapAgentBridge.UNKNOWN) {
-            lightspeed$bootstrapIndexHandle = BootstrapAgentBridge.bindResourceIndex(modFile.findResource(""));
-        }
         if (lightspeed$earlyModIndex == null) {
             lightspeed$earlyModIndex = com.ccr4ft3r.lightspeed.startup.compat.PackResourcesCacheSupport
                     .tryGetModPackIndex(modFile);
+        }
+        if (lightspeed$earlyModIndex == null && lightspeed$bootstrapIndexHandle == BootstrapAgentBridge.UNKNOWN) {
+            lightspeed$bootstrapIndexHandle = BootstrapAgentBridge.bindResourceIndex(modFile.findResource(""));
         }
         boolean usesEarlyIndex = lightspeed$earlyModIndex != null && !FusionPackCompat.hasOverrides(this);
         this.lightspeed$id = !usesEarlyIndex && PackResourcesCacheSupport.hasSingleJarModRoot(modFile)
@@ -392,14 +394,14 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
     @Override
     public Boolean lightspeed$hasIndexedResource(PackType type, ResourceLocation location) {
         PackType effectiveType = lightspeed$effectiveType(type, location);
+        ModPackIndex earlyIndex = lightspeed$earlyModIndex;
+        if (earlyIndex != null) {
+            return earlyIndex.contains(effectiveType, location.getNamespace(), location.getPath());
+        }
         if (lightspeed$bootstrapIndexHandle != BootstrapAgentBridge.UNKNOWN) {
             int indexed = BootstrapAgentBridge.containsResource(lightspeed$bootstrapIndexHandle,
                     effectiveType.getDirectory() + '/' + location.getNamespace() + '/' + location.getPath());
             if (indexed != BootstrapAgentBridge.UNKNOWN) return indexed == 1;
-        }
-        ModPackIndex earlyIndex = lightspeed$earlyModIndex;
-        if (earlyIndex != null) {
-            return earlyIndex.contains(effectiveType, location.getNamespace(), location.getPath());
         }
         if (!lightspeed$persistedCacheLoad.isDone()) {
             return null;
@@ -411,6 +413,48 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
         boolean present = lightspeed$getResourcePathIndex(effectiveType, location.getNamespace(), cachedPaths)
                 .contains(location.getPath());
         return present ? Boolean.TRUE : lightspeed$id == null ? null : Boolean.FALSE;
+    }
+
+    @Override
+    public Boolean lightspeed$containsIndexed(String type, String namespace, String path) {
+        if (!GlobalCache.isEnabled || !GlobalCache.shouldCacheWalkedPaths || FusionPackCompat.hasOverrides(this)) {
+            return null;
+        }
+        PackType packType = "assets".equals(type) ? PackType.CLIENT_RESOURCES
+                : "data".equals(type) ? PackType.SERVER_DATA : null;
+        if (packType == null) {
+            return null;
+        }
+        if (path != null && path.startsWith("lang/")) {
+            packType = PackType.CLIENT_RESOURCES;
+        }
+        ModPackIndex earlyIndex = lightspeed$earlyModIndex;
+        if (earlyIndex != null) {
+            return earlyIndex.contains(packType, namespace, path);
+        }
+        return null;
+    }
+
+    @Override
+    public Boolean lightspeed$hasAnyUnder(PackType type, String namespace, String path) {
+        if (!GlobalCache.isEnabled || !GlobalCache.shouldCacheWalkedPaths || FusionPackCompat.hasOverrides(this)) {
+            return null;
+        }
+        if (lightspeed$pathValidationCache().error(path).isPresent()) {
+            return null;
+        }
+        ModPackIndex earlyIndex = lightspeed$earlyModIndex;
+        if (earlyIndex != null) {
+            ResourcePathIndex earlyPaths = earlyIndex.pathIndex(type, namespace);
+            return earlyPaths != null && earlyPaths.hasAtOrUnder(path);
+        }
+        if (lightspeed$persistedCacheLoad.isDone()) {
+            List<String> cachedPaths = lightspeed$getCachedFilePaths(type, namespace);
+            if (cachedPaths != null) {
+                return lightspeed$getResourcePathIndex(type, namespace, cachedPaths).hasAtOrUnder(path);
+            }
+        }
+        return null;
     }
 
     @Unique

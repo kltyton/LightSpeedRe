@@ -1,7 +1,7 @@
 package com.ccr4ft3r.lightspeed.mixin.resources;
 
-import com.ccr4ft3r.lightspeed.cache.resource.ResourceListingCache;
 import com.ccr4ft3r.lightspeed.cache.GlobalCache;
+import com.ccr4ft3r.lightspeed.cache.resource.ResourceListingCache;
 import net.minecraft.resources.FileToIdConverter;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.packs.resources.Resource;
@@ -13,6 +13,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
+import java.util.List;
 import java.util.Map;
 
 @Mixin(FileToIdConverter.class)
@@ -25,6 +26,14 @@ public abstract class FileToIdConverterMixin {
             CallbackInfoReturnable<Map<ResourceLocation, Resource>> result) {
         if (GlobalCache.isEnabled && resources instanceof ResourceListingCache cache) {
             result.setReturnValue(cache.lightspeed$listMatchingResources(prefix, extension));
+        }
+    }
+
+    @Inject(method = "listMatchingResourceStacks", at = @At("HEAD"), cancellable = true)
+    private void lightspeed$reuseReloadStackListing(ResourceManager resources,
+            CallbackInfoReturnable<Map<ResourceLocation, List<Resource>>> result) {
+        if (GlobalCache.isEnabled && resources instanceof ResourceListingCache cache) {
+            result.setReturnValue(cache.lightspeed$listMatchingResourceStacks(prefix, extension));
         }
     }
 }

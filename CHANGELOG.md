@@ -1,5 +1,41 @@
 # Changelog
 
+## 2.0.12
+
+### English
+
+- Add lazy directory-range indexing in `ResourcePathIndex`, compact indexing for `VanillaPackResources`, shared ZIP overlay indexing on `SharedZipFileAccess`, and empty sub-pack short-circuiting across `FallbackResourceManager`, `DelegatingPackResources`, and `CompositePackResources`.
+- Remove lock contention in `MultiPackResourceManager` resource listing caches on 1.21.1+ and reuse cached `FileToIdConverter.listMatchingResourceStacks` lookups during initial reload.
+- Avoid materializing the full blockstate hash table in `ModelLocationSets.IndexedLocationSet` during bulk block population and subsequent item/standalone additions, optimize `StateVariantSupport` lookups for large blockstate tables, switch `BitSetVoxelUnion` to word-level bit operations, make `ObjectHolderDispatch` updates incremental, and narrow `FontWarmupSnapshot` provider probing.
+- Check the lock-free early mod index before the Agent fallback in Forge `PathResourcePackMixin` to avoid redundant archive view creation, and add NeoForge 1.21.1 `SecureJarHandler` (`Jar$JarModuleDataProvider`) direct path lookup support in the Bootstrap Agent.
+
+### 中文
+
+- 为 `ResourcePathIndex` 新增懒建目录区间索引，为原版 `VanillaPackResources` 新增紧凑索引，将 ZIP 索引下沉至 `SharedZipFileAccess` 供 overlay 共享，并在 `FallbackResourceManager`、`DelegatingPackResources` 与 `CompositePackResources` 中跳过空命名空间与空目录子包调用。
+- 消除 1.21.1+ `MultiPackResourceManager` 资源列表缓存的 `ConcurrentHashMap` 桶锁竞争，并复用首次重载期间的 `FileToIdConverter.listMatchingResourceStacks` 查询。
+- 避免 `ModelLocationSets.IndexedLocationSet` 在批量写入方块状态及追加物品/独立模型时构建完整方块状态哈希表；优化大状态集方块的 `StateVariantSupport` 查找、将 `BitSetVoxelUnion` 改为字级位运算、使 `ObjectHolderDispatch` 增量追加更新，并缩减 `FontWarmupSnapshot` 提供方探测次数。
+- 调整 Forge `PathResourcePackMixin` 优先走零分配早期索引以避免 Agent 模式下重复创建归档视图，并在 Bootstrap Agent 中补齐 NeoForge 1.21.1 `SecureJarHandler`（`Jar$JarModuleDataProvider`）的直接路径读取补丁。
+
+## 2.0.11
+
+- Use compatible NeoForge version ranges on 26.1.2 and 26.2 targets across all 8 release artifacts.
+- 将 NeoForge 26.1.2 与 26.2 目标的加载器依赖调整为兼容版本范围，覆盖全部 8 个发行目标。
+
+## 2.0.10
+
+- Remove redundant early ZIP pre-indexing work in non-Agent launches, fix `CacheFiles` persistence rewrite overhead, streamline `VanillaPackResourcesMixin` and `SelectorMixin`, remove unnecessary `Material` / `ResourceLocation` hash mixins, and update `PixelSnapshotCodec` to CRC32C v4.
+- 消除无 Agent 模式下冗余的早期 ZIP 预索引开销，修复缓存持久化重复写盘问题，精简 `VanillaPackResourcesMixin` 与 `SelectorMixin`，移除多余哈希 Mixin，并将 `PixelSnapshotCodec` 升级为 CRC32C v4。
+
+## 2.0.9
+
+- Reduce `UnionFileSystem` lock contention in the Bootstrap Agent, add parallel mipmap generation and Sodium opaque sprite fast paths, and add source-level `#moj_import` shader binary snapshot keys across Forge, NeoForge, and Fabric targets.
+- 缩减 Bootstrap Agent 中 `UnionFileSystem` 锁竞争，新增并行 Mipmap 与 Sodium 不透明精灵快路径，并为 Forge、NeoForge 与 Fabric 统一接入源码级 `#moj_import` 着色器二进制缓存键。
+
+## 2.0.8
+
+- Fix Oculus shader translations on Forge, NetMusic quest icon rendering on NeoForge, key mapping registration and namespace resource listing, and Spectrum skull model initialization on first render.
+- 修复 Forge 端 Oculus 着色器翻译、NeoForge 端 NetMusic 任务图标渲染、键位注册与命名空间资源列举，以及 Spectrum 头颅模型首次渲染初始化问题。
+
 ## 2.0.7
 
 - Use instance-relative paths for optional local Agent setup in PCL and Prism. Remove the previous automatic Agent settings from these launcher profiles.
@@ -57,7 +93,6 @@
 - NeoForge 发行包接入同源启动 Agent、启动器参数安装与 `title-screen-operable` 毫秒级里程碑。Forge 保留现有 Forge 专用 Pack Compiler。
 - Forge 的类直通按实际 EventBus 6.2.33 与 Forge 47.4.18+ 清理器字节码确认并启用；NeoForge 移除会触发重复 Common setup 的异步模组资源包预加载，并只在 Loader 无错误且完成后记录有效标题。两个版本移除无可辨墙钟收益的模块图重放。
 - Forge 移除无可辨启动收益的形状组合缓存及其 Mixin 入口。
-- 四个整合包的正式发行 JAR 单次验收及不可直接比较的历史图片数据见 [2.0.0 验收记录](docs/release-2.0.0-validation.md)。
 
 ### English
 
@@ -66,7 +101,6 @@
 - Integrate the startup Agent, launcher argument installation, and millisecond `title-screen-operable` milestone into NeoForge. The Forge Pack Compiler remains Forge-specific.
 - Enable the verified class pass-through for EventBus 6.2.33 and Forge 47.4.18+; remove NeoForge's asynchronous mod-pack preload after it caused duplicate Common setup dispatch, and gate the title marker on completed, error-free loading. Remove module graph replay from both versions.
 - Remove the Forge voxel-shape combination cache and its Mixin entry after it showed no discernible startup benefit.
-- Record single-run acceptance for four modpacks in [2.0.0 validation](docs/release-2.0.0-validation.md).
 
 ## 1.20.1-1.2.5
 

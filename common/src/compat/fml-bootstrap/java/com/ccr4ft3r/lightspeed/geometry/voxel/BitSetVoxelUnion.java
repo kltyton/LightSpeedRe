@@ -11,10 +11,11 @@ import net.minecraft.world.phys.shapes.IdenticalMerger;
 import net.minecraft.world.phys.shapes.IndexMerger;
 import net.minecraft.world.phys.shapes.IndirectMerger;
 
+import java.nio.LongBuffer;
 import java.util.Arrays;
 import java.util.BitSet;
 
-/** Expands occupied strips through the native coordinate merger using thread-local scratch buffers. */
+/** Expands occupied strips through the native coordinate merger using word-level scratch buffers. */
 public final class BitSetVoxelUnion {
     private static final ThreadLocal<FillScratch> SCRATCH = ThreadLocal.withInitial(FillScratch::new);
 
@@ -45,6 +46,12 @@ public final class BitSetVoxelUnion {
         int resultYSize = result.getYSize();
         int resultZSize = result.getZSize();
 
+        boolean hasFirstBits = !firstBits.isEmpty();
+        boolean hasSecondBits = !secondBits.isEmpty();
+        if (!hasFirstBits && !hasSecondBits) {
+            return true;
+        }
+
         FillScratch scratch = SCRATCH.get();
         scratch.prepareAxes(xLen, yLen, x, y);
         scratch.prepareZ(firstZSize, secondZSize, resultZSize, z);
@@ -62,21 +69,38 @@ public final class BitSetVoxelUnion {
         int firstYSize = first.getYSize();
         int secondXSize = second.getXSize();
         int secondYSize = second.getYSize();
-        boolean hasFirstBits = !firstBits.isEmpty();
-        boolean hasSecondBits = !secondBits.isEmpty();
-        if (!hasFirstBits && !hasSecondBits) {
-            return true;
-        }
 
+        long totalBitsLong = (long) xLen * resultYSize * resultZSize;
         if (resultZSize <= 63
                 && (!hasFirstBits || firstZSize <= 64)
-                && (!hasSecondBits || secondZSize <= 64)) {
+                && (!hasSecondBits || secondZSize <= 64)
+                && totalBitsLong > 0L && totalBitsLong <= Integer.MAX_VALUE
+                && resultBits.isEmpty()
+                && result.getClass() == BitSetDiscreteVoxelShape.class) {
             long[] firstWords = hasFirstBits ? firstBits.toLongArray() : null;
             long[] secondWords = hasSecondBits ? secondBits.toLongArray() : null;
+            boolean firstZIdentity = hasFirstBits && firstZSize == resultZSize
+                    && isIdentityZ(firstZStarts, firstZEnds, firstZSize);
+            boolean secondZIdentity = hasSecondBits && secondZSize == resultZSize
+                    && isIdentityZ(secondZStarts, secondZEnds, secondZSize);
+            long firstZMask = firstZSize == 64 ? -1L : ((1L << firstZSize) - 1L);
+            long secondZMask = secondZSize == 64 ? -1L : ((1L << secondZSize) - 1L);
+
             int firstRows = hasFirstBits ? firstXSize * firstYSize : 0;
             int secondRows = hasSecondBits ? secondXSize * secondYSize : 0;
-            long[] firstMapped = (hasFirstBits && firstRows <= 4096) ? scratch.prepareFirstMapped(firstRows) : null;
-            long[] secondMapped = (hasSecondBits && secondRows <= 4096) ? scratch.prepareSecondMapped(secondRows) : null;
+            long[] firstMapped = (hasFirstBits && !firstZIdentity && firstRows <= 4096)
+                    ? scratch.prepareFirstMapped(firstRows) : null;
+            long[] secondMapped = (hasSecondBits && !secondZIdentity && secondRows <= 4096)
+                    ? scratch.prepareSecondMapped(secondRows) : null;
+
+            int wordCount = (int) ((totalBitsLong + 63L) >>> 6);
+            long[] outWords = scratch.prepareOutWords(wordCount);
+            int minX = Integer.MAX_VALUE;
+            int minY = Integer.MAX_VALUE;
+            int minZ = Integer.MAX_VALUE;
+            int maxX = Integer.MIN_VALUE;
+            int maxY = Integer.MIN_VALUE;
+            int maxZ = Integer.MIN_VALUE;
 
             for (int outputX = 0; outputX < xLen; outputX++) {
                 int fx = xFirst[outputX];
@@ -89,21 +113,24 @@ public final class BitSetVoxelUnion {
                 int xOutBase = outputX * resultYSize;
                 int firstXBase = fx * firstYSize;
                 int secondXBase = sx * secondYSize;
+                boolean rowHadBits = false;
                 for (int outputY = 0; outputY < yLen; outputY++) {
                     long outMask = 0L;
                     if (checkFirstX) {
                         int fy = yFirst[outputY];
                         if (fy >= 0 && fy < firstYSize) {
                             int fRow = firstXBase + fy;
-                            if (firstMapped != null) {
+                            if (firstZIdentity) {
+                                outMask |= extractRowBits(firstWords, fRow, firstZSize, firstZMask);
+                            } else if (firstMapped != null) {
                                 long fm = firstMapped[fRow];
                                 if (fm == -1L) {
-                                    fm = mapSourceRowMask(firstWords, fRow, firstZSize, firstZStarts, firstZEnds);
+                                    fm = mapSourceRowMask(firstWords, fRow, firstZSize, firstZMask, firstZStarts, firstZEnds);
                                     firstMapped[fRow] = fm;
                                 }
                                 outMask |= fm;
                             } else {
-                                outMask |= mapSourceRowMask(firstWords, fRow, firstZSize, firstZStarts, firstZEnds);
+                                outMask |= mapSourceRowMask(firstWords, fRow, firstZSize, firstZMask, firstZStarts, firstZEnds);
                             }
                         }
                     }
@@ -111,21 +138,56 @@ public final class BitSetVoxelUnion {
                         int sy = ySecond[outputY];
                         if (sy >= 0 && sy < secondYSize) {
                             int sRow = secondXBase + sy;
-                            if (secondMapped != null) {
+                            if (secondZIdentity) {
+                                outMask |= extractRowBits(secondWords, sRow, secondZSize, secondZMask);
+                            } else if (secondMapped != null) {
                                 long sm = secondMapped[sRow];
                                 if (sm == -1L) {
-                                    sm = mapSourceRowMask(secondWords, sRow, secondZSize, secondZStarts, secondZEnds);
+                                    sm = mapSourceRowMask(secondWords, sRow, secondZSize, secondZMask, secondZStarts, secondZEnds);
                                     secondMapped[sRow] = sm;
                                 }
                                 outMask |= sm;
                             } else {
-                                outMask |= mapSourceRowMask(secondWords, sRow, secondZSize, secondZStarts, secondZEnds);
+                                outMask |= mapSourceRowMask(secondWords, sRow, secondZSize, secondZMask, secondZStarts, secondZEnds);
                             }
                         }
                     }
                     if (outMask != 0L) {
-                        writeMappedMask(resultBits, (xOutBase + outputY) * resultZSize, outMask, outputX, outputY, bounds);
+                        rowHadBits = true;
+                        if (outputY < minY) minY = outputY;
+                        if (outputY > maxY) maxY = outputY;
+                        int lo = Long.numberOfTrailingZeros(outMask);
+                        int hi = 63 - Long.numberOfLeadingZeros(outMask);
+                        if (lo < minZ) minZ = lo;
+                        if (hi > maxZ) maxZ = hi;
+                        int bitPos = (xOutBase + outputY) * resultZSize;
+                        int wordIdx = bitPos >>> 6;
+                        int bitOff = bitPos & 63;
+                        outWords[wordIdx] |= outMask << bitOff;
+                        if (bitOff + resultZSize > 64) {
+                            outWords[wordIdx + 1] |= outMask >>> (64 - bitOff);
+                        }
                     }
+                }
+                if (rowHadBits) {
+                    if (outputX < minX) minX = outputX;
+                    maxX = outputX;
+                }
+            }
+            if (maxX >= 0) {
+                bounds[0] = minX;
+                bounds[1] = minY;
+                bounds[2] = minZ;
+                bounds[3] = maxX;
+                bounds[4] = maxY;
+                bounds[5] = maxZ;
+                int usedWords = wordCount;
+                while (usedWords > 0 && outWords[usedWords - 1] == 0L) {
+                    usedWords--;
+                }
+                if (usedWords > 0) {
+                    ((BitSetVoxelStorageAccess) (Object) result)
+                            .lightspeed$setStorage(BitSet.valueOf(LongBuffer.wrap(outWords, 0, usedWords)));
                 }
             }
             return true;
@@ -158,6 +220,15 @@ public final class BitSetVoxelUnion {
                                 resultBits, outputBase, outputX, outputY, bounds);
                     }
                 }
+            }
+        }
+        return true;
+    }
+
+    private static boolean isIdentityZ(int[] starts, int[] ends, int len) {
+        for (int i = 0; i < len; i++) {
+            if (starts[i] != i || ends[i] != i + 1) {
+                return false;
             }
         }
         return true;
@@ -289,8 +360,7 @@ public final class BitSetVoxelUnion {
                 && bounds[4] == Integer.MIN_VALUE && bounds[5] == Integer.MIN_VALUE;
     }
 
-    private static long mapSourceRowMask(long[] words, int rowIndex, int zSize, int[] starts, int[] ends) {
-        long zMask = zSize == 64 ? -1L : ((1L << zSize) - 1L);
+    private static long mapSourceRowMask(long[] words, int rowIndex, int zSize, long zMask, int[] starts, int[] ends) {
         long mask = extractRowBits(words, rowIndex, zSize, zMask);
         if (mask == 0L) {
             return 0L;
@@ -310,44 +380,6 @@ public final class BitSetVoxelUnion {
             mask &= (end >= 64 ? 0L : (-1L << end));
         }
         return mapped;
-    }
-
-    private static void writeMappedMask(
-            BitSet target,
-            int outputBase,
-            long outMask,
-            int outputX,
-            int outputY,
-            int[] bounds
-    ) {
-        bounds[0] = Math.min(bounds[0], outputX);
-        bounds[1] = Math.min(bounds[1], outputY);
-        bounds[3] = Math.max(bounds[3], outputX);
-        bounds[4] = Math.max(bounds[4], outputY);
-
-        int lo = Long.numberOfTrailingZeros(outMask);
-        bounds[2] = Math.min(bounds[2], lo);
-        long shifted = outMask >>> lo;
-        if ((shifted & (shifted + 1L)) == 0L) {
-            int hi = lo + Long.numberOfTrailingZeros(~shifted);
-            target.set(outputBase + lo, outputBase + hi);
-            bounds[5] = Math.max(bounds[5], hi - 1);
-            return;
-        }
-
-        long m = outMask;
-        int maxZ = bounds[5];
-        while (m != 0L) {
-            int z0 = Long.numberOfTrailingZeros(m);
-            long t = m >>> z0;
-            int z1 = z0 + Long.numberOfTrailingZeros(~t);
-            target.set(outputBase + z0, outputBase + z1);
-            if (z1 - 1 > maxZ) {
-                maxZ = z1 - 1;
-            }
-            m &= (z1 >= 64 ? 0L : (-1L << z1));
-        }
-        bounds[5] = maxZ;
     }
 
     private static void copyRow(BitSet source, int rowIndex, int zSize,
@@ -384,8 +416,17 @@ public final class BitSetVoxelUnion {
         private int activeSecondZSize;
         private long[] firstMapped = new long[256];
         private long[] secondMapped = new long[256];
+        private long[] outWords = new long[256];
         private long[] boxMasks = new long[1024];
         private boolean boxMasksInUse;
+
+        private long[] prepareOutWords(int wordCount) {
+            if (wordCount > outWords.length) {
+                outWords = new long[Math.max(wordCount, outWords.length << 1)];
+            }
+            Arrays.fill(outWords, 0, wordCount, 0L);
+            return outWords;
+        }
 
         private long[] acquireBoxMasks(int rows) {
             if (boxMasksInUse) {

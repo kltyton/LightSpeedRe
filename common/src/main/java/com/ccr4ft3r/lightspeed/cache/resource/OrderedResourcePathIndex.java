@@ -28,6 +28,21 @@ public final class OrderedResourcePathIndex {
         return first < sorted.length && original.get(sorted[first]).equals(path);
     }
 
+    public boolean hasAtOrUnder(String path) {
+        if (sorted.length == 0) {
+            return false;
+        }
+        if (path.isEmpty()) {
+            return true;
+        }
+        if (!path.endsWith("/") && contains(path)) {
+            return true;
+        }
+        String prefix = path.endsWith("/") ? path : path + "/";
+        int start = lowerBound(prefix);
+        return start < sorted.length && original.get(sorted[start]).startsWith(prefix);
+    }
+
     public List<String> entriesStartingWith(String prefix) {
         int start = lowerBound(prefix);
         int end = endOfPrefix(start, prefix);

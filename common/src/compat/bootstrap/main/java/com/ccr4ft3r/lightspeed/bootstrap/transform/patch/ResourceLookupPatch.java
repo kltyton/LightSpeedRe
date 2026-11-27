@@ -34,8 +34,12 @@ public final class ResourceLookupPatch {
         ClassNode node = AsmPatchSupport.read(bytes);
         triggerUnionRootBinding(node);
         cachePackages(node, false);
+        MethodNode pathLookup = pathLookupCompressed(bytes, false);
+        pathLookup.access = 0; // package-private for Jar$JarModuleDataProvider
+        pathLookup.name = "lightspeed$findPath";
+        node.methods.add(pathLookup);
         MethodNode method = AsmPatchSupport.method(node, "findFile", "(Ljava/lang/String;)Ljava/util/Optional;");
-        guardMembership(node, method, false, false);
+        guardMembership(node, method, false, false, false);
         return AsmPatchSupport.write(node);
     }
 
@@ -54,11 +58,12 @@ public final class ResourceLookupPatch {
             skipUnsignedVerification(node);
         }
         MethodNode method = AsmPatchSupport.method(node, "findFile", "(Ljava/lang/String;)Ljava/util/Optional;");
-        guardMembership(node, method, false, true);
+        guardMembership(node, method, false, false, true);
         return AsmPatchSupport.write(node);
     }
 
-    private static void guardMembership(ClassNode node, MethodNode method, boolean expanded, boolean hasGetRootPath) {
+    private static void guardMembership(ClassNode node, MethodNode method, boolean expandedFrames,
+                                        boolean returnPath, boolean hasGetRootPath) {
         LabelNode proceed = new LabelNode();
         LabelNode unknown = new LabelNode();
         InsnList guard = new InsnList();
@@ -72,19 +77,19 @@ public final class ResourceLookupPatch {
         guard.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL, node.name, "getPrimaryPath", "()Ljava/nio/file/Path;", false));
         guard.add(new VarInsnNode(Opcodes.ALOAD, 1));
         guard.add(new MethodInsnNode(Opcodes.INVOKESTATIC, AsmPatchSupport.HOOK_OWNER,
-                expanded ? "findIndexedResourcePath" : "findIndexedResource",
+                returnPath ? "findIndexedResourcePath" : "findIndexedResource",
                 "(Ljava/nio/file/Path;Ljava/nio/file/Path;Ljava/lang/String;)Ljava/util/Optional;", false));
         guard.add(new InsnNode(Opcodes.DUP));
         guard.add(new JumpInsnNode(Opcodes.IFNULL, unknown));
         guard.add(new InsnNode(Opcodes.ARETURN));
         guard.add(unknown);
-        guard.add(new FrameNode(expanded ? Opcodes.F_NEW : Opcodes.F_SAME1,
-                expanded ? 2 : 0, expanded ? new Object[]{node.name, "java/lang/String"} : null,
+        guard.add(new FrameNode(expandedFrames ? Opcodes.F_NEW : Opcodes.F_SAME1,
+                expandedFrames ? 2 : 0, expandedFrames ? new Object[]{node.name, "java/lang/String"} : null,
                 1, new Object[]{"java/util/Optional"}));
         guard.add(new InsnNode(Opcodes.POP));
         guard.add(proceed);
-        guard.add(new FrameNode(expanded ? Opcodes.F_NEW : Opcodes.F_SAME,
-                expanded ? 2 : 0, expanded ? new Object[]{node.name, "java/lang/String"} : null, 0, null));
+        guard.add(new FrameNode(expandedFrames ? Opcodes.F_NEW : Opcodes.F_SAME,
+                expandedFrames ? 2 : 0, expandedFrames ? new Object[]{node.name, "java/lang/String"} : null, 0, null));
         method.instructions.insertBefore(method.instructions.getFirst(), guard);
 
     }
@@ -93,7 +98,20 @@ public final class ResourceLookupPatch {
         ClassNode node = new ClassNode();
         new ClassReader(bytes).accept(node, ClassReader.EXPAND_FRAMES);
         MethodNode direct = AsmPatchSupport.method(node, "findFile", "(Ljava/lang/String;)Ljava/util/Optional;");
-        guardMembership(node, direct, true, true);
+        guardMembership(node, direct, true, true, true);
+        stripUriConversion(direct);
+        return direct;
+    }
+
+    private static MethodNode pathLookupCompressed(byte[] bytes, boolean hasGetRootPath) {
+        ClassNode node = AsmPatchSupport.read(bytes);
+        MethodNode direct = AsmPatchSupport.method(node, "findFile", "(Ljava/lang/String;)Ljava/util/Optional;");
+        guardMembership(node, direct, false, true, hasGetRootPath);
+        stripUriConversion(direct);
+        return direct;
+    }
+
+    private static void stripUriConversion(MethodNode direct) {
         MethodInsnNode uriMap = AsmPatchSupport.uniqueInvocation(direct, Opcodes.INVOKEVIRTUAL,
                 "java/util/Optional", "map", "(Ljava/util/function/Function;)Ljava/util/Optional;");
         AbstractInsnNode mapper = uriMap.getPrevious();
@@ -103,7 +121,6 @@ public final class ResourceLookupPatch {
         }
         direct.instructions.remove(mapper);
         direct.instructions.remove(uriMap);
-        return direct;
     }
 
     private static void triggerUnionRootBinding(ClassNode node) {

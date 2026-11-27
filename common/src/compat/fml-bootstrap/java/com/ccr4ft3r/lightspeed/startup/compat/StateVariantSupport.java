@@ -7,13 +7,15 @@ import net.minecraft.world.level.block.state.StateDefinition;
 import net.minecraft.world.level.block.state.properties.Property;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Objects;
 
 /**
- * Zero-allocation replacement for ResourcefulLib's {@code StateVariant.getStates(StateDefinition, String)},
- * avoiding Guava {@code Splitter}, {@code HashMap}, {@code Stream}, and {@code EntryIterator} overhead
- * while preserving exact parsing, duplicate-override, error message, and {@link DataResult} semantics.
+ * Direct-addressed replacement for ResourcefulLib's {@code StateVariant.getStates(StateDefinition, String)},
+ * avoiding Guava {@code Splitter}, {@code HashMap}, {@code Stream}, and O(N) linear state scans when
+ * targeting standard {@link StateDefinition} Cartesian state tables while preserving exact parsing,
+ * duplicate-override, error message, and {@link DataResult} semantics.
  */
 public final class StateVariantSupport {
     private StateVariantSupport() {
@@ -99,8 +101,27 @@ public final class StateVariantSupport {
         }
 
         int totalStates = possibleStates.size();
-        List<BlockState> matched = new ArrayList<>(Math.min(totalStates, 16));
         Block owner = definition.getOwner();
+
+        // Fast O(propCount) direct jump when all block properties are specified on a standard StateDefinition.
+        if (totalStates > 1 && definition.getClass() == StateDefinition.class) {
+            Collection<Property<?>> allProps = definition.getProperties();
+            if (propCount == allProps.size()) {
+                BlockState direct = tryResolveFullState(definition, allProps, props, vals, propCount, totalStates, owner);
+                if (direct != null) {
+                    return DataResult.success(List.of(direct));
+                }
+            } else if (totalStates > 16) {
+                List<BlockState> sliced = tryResolveCartesianSlice(possibleStates, allProps, props, vals, propCount, totalStates, owner);
+                if (sliced != null) {
+                    return sliced.isEmpty()
+                            ? DataResult.error(() -> "No states found for " + input)
+                            : DataResult.success(sliced);
+                }
+            }
+        }
+
+        List<BlockState> matched = new ArrayList<>(Math.min(totalStates, 16));
         for (int i = 0; i < totalStates; i++) {
             BlockState state = possibleStates.get(i);
             if (state == null || !state.is(owner)) {
@@ -122,5 +143,170 @@ public final class StateVariantSupport {
             return DataResult.error(() -> "No states found for " + input);
         }
         return DataResult.success(List.copyOf(matched));
+    }
+
+    private static BlockState tryResolveFullState(
+            StateDefinition<Block, BlockState> definition,
+            Collection<Property<?>> allProps,
+            Property<?>[] props,
+            Comparable<?>[] vals,
+            int propCount,
+            int totalStates,
+            Block owner
+    ) {
+        long expectedProduct = 1L;
+        for (Property<?> prop : allProps) {
+            expectedProduct *= prop.getPossibleValues().size();
+            if (expectedProduct > totalStates) {
+                return null;
+            }
+        }
+        if (expectedProduct != totalStates) {
+            return null;
+        }
+        BlockState candidate = definition.any();
+        if (candidate == null) {
+            return null;
+        }
+        for (int i = 0; i < propCount; i++) {
+            candidate = setValueUnchecked(candidate, props[i], vals[i]);
+        }
+        return candidate != null && candidate.is(owner) ? candidate : null;
+    }
+
+    private static List<BlockState> tryResolveCartesianSlice(
+            List<BlockState> possibleStates,
+            Collection<Property<?>> allProps,
+            Property<?>[] fixedProps,
+            Comparable<?>[] fixedVals,
+            int propCount,
+            int totalStates,
+            Block owner
+    ) {
+        int dim = allProps.size();
+        Property<?>[] ordered = new Property<?>[dim];
+        int[] sizes = new int[dim];
+        int[] fixedOrdinal = new int[dim];
+        int idx = 0;
+        long product = 1L;
+        for (Property<?> p : allProps) {
+            ordered[idx] = p;
+            Collection<?> values = p.getPossibleValues();
+            int sz = values.size();
+            sizes[idx] = sz;
+            product *= sz;
+            if (product > totalStates) {
+                return null;
+            }
+            int ordinal = -1;
+            for (int f = 0; f < propCount; f++) {
+                if (fixedProps[f] == p) {
+                    ordinal = ordinalOf(values, fixedVals[f]);
+                    if (ordinal < 0) {
+                        return null;
+                    }
+                    break;
+                }
+            }
+            fixedOrdinal[idx] = ordinal;
+            idx++;
+        }
+        if (product != totalStates) {
+            return null;
+        }
+
+        int[] strides = new int[dim];
+        int stride = 1;
+        for (int d = dim - 1; d >= 0; d--) {
+            strides[d] = stride;
+            stride *= sizes[d];
+        }
+
+        int baseIndex = 0;
+        int freeCount = 0;
+        int matchCount = 1;
+        int[] freeSizes = new int[dim];
+        int[] freeStrides = new int[dim];
+        for (int d = 0; d < dim; d++) {
+            if (fixedOrdinal[d] >= 0) {
+                baseIndex += fixedOrdinal[d] * strides[d];
+            } else {
+                freeSizes[freeCount] = sizes[d];
+                freeStrides[freeCount] = strides[d];
+                matchCount *= sizes[d];
+                freeCount++;
+            }
+        }
+
+        // Verify the Cartesian ordering at baseIndex before enumerating the slice.
+        BlockState sample = possibleStates.get(baseIndex);
+        if (sample == null) {
+            return null;
+        }
+        for (int f = 0; f < propCount; f++) {
+            if (!Objects.equals(sample.getValue(fixedProps[f]), fixedVals[f])) {
+                return null;
+            }
+        }
+        if (matchCount > 1) {
+            int lastOffset = 0;
+            for (int k = 0; k < freeCount; k++) {
+                lastOffset += (freeSizes[k] - 1) * freeStrides[k];
+            }
+            BlockState endSample = possibleStates.get(baseIndex + lastOffset);
+            if (endSample == null) {
+                return null;
+            }
+            for (int f = 0; f < propCount; f++) {
+                if (!Objects.equals(endSample.getValue(fixedProps[f]), fixedVals[f])) {
+                    return null;
+                }
+            }
+        }
+
+        List<BlockState> matched = new ArrayList<>(matchCount);
+        collectCartesian(possibleStates, baseIndex, 0, freeCount, freeSizes, freeStrides, owner, matched);
+        return matched.isEmpty() ? List.of() : List.copyOf(matched);
+    }
+
+    private static void collectCartesian(
+            List<BlockState> possibleStates,
+            int index,
+            int depth,
+            int freeCount,
+            int[] freeSizes,
+            int[] freeStrides,
+            Block owner,
+            List<BlockState> out
+    ) {
+        if (depth == freeCount) {
+            BlockState state = possibleStates.get(index);
+            if (state != null && state.is(owner)) {
+                out.add(state);
+            }
+            return;
+        }
+        int sz = freeSizes[depth];
+        int st = freeStrides[depth];
+        int nextDepth = depth + 1;
+        for (int i = 0; i < sz; i++) {
+            collectCartesian(possibleStates, index + i * st, nextDepth, freeCount, freeSizes, freeStrides, owner, out);
+        }
+    }
+
+    private static int ordinalOf(Collection<?> values, Comparable<?> target) {
+        int i = 0;
+        for (Object value : values) {
+            if (Objects.equals(value, target)) {
+                return i;
+            }
+            i++;
+        }
+        return -1;
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static BlockState setValueUnchecked(BlockState state, Property prop, Comparable value) {
+        return state.setValue(prop, value);
     }
 }

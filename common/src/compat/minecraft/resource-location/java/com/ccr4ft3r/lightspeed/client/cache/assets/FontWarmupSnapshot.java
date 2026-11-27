@@ -7,7 +7,7 @@ import it.unimi.dsi.fastutil.ints.IntSet;
 
 import java.util.List;
 
-/** Warms glyph providers in reverse native priority order without disk or hash overhead. */
+/** Warms glyph providers in reverse native priority order without probing providers that lack a codepoint. */
 public final class FontWarmupSnapshot {
     private FontWarmupSnapshot() {
     }
@@ -24,15 +24,15 @@ public final class FontWarmupSnapshot {
         int providerCount = providers.size();
         GlyphProvider[] ordered = providers.toArray(new GlyphProvider[providerCount]);
         IntSet[] supported = new IntSet[providerCount];
-        int maxGlyphs = 0;
+        int totalHint = 0;
         for (int i = 0; i < providerCount; i++) {
             IntSet glyphs = ordered[i].getSupportedGlyphs();
             supported[i] = glyphs;
-            if (glyphs != null && glyphs.size() > maxGlyphs) {
-                maxGlyphs = glyphs.size();
+            if (glyphs != null) {
+                totalHint = Math.max(totalHint, glyphs.size());
             }
         }
-        IntOpenHashSet unique = new IntOpenHashSet(Math.max(16, maxGlyphs));
+        IntOpenHashSet unique = new IntOpenHashSet(Math.max(16, totalHint));
         for (int i = 0; i < providerCount; i++) {
             IntSet glyphs = supported[i];
             if (glyphs != null && !glyphs.isEmpty()) {
@@ -46,6 +46,10 @@ public final class FontWarmupSnapshot {
                 continue;
             }
             for (int i = providerCount - 1; i >= 0; i--) {
+                IntSet providerGlyphs = supported[i];
+                if (i > 0 && providerGlyphs != null && !providerGlyphs.contains(character)) {
+                    continue;
+                }
                 if (ordered[i].getGlyph(character) != null) {
                     break;
                 }

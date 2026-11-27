@@ -84,6 +84,13 @@ public abstract class PathPackIndexMixin implements IPackResources, IndexedPackR
     }
 
     @Override
+    public Boolean lightspeed$hasAnyUnder(PackType type, String namespace, String path) {
+        return lightspeed$ownsPath() && GlobalCache.shouldCacheWalkedPaths
+                && lightspeed$validation.error(path).isEmpty()
+                ? lightspeed$index.hasAnyUnder(type, namespace, path) : null;
+    }
+
+    @Override
     public void lightspeed$persistAndClearCache() {
         lightspeed$namespaces.clear();
         lightspeed$getExistenceByResource().clear();

@@ -1,6 +1,7 @@
 package com.ccr4ft3r.lightspeed.mixin.resources;
 
 import com.ccr4ft3r.lightspeed.cache.GlobalCache;
+import com.ccr4ft3r.lightspeed.cache.resource.SharedZipIndexHolder;
 import com.ccr4ft3r.lightspeed.cache.resource.ZipResourceIndex;
 import com.ccr4ft3r.lightspeed.compat.FusionPackCompat;
 import com.ccr4ft3r.lightspeed.interfaces.IndexedPackResources;
@@ -20,11 +21,12 @@ import java.util.Enumeration;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
-/** Reuses archive-name indexes and leaves overlay filtering, diagnostics, and suppliers to Minecraft. */
+/** Reuses shared archive-name indexes across overlays while leaving filtering and streams to Minecraft. */
 @Mixin(FilePackResources.class)
 public abstract class ZipPackIndexMixin implements IndexedPackResources {
     @Shadow @Final private String prefix;
-    @Unique private volatile ZipResourceIndex lightspeed$zipIndex;
+    @Unique private volatile SharedZipIndexHolder lightspeed$sharedAccess;
+    @Unique private volatile ZipResourceIndex lightspeed$fallbackIndex;
 
     @WrapOperation(method = "listResources", at = @At(value = "INVOKE",
             target = "Ljava/util/zip/ZipFile;entries()Ljava/util/Enumeration;"))
@@ -36,8 +38,10 @@ public abstract class ZipPackIndexMixin implements IndexedPackResources {
         if (!GlobalCache.isEnabled || !GlobalCache.shouldCacheWalkedPaths || FusionPackCompat.hasOverrides(this)) {
             return original.call(zip);
         }
-        String requested = lightspeed$prefix(type.getDirectory() + "/" + namespace + "/" + directory + "/");
-        Enumeration<? extends ZipEntry> selected = lightspeed$index(zip).entries(zip, requested);
+        String sub = directory == null || directory.isEmpty()
+                ? type.getDirectory() + "/" + namespace + "/"
+                : type.getDirectory() + "/" + namespace + "/" + directory + "/";
+        Enumeration<? extends ZipEntry> selected = lightspeed$index(zip).entries(zip, lightspeed$prefix(sub));
         return selected == null ? original.call(zip) : selected;
     }
 
@@ -58,6 +62,9 @@ public abstract class ZipPackIndexMixin implements IndexedPackResources {
             "getResource(Ljava/lang/String;)Lnet/minecraft/server/packs/resources/IoSupplier;"},
             at = @At(value = "INVOKE", target = "Lnet/minecraft/server/packs/FilePackResources$SharedZipFileAccess;getOrCreateZipFile()Ljava/util/zip/ZipFile;"))
     private ZipFile lightspeed$openZip(@Coerce Object access, Operation<ZipFile> original) {
+        if (lightspeed$sharedAccess == null && access instanceof SharedZipIndexHolder holder) {
+            lightspeed$sharedAccess = holder;
+        }
         ZipFile zip = original.call(access);
         if (GlobalCache.isEnabled && zip != null) {
             try {
@@ -73,17 +80,27 @@ public abstract class ZipPackIndexMixin implements IndexedPackResources {
 
     @Unique
     private ZipResourceIndex lightspeed$index(ZipFile zip) {
-        ZipResourceIndex current = lightspeed$zipIndex;
+        SharedZipIndexHolder holder = lightspeed$sharedAccess;
+        if (holder != null) {
+            return holder.lightspeed$getOrCreateZipIndex(zip);
+        }
+        ZipResourceIndex current = lightspeed$fallbackIndex;
         if (current == null) {
             synchronized (this) {
-                current = lightspeed$zipIndex;
+                current = lightspeed$fallbackIndex;
                 if (current == null) {
                     current = new ZipResourceIndex(zip);
-                    lightspeed$zipIndex = current;
+                    lightspeed$fallbackIndex = current;
                 }
             }
         }
         return current;
+    }
+
+    @Unique
+    private ZipResourceIndex lightspeed$loadedIndex() {
+        SharedZipIndexHolder holder = lightspeed$sharedAccess;
+        return holder != null ? holder.lightspeed$getLoadedZipIndex() : lightspeed$fallbackIndex;
     }
 
     @Unique
@@ -96,7 +113,23 @@ public abstract class ZipPackIndexMixin implements IndexedPackResources {
         if (((Object) this).getClass() != FilePackResources.class) {
             return null;
         }
-        ZipResourceIndex index = lightspeed$zipIndex;
+        ZipResourceIndex index = lightspeed$loadedIndex();
         return index == null ? null : index.contains(lightspeed$prefix(type + "/" + namespace + "/" + path));
+    }
+
+    @Override
+    public Boolean lightspeed$hasAnyUnder(PackType type, String namespace, String path) {
+        if (!GlobalCache.isEnabled || !GlobalCache.shouldCacheWalkedPaths
+                || ((Object) this).getClass() != FilePackResources.class || FusionPackCompat.hasOverrides(this)) {
+            return null;
+        }
+        ZipResourceIndex index = lightspeed$loadedIndex();
+        if (index == null) {
+            return null;
+        }
+        String sub = path == null || path.isEmpty()
+                ? type.getDirectory() + "/" + namespace + "/"
+                : type.getDirectory() + "/" + namespace + "/" + path;
+        return index.hasAnyUnder(lightspeed$prefix(sub));
     }
 }

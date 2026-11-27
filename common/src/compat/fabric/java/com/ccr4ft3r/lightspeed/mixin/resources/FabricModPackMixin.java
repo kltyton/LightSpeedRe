@@ -109,4 +109,20 @@ public abstract class FabricModPackMixin implements IndexedPackResources {
         }
         return lightspeed$index.contains(type, namespace, path);
     }
+
+    @Override
+    public Boolean lightspeed$hasAnyUnder(PackType type, String namespace, String path) {
+        if (!GlobalCache.isEnabled || !GlobalCache.shouldCacheWalkedPaths || FusionPackCompat.hasOverrides(this)) {
+            return null;
+        }
+        String className = getClass().getName();
+        if (lightspeed$index == null || !(className.equals("net.fabricmc.fabric.impl.resource.loader.ModNioResourcePack")
+                || className.equals("net.fabricmc.fabric.impl.resource.pack.ModNioPackResources"))) {
+            return null;
+        }
+        if (!namespaces.getOrDefault(type, Set.of()).contains(namespace)) {
+            return Boolean.FALSE;
+        }
+        return lightspeed$index.hasAnyUnder(type, namespace, path);
+    }
 }

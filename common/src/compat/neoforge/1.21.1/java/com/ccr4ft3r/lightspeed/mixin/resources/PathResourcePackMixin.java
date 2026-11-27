@@ -375,6 +375,12 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
     }
 
     @Override
+    public ResourcePathIndex lightspeed$earlyPathIndex(PackType type, String namespace) {
+        ModPackIndex earlyIndex = lightspeed$earlyModIndex;
+        return earlyIndex == null ? null : earlyIndex.pathIndex(type, namespace);
+    }
+
+    @Override
     public Boolean lightspeed$hasIndexedResource(PackType type, ResourceLocation location) {
         ModPackIndex earlyIndex = lightspeed$earlyModIndex;
         if (GlobalCache.isEnabled && earlyIndex != null) {
@@ -388,6 +394,54 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
         boolean present = indexedPaths.contains(location.getPath());
         // A Union directory can be a valid native lookup even though file enumeration omits it.
         return present ? Boolean.TRUE : lightspeed$id == null ? null : Boolean.FALSE;
+    }
+
+    @Override
+    public Boolean lightspeed$containsIndexed(String type, String namespace, String path) {
+        if (!GlobalCache.isEnabled || FusionPackCompat.hasOverrides(this)) {
+            return null;
+        }
+        PackType packType = "assets".equals(type) ? PackType.CLIENT_RESOURCES
+                : "data".equals(type) ? PackType.SERVER_DATA : null;
+        if (packType == null) {
+            return null;
+        }
+        ModPackIndex earlyIndex = lightspeed$earlyModIndex;
+        if (earlyIndex != null) {
+            return earlyIndex.contains(packType, namespace, path);
+        }
+        return null;
+    }
+
+    @Override
+    public Boolean lightspeed$hasAnyUnder(PackType type, String namespace, String path) {
+        if (!GlobalCache.isEnabled || FusionPackCompat.hasOverrides(this)) {
+            return null;
+        }
+        ModPackIndex earlyIndex = lightspeed$earlyModIndex;
+        if (earlyIndex != null) {
+            if (!path.isEmpty() && FileUtil.decomposePath(path).result().isEmpty()) {
+                return null;
+            }
+            ResourcePathIndex earlyPaths = earlyIndex.pathIndex(type, namespace);
+            return earlyPaths != null && earlyPaths.hasAtOrUnder(path);
+        }
+        if (!GlobalCache.shouldCacheWalkedPaths) {
+            return null;
+        }
+        List<String> cachedPaths = lightspeed$getCachedFilePaths(type, namespace);
+        if (cachedPaths == null) {
+            return null;
+        }
+        List<String> parts = path.isEmpty() ? List.of() : FileUtil.decomposePath(path).result().orElse(null);
+        if (parts == null) {
+            return null;
+        }
+        String requestedPath = String.join("/", parts);
+        OrderedResourcePathIndex index = lightspeed$cache().orderedIndexes()
+                .computeIfAbsent(type, ignored -> Maps.newConcurrentMap())
+                .computeIfAbsent(namespace, ignored -> OrderedResourcePathIndex.from(cachedPaths));
+        return index.hasAtOrUnder(requestedPath);
     }
 
     @Unique

@@ -1,13 +1,16 @@
 package com.ccr4ft3r.lightspeed.mixin.resources;
 
 import com.ccr4ft3r.lightspeed.cache.GlobalCache;
-import com.ccr4ft3r.lightspeed.cache.resource.ResourcePackLookup;
-import com.ccr4ft3r.lightspeed.cache.resource.ResourcePackEntry;
 import com.ccr4ft3r.lightspeed.cache.resource.ResourceListingScope;
+import com.ccr4ft3r.lightspeed.cache.resource.ResourcePackEntry;
+import com.ccr4ft3r.lightspeed.cache.resource.ResourcePackLookup;
 import com.ccr4ft3r.lightspeed.compat.FusionPackCompat;
 import com.ccr4ft3r.lightspeed.interfaces.IPathResourcePack;
 import com.ccr4ft3r.lightspeed.interfaces.IndexedPackResources;
+import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
+import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.packs.CompositePackResources;
 import net.minecraft.server.packs.FilePackResources;
 import net.minecraft.server.packs.PackResources;
 import net.minecraft.server.packs.PackType;
@@ -27,19 +30,96 @@ import org.spongepowered.asm.mixin.injection.ModifyVariable;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.io.InputStream;
-import java.util.List;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.TreeMap;
+import java.util.function.Predicate;
 
 @Mixin(FallbackResourceManager.class)
 public abstract class FallbackResourceManagerMixin implements ResourcePackLookup.GroupedAccess<ResourceLocation> {
     @Shadow @Final public List<?> fallbacks;
     @Shadow @Final private PackType type;
+    @Shadow @Final private String namespace;
 
     @ModifyVariable(method = "listResources", at = @At("STORE"), ordinal = 2)
     private Map<ResourceLocation, Resource> lightspeed$skipIntermediateSort(Map<ResourceLocation, Resource> resources) {
         return ResourceListingScope.bulk() ? new HashMap<>() : resources;
+    }
+
+    @Inject(method = "listResources", at = @At("HEAD"), cancellable = true)
+    private void lightspeed$skipEmptyListResources(String path, Predicate<ResourceLocation> filter,
+            CallbackInfoReturnable<Map<ResourceLocation, Resource>> cir) {
+        if (lightspeed$allPacksEmptyUnder(path)) {
+            cir.setReturnValue(ResourceListingScope.bulk() ? Map.of() : new TreeMap<>());
+        }
+    }
+
+    @Inject(method = "listResourceStacks", at = @At("HEAD"), cancellable = true)
+    private void lightspeed$skipEmptyListResourceStacks(String path, Predicate<ResourceLocation> filter,
+            CallbackInfoReturnable<Map<ResourceLocation, List<Resource>>> cir) {
+        if (lightspeed$allPacksEmptyUnder(path)) {
+            cir.setReturnValue(ResourceListingScope.bulk() ? Map.of() : new TreeMap<>());
+        }
+    }
+
+    @WrapOperation(method = {"listResources", "listPackResources"}, at = @At(value = "INVOKE",
+            target = "Lnet/minecraft/server/packs/PackResources;listResources(Lnet/minecraft/server/packs/PackType;Ljava/lang/String;Ljava/lang/String;Lnet/minecraft/server/packs/PackResources$ResourceOutput;)V"))
+    private void lightspeed$skipEmptyPackListing(PackResources pack, PackType packType, String ns, String path,
+            PackResources.ResourceOutput output, Operation<Void> original) {
+        if (GlobalCache.isEnabled && GlobalCache.shouldCacheWalkedPaths
+                && Boolean.FALSE.equals(lightspeed$packHasAnyUnder(pack, packType, ns, path))) {
+            return;
+        }
+        original.call(pack, packType, ns, path, output);
+    }
+
+    @Unique
+    private boolean lightspeed$allPacksEmptyUnder(String path) {
+        if (!GlobalCache.isEnabled || !GlobalCache.shouldCacheWalkedPaths) {
+            return false;
+        }
+        int count = fallbacks.size();
+        if (count == 0) {
+            return true;
+        }
+        for (int i = 0; i < count; i++) {
+            FallbackResourceManagerPackEntryAccessor entry =
+                    (FallbackResourceManagerPackEntryAccessor) fallbacks.get(i);
+            PackResources pack = entry.lightspeed$resources();
+            if (pack == null) {
+                continue;
+            }
+            if (!Boolean.FALSE.equals(lightspeed$packHasAnyUnder(pack, type, namespace, path))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    @Unique
+    private static Boolean lightspeed$packHasAnyUnder(PackResources pack, PackType packType, String ns, String path) {
+        if (pack instanceof IndexedPackResources indexed) {
+            return indexed.lightspeed$hasAnyUnder(packType, ns, path);
+        }
+        if (pack instanceof CompositePackResources) {
+            List<PackResources> stack = ((CompositePackResourcesAccessor) (Object) pack).lightspeed$getPackResourcesStack();
+            if (stack == null || stack.isEmpty()) {
+                return Boolean.FALSE;
+            }
+            for (int i = 0; i < stack.size(); i++) {
+                Boolean sub = lightspeed$packHasAnyUnder(stack.get(i), packType, ns, path);
+                if (sub == null) {
+                    return null;
+                }
+                if (sub) {
+                    return Boolean.TRUE;
+                }
+            }
+            return Boolean.FALSE;
+        }
+        return null;
     }
 
     @Invoker("createStackMetadataFinder")
@@ -78,10 +158,13 @@ public abstract class FallbackResourceManagerMixin implements ResourcePackLookup
 
     @Override
     public Boolean lightspeed$lookupContains(PackResources pack, ResourceLocation location) {
+        if (pack instanceof IPathResourcePack indexed) {
+            return indexed.lightspeed$hasIndexedResource(type, location);
+        }
         if (pack instanceof IndexedPackResources indexed) {
             return indexed.lightspeed$containsIndexed(type.getDirectory(), location.getNamespace(), location.getPath());
         }
-        return pack instanceof IPathResourcePack indexed ? indexed.lightspeed$hasIndexedResource(type, location) : null;
+        return null;
     }
 
     @Override
@@ -90,6 +173,4 @@ public abstract class FallbackResourceManagerMixin implements ResourcePackLookup
         return (packClass == PathPackResources.class || packClass == FilePackResources.class)
                 && !FusionPackCompat.hasOverrides(packResources);
     }
-
-
 }

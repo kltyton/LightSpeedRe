@@ -7,6 +7,7 @@ import net.minecraft.world.phys.shapes.BitSetDiscreteVoxelShape;
 import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
+import java.nio.LongBuffer;
 import java.util.Arrays;
 import java.util.BitSet;
 
@@ -61,7 +62,6 @@ public final class FastVoxelOptimize {
 
         BitSetDiscreteVoxelShape discrete = new BitSetDiscreteVoxelShape(xSize, ySize, zSize);
         BitSetVoxelStorageAccess access = (BitSetVoxelStorageAccess) (Object) discrete;
-        BitSet storage = access.lightspeed$storage();
         int xMin = Integer.MAX_VALUE;
         int yMin = Integer.MAX_VALUE;
         int zMin = Integer.MAX_VALUE;
@@ -70,33 +70,82 @@ public final class FastVoxelOptimize {
         int zMax = 0;
         boolean anyFilled = false;
 
-        for (int i = 0, j = 0; i < count; i++, j += 6) {
-            int ix0 = findCoord(xs, nx, b[j]);
-            int ix1 = findCoord(xs, nx, b[j + 3]);
-            int iy0 = findCoord(ys, ny, b[j + 1]);
-            int iy1 = findCoord(ys, ny, b[j + 4]);
-            int iz0 = findCoord(zs, nz, b[j + 2]);
-            int iz1 = findCoord(zs, nz, b[j + 5]);
-            if (ix0 >= ix1 || iy0 >= iy1 || iz0 >= iz1) {
-                continue;
-            }
-            anyFilled = true;
-            if (ix0 < xMin) xMin = ix0;
-            if (iy0 < yMin) yMin = iy0;
-            if (iz0 < zMin) zMin = iz0;
-            if (ix1 > xMax) xMax = ix1;
-            if (iy1 > yMax) yMax = iy1;
-            if (iz1 > zMax) zMax = iz1;
-            for (int x = ix0; x < ix1; x++) {
-                int xBase = x * ySize;
-                for (int y = iy0; y < iy1; y++) {
-                    int rowStart = (xBase + y) * zSize;
-                    storage.set(rowStart + iz0, rowStart + iz1);
+        long totalBitsLong = (long) xSize * ySize * zSize;
+        if (zSize <= 63 && totalBitsLong > 0L && totalBitsLong <= Integer.MAX_VALUE) {
+            int wordCount = (int) ((totalBitsLong + 63L) >>> 6);
+            long[] outWords = s.prepareOutWords(wordCount);
+            for (int i = 0, j = 0; i < count; i++, j += 6) {
+                int ix0 = findCoord(xs, nx, b[j]);
+                int ix1 = findCoord(xs, nx, b[j + 3]);
+                int iy0 = findCoord(ys, ny, b[j + 1]);
+                int iy1 = findCoord(ys, ny, b[j + 4]);
+                int iz0 = findCoord(zs, nz, b[j + 2]);
+                int iz1 = findCoord(zs, nz, b[j + 5]);
+                if (ix0 >= ix1 || iy0 >= iy1 || iz0 >= iz1) {
+                    continue;
+                }
+                anyFilled = true;
+                if (ix0 < xMin) xMin = ix0;
+                if (iy0 < yMin) yMin = iy0;
+                if (iz0 < zMin) zMin = iz0;
+                if (ix1 > xMax) xMax = ix1;
+                if (iy1 > yMax) yMax = iy1;
+                if (iz1 > zMax) zMax = iz1;
+                int runLen = iz1 - iz0;
+                long zRunMask = (runLen >= 64 ? -1L : ((1L << runLen) - 1L)) << iz0;
+                for (int x = ix0; x < ix1; x++) {
+                    int xBase = x * ySize;
+                    for (int y = iy0; y < iy1; y++) {
+                        int bitPos = (xBase + y) * zSize;
+                        int wordIdx = bitPos >>> 6;
+                        int bitOff = bitPos & 63;
+                        outWords[wordIdx] |= zRunMask << bitOff;
+                        if (bitOff + iz1 > 64) {
+                            outWords[wordIdx + 1] |= zRunMask >>> (64 - bitOff);
+                        }
+                    }
                 }
             }
-        }
-        if (!anyFilled) {
-            return Shapes.empty();
+            if (!anyFilled) {
+                return Shapes.empty();
+            }
+            int usedWords = wordCount;
+            while (usedWords > 0 && outWords[usedWords - 1] == 0L) {
+                usedWords--;
+            }
+            if (usedWords > 0) {
+                access.lightspeed$setStorage(BitSet.valueOf(LongBuffer.wrap(outWords, 0, usedWords)));
+            }
+        } else {
+            BitSet storage = access.lightspeed$storage();
+            for (int i = 0, j = 0; i < count; i++, j += 6) {
+                int ix0 = findCoord(xs, nx, b[j]);
+                int ix1 = findCoord(xs, nx, b[j + 3]);
+                int iy0 = findCoord(ys, ny, b[j + 1]);
+                int iy1 = findCoord(ys, ny, b[j + 4]);
+                int iz0 = findCoord(zs, nz, b[j + 2]);
+                int iz1 = findCoord(zs, nz, b[j + 5]);
+                if (ix0 >= ix1 || iy0 >= iy1 || iz0 >= iz1) {
+                    continue;
+                }
+                anyFilled = true;
+                if (ix0 < xMin) xMin = ix0;
+                if (iy0 < yMin) yMin = iy0;
+                if (iz0 < zMin) zMin = iz0;
+                if (ix1 > xMax) xMax = ix1;
+                if (iy1 > yMax) yMax = iy1;
+                if (iz1 > zMax) zMax = iz1;
+                for (int x = ix0; x < ix1; x++) {
+                    int xBase = x * ySize;
+                    for (int y = iy0; y < iy1; y++) {
+                        int rowStart = (xBase + y) * zSize;
+                        storage.set(rowStart + iz0, rowStart + iz1);
+                    }
+                }
+            }
+            if (!anyFilled) {
+                return Shapes.empty();
+            }
         }
         access.lightspeed$setXMin(xMin);
         access.lightspeed$setYMin(yMin);
@@ -112,7 +161,19 @@ public final class FastVoxelOptimize {
     }
 
     private static int uniqueSortedCoords(double[] coords, int len) {
-        Arrays.sort(coords, 0, len);
+        if (len <= 24) {
+            for (int i = 1; i < len; i++) {
+                double key = coords[i];
+                int j = i - 1;
+                while (j >= 0 && coords[j] > key) {
+                    coords[j + 1] = coords[j];
+                    j--;
+                }
+                coords[j + 1] = key;
+            }
+        } else {
+            Arrays.sort(coords, 0, len);
+        }
         int out = 0;
         double prev = Double.NaN;
         for (int i = 0; i < len; i++) {
@@ -126,6 +187,14 @@ public final class FastVoxelOptimize {
     }
 
     private static int findCoord(double[] coords, int len, double value) {
+        if (len <= 12) {
+            for (int i = 0; i < len; i++) {
+                if (coords[i] >= value) {
+                    return i;
+                }
+            }
+            return len - 1;
+        }
         int idx = Arrays.binarySearch(coords, 0, len, value);
         if (idx >= 0) {
             return idx;
@@ -139,6 +208,7 @@ public final class FastVoxelOptimize {
         private double[] xs = new double[128];
         private double[] ys = new double[128];
         private double[] zs = new double[128];
+        private long[] outWords = new long[128];
         private int count;
 
         @Override
@@ -172,6 +242,14 @@ public final class FastVoxelOptimize {
         private double[] ensureZs(int n) {
             if (zs.length < n) zs = new double[n];
             return zs;
+        }
+
+        private long[] prepareOutWords(int wordCount) {
+            if (wordCount > outWords.length) {
+                outWords = new long[Math.max(wordCount, outWords.length << 1)];
+            }
+            Arrays.fill(outWords, 0, wordCount, 0L);
+            return outWords;
         }
     }
 }

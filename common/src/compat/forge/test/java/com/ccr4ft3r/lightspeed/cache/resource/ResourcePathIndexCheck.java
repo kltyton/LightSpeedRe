@@ -43,6 +43,36 @@ public final class ResourcePathIndexCheck {
         require(ordered.entriesStartingWith("textures/").equals(List.of(
                 "textures/b.png", "textures/a.png", "textures/b.png")),
                 "indexed selection changed archive order or discarded duplicate entries");
+        require(ordered.hasAtOrUnder("textures"), "ordered directory check must match");
+        require(ordered.hasAtOrUnder("models/a.json"), "ordered exact file check must match");
+        require(!ordered.hasAtOrUnder("shaders"), "ordered miss must reject absent directory");
+
+        // Exercise > LINEAR_THRESHOLD (DirRanges map) with sibling-prefix, nested, and top-level entries.
+        ResourcePathIndex large = ResourcePathIndex.from(List.of(
+                "LICENSE",
+                "models/block/oak.json",
+                "models/item/oak.json",
+                "textures/block/oak.png",
+                "textures/item/oak.png",
+                "textures_extra/other.png"));
+        require(large.hasAtOrUnder(""), "root must match non-empty index");
+        require(large.hasAtOrUnder("LICENSE"), "top-level exact file must match");
+        require(!large.hasAtOrUnder("MISSING"), "absent top-level file must miss");
+        require(large.hasAtOrUnder("textures"), "directory must hit");
+        require(large.hasAtOrUnder("textures/block"), "nested directory must hit");
+        require(large.hasAtOrUnder("textures/block/oak.png"), "exact nested file must hit");
+        require(!large.hasAtOrUnder("textures/entity"), "absent nested directory must miss");
+        require(!large.hasAtOrUnder("tex"), "partial prefix must not match directory");
+        require(large.entriesUnder("textures").equals(List.of(
+                "textures/block/oak.png", "textures/item/oak.png")),
+                "large directory range must exclude sibling prefix");
+        visited.clear();
+        large.forEachAtOrUnder("textures/block/oak.png", visited::add);
+        require(visited.equals(List.of("textures/block/oak.png")), "large exact file must emit");
+        visited.clear();
+        large.forEachAtOrUnder("textures/", visited::add);
+        require(visited.equals(List.of("textures/block/oak.png", "textures/item/oak.png")),
+                "trailing slash must enumerate descendants");
         System.out.println("RESOURCE_PATH_INDEX_OK");
     }
 

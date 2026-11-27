@@ -57,6 +57,7 @@
     "resources.ZipPackIndexMixin",
     "resources.PathResourcePackMixin",
     "resources.SharedZipFileAccessAccessor",
+    "resources.SharedZipFileAccessIndexMixin",
     "resources.SimpleReloadInstanceMixin",
     "resources.VanillaPackResourcesMixin",
     "shape.BitSetVoxelStorageAccess",

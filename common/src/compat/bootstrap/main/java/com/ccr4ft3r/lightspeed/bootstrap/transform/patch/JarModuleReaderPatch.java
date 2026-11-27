@@ -78,4 +78,43 @@ public final class JarModuleReaderPatch {
         open.maxLocals = Math.max(open.maxLocals, lookup.maxLocals + 2);
         return AsmPatchSupport.write(node);
     }
+
+    /**
+     * Patches SecureJar 3.0.x {@code Jar$JarModuleDataProvider.open(String)} to call
+     * {@code JarContentsImpl.lightspeed$findPath(String)} directly, bypassing {@code Path -> URI -> Path}.
+     */
+    public static byte[] applyV3(byte[] bytes) {
+        ClassNode node = AsmPatchSupport.read(bytes);
+        MethodNode open = AsmPatchSupport.method(node, "open", "(Ljava/lang/String;)Ljava/util/Optional;");
+        MethodInsnNode findFile = AsmPatchSupport.uniqueInvocation(open, Opcodes.INVOKEVIRTUAL,
+                "cpw/mods/jarhandling/impl/Jar", "findFile", "(Ljava/lang/String;)Ljava/util/Optional;");
+        AbstractInsnNode loadName = findFile.getPrevious();
+        while (loadName != null && loadName.getOpcode() < 0) loadName = loadName.getPrevious();
+        if (!(loadName instanceof VarInsnNode varLoad) || varLoad.getOpcode() != Opcodes.ALOAD || varLoad.var != 1) {
+            throw new IllegalStateException("Unexpected SecureJar 3.x module reader name load");
+        }
+        AbstractInsnNode mapper = findFile.getNext();
+        while (mapper != null && mapper.getOpcode() < 0) mapper = mapper.getNext();
+        if (!(mapper instanceof InvokeDynamicInsnNode)) {
+            throw new IllegalStateException("Unexpected SecureJar 3.x module URI mapper");
+        }
+        AbstractInsnNode convert = mapper.getNext();
+        while (convert != null && convert.getOpcode() < 0) convert = convert.getNext();
+        if (!(convert instanceof MethodInsnNode call)
+                || call.getOpcode() != Opcodes.INVOKEVIRTUAL
+                || !call.owner.equals("java/util/Optional") || !call.name.equals("map")
+                || !call.desc.equals("(Ljava/util/function/Function;)Ljava/util/Optional;")) {
+            throw new IllegalStateException("Unexpected SecureJar 3.x module URI conversion");
+        }
+        open.instructions.insertBefore(loadName, new FieldInsnNode(
+                Opcodes.GETFIELD, "cpw/mods/jarhandling/impl/Jar", "contents",
+                "Lcpw/mods/jarhandling/impl/JarContentsImpl;"));
+        open.instructions.insertBefore(findFile, new MethodInsnNode(
+                Opcodes.INVOKEVIRTUAL, "cpw/mods/jarhandling/impl/JarContentsImpl", "lightspeed$findPath",
+                "(Ljava/lang/String;)Ljava/util/Optional;", false));
+        open.instructions.remove(findFile);
+        open.instructions.remove(mapper);
+        open.instructions.remove(convert);
+        return AsmPatchSupport.write(node);
+    }
 }

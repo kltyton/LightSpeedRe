@@ -4,6 +4,7 @@ import com.ccr4ft3r.lightspeed.cache.GlobalCache;
 import com.ccr4ft3r.lightspeed.cache.resource.ResourcePathIndex;
 import com.ccr4ft3r.lightspeed.compat.FusionPackCompat;
 import com.ccr4ft3r.lightspeed.interfaces.IPackResources;
+import com.ccr4ft3r.lightspeed.interfaces.IndexedPackResources;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.packs.FilePackResources;
 import net.minecraft.server.packs.PackResources;
@@ -34,7 +35,7 @@ import java.util.zip.ZipFile;
 import org.slf4j.Logger;
 
 @Mixin(FilePackResources.class)
-public abstract class FilePackResourcesMixin implements IPackResources {
+public abstract class FilePackResourcesMixin implements IPackResources, IndexedPackResources {
     @Shadow @Final private static Logger LOGGER;
     @Shadow @Final private File file;
     @Shadow
@@ -186,6 +187,30 @@ public abstract class FilePackResourcesMixin implements IPackResources {
             }
             return zip.getInputStream(entry);
         };
+    }
+
+    @Override
+    public Boolean lightspeed$containsIndexed(String type, String namespace, String path) {
+        if (!GlobalCache.isEnabled || FusionPackCompat.hasOverrides(this)) {
+            return null;
+        }
+        ResourcePathIndex entries = lightspeed$entries;
+        return entries == null ? null : entries.contains(type + "/" + namespace + "/" + path);
+    }
+
+    @Override
+    public Boolean lightspeed$hasAnyUnder(PackType type, String namespace, String path) {
+        if (!GlobalCache.isEnabled || FusionPackCompat.hasOverrides(this)) {
+            return null;
+        }
+        ResourcePathIndex entries = lightspeed$entries;
+        if (entries == null) {
+            return null;
+        }
+        String sub = path == null || path.isEmpty()
+                ? type.getDirectory() + "/" + namespace
+                : type.getDirectory() + "/" + namespace + "/" + path;
+        return entries.hasAtOrUnder(sub);
     }
 
     @Override

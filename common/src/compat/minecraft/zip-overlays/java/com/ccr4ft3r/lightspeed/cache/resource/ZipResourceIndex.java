@@ -76,6 +76,11 @@ public final class ZipResourceIndex {
         return index == null ? null : index.contains(path) || index.contains(path + "/");
     }
 
+    public Boolean hasAnyUnder(String path) {
+        OrderedResourcePathIndex index = cache.loadedIndex(PackType.CLIENT_RESOURCES, "zip", 0);
+        return index == null || hasDuplicateNames(index) ? null : index.hasAtOrUnder(path);
+    }
+
     private List<String> scanZipEntries() {
         try (ZipFile archive = new ZipFile(zipPath.toFile())) {
             return archive.stream().map(ZipEntry::getName).toList();

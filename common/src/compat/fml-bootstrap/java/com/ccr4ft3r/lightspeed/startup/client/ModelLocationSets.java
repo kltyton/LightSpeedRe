@@ -9,6 +9,7 @@ import java.util.Collection;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.Objects;
 import java.util.Spliterator;
 import java.util.Spliterators;
 import java.util.function.Consumer;
@@ -21,37 +22,141 @@ public final class ModelLocationSets {
     private ModelLocationSets() {
     }
 
-    /** Extracts a namespace and checks inventory-variant membership without coupling to loader mappings. */
+    /** Extracts namespace and owning block ID without coupling to loader mappings. */
     public interface LocationAdapter<T> {
         boolean isElement(Object obj);
 
         String namespace(T element);
+
+        default Object blockId(T element) {
+            return null;
+        }
+
+        default boolean isInventoryVariant(T element) {
+            return false;
+        }
+
+        default boolean isStandaloneVariant(T element) {
+            return false;
+        }
+
+        default boolean hasRegisteredBlockId(T element) {
+            return true;
+        }
     }
 
-    /** Append-only flat collector passed per worker chunk to model location builders. */
+    /**
+     * Append-only flat collector passed per worker chunk to model location builders.
+     * Tracks whether every added location belongs to the active unique block ID so distinct blocks
+     * skip giant chunk-wide hash tables and merge directly by array copy.
+     */
     public static final class ChunkCollectorSet<T> extends AbstractSet<T> {
         private final ObjectArrayList<T> list;
-        private final ObjectOpenHashSet<T> seen;
         private final LocationAdapter<T> adapter;
+        private ObjectOpenHashSet<T> blockSeen;
+        private ObjectOpenHashSet<T> chunkSeen;
+        private Object currentBlockId;
+        private int currentBlockCount;
+        private T currentBlockFirst;
+        private boolean disjointByBlock = true;
+        private boolean sawInventoryVariant;
+        private boolean sawStandaloneVariant;
 
         public ChunkCollectorSet(int initialCapacity, LocationAdapter<T> adapter) {
             this.list = new ObjectArrayList<>(Math.max(16, initialCapacity));
-            this.seen = new ObjectOpenHashSet<>(Math.max(16, initialCapacity), 0.75f);
             this.adapter = adapter;
+        }
+
+        public void beginBlock(Object blockId) {
+            this.currentBlockId = blockId;
+            this.currentBlockCount = 0;
+            this.currentBlockFirst = null;
+            if (blockSeen != null && !blockSeen.isEmpty()) {
+                blockSeen.clear();
+            }
+        }
+
+        public boolean isDisjointByBlock() {
+            return disjointByBlock;
+        }
+
+        public boolean sawInventoryVariant() {
+            return sawInventoryVariant;
+        }
+
+        public boolean sawStandaloneVariant() {
+            return sawStandaloneVariant;
         }
 
         @Override
         public boolean add(T loc) {
-            if (!seen.add(loc)) {
+            if (disjointByBlock) {
+                Object expectedId = this.currentBlockId;
+                Object actualId = expectedId == null ? null : adapter.blockId(loc);
+                if (expectedId != null && expectedId.equals(actualId)) {
+                    if (!sawInventoryVariant && adapter.isInventoryVariant(loc)) {
+                        sawInventoryVariant = true;
+                    }
+                    if (!sawStandaloneVariant && adapter.isStandaloneVariant(loc)) {
+                        sawStandaloneVariant = true;
+                    }
+                    int count = currentBlockCount;
+                    if (count == 0) {
+                        currentBlockFirst = loc;
+                        currentBlockCount = 1;
+                        list.add(loc);
+                        return true;
+                    }
+                    if (count == 1) {
+                        if (Objects.equals(currentBlockFirst, loc)) {
+                            return false;
+                        }
+                        if (blockSeen == null) {
+                            blockSeen = new ObjectOpenHashSet<>(16, 0.75f);
+                        }
+                        blockSeen.add(currentBlockFirst);
+                        blockSeen.add(loc);
+                        currentBlockCount = 2;
+                        list.add(loc);
+                        return true;
+                    }
+                    if (!blockSeen.add(loc)) {
+                        return false;
+                    }
+                    currentBlockCount = count + 1;
+                    list.add(loc);
+                    return true;
+                }
+                promoteToChunkDedup();
+            }
+            if (!chunkSeen.add(loc)) {
                 return false;
             }
             list.add(loc);
             return true;
         }
 
+        private void promoteToChunkDedup() {
+            disjointByBlock = false;
+            int sz = list.size();
+            ObjectOpenHashSet<T> seen = new ObjectOpenHashSet<>(Math.max(16, sz + 16), 0.75f);
+            Object[] raw = list.elements();
+            for (int i = 0; i < sz; i++) {
+                @SuppressWarnings("unchecked")
+                T item = (T) raw[i];
+                seen.add(item);
+            }
+            chunkSeen = seen;
+            blockSeen = null;
+        }
+
         @Override
         public boolean contains(Object o) {
-            return seen.contains(o);
+            if (!disjointByBlock) {
+                return chunkSeen.contains(o);
+            }
+            promoteToChunkDedup();
+            return chunkSeen.contains(o);
         }
 
         @Override
@@ -76,6 +181,10 @@ public final class ModelLocationSets {
         private volatile Map<String, CompactArrayLocationSet<T>> buckets;
         private Object[] elements;
         private int size;
+        private boolean blockDisjointActive;
+        private boolean disjointFromInventory;
+        private boolean disjointFromStandalone;
+        private ObjectOpenHashSet<T> sideLookup;
 
         public IndexedLocationSet(int expectedCapacity, LocationAdapter<T> adapter) {
             int cap = Math.max(16, expectedCapacity);
@@ -91,13 +200,27 @@ public final class ModelLocationSets {
             return buckets;
         }
 
-        private ObjectOpenHashSet<T> ensureLookup() {
+        private boolean isDisjointFromInitialBlocks(T loc) {
+            if (!blockDisjointActive) {
+                return false;
+            }
+            if (disjointFromInventory && adapter.isInventoryVariant(loc)) {
+                return true;
+            }
+            if (disjointFromStandalone && adapter.isStandaloneVariant(loc)) {
+                return true;
+            }
+            return !adapter.hasRegisteredBlockId(loc);
+        }
+
+        private ObjectOpenHashSet<T> ensureLookup(int expectedSize) {
             ObjectOpenHashSet<T> set = this.lookup;
             if (set == null) {
                 synchronized (this) {
                     set = this.lookup;
                     if (set == null) {
-                        set = new ObjectOpenHashSet<>(Math.max(16, size), 0.75f);
+                        int cap = Math.max(16, Math.max(this.size, expectedSize));
+                        set = new ObjectOpenHashSet<>(cap, 0.75f);
                         Object[] arr = this.elements;
                         int limit = this.size;
                         for (int i = 0; i < limit; i++) {
@@ -106,14 +229,35 @@ public final class ModelLocationSets {
                             set.add(item);
                         }
                         this.lookup = set;
+                        this.blockDisjointActive = false;
+                        this.disjointFromInventory = false;
+                        this.disjointFromStandalone = false;
+                        this.sideLookup = null;
                     }
                 }
             }
             return set;
         }
 
+        private ObjectOpenHashSet<T> ensureLookup() {
+            return ensureLookup(Math.max(this.size, this.elements.length));
+        }
+
         @Override
         public boolean add(T loc) {
+            if (this.lookup == null && isDisjointFromInitialBlocks(loc)) {
+                ObjectOpenHashSet<T> side = this.sideLookup;
+                if (side == null) {
+                    side = new ObjectOpenHashSet<>(4_096, 0.75f);
+                    this.sideLookup = side;
+                }
+                if (!side.add(loc)) {
+                    return false;
+                }
+                this.buckets = null;
+                append(loc);
+                return true;
+            }
             if (!ensureLookup().add(loc)) {
                 return false;
             }
@@ -126,11 +270,66 @@ public final class ModelLocationSets {
             add(loc);
         }
 
+        /** Bulk-appends already-disjoint chunk arrays directly when this set starts empty, avoiding rehashes. */
+        public void appendDisjointChunks(ChunkCollectorSet<T>[] chunks, int totalCount) {
+            if (totalCount <= 0) {
+                return;
+            }
+            if (this.size == 0 && this.lookup == null && this.sideLookup == null) {
+                ensureCapacity(totalCount);
+                Object[] arr = this.elements;
+                int write = 0;
+                boolean anyInv = false;
+                boolean anyStandalone = false;
+                for (ChunkCollectorSet<T> chunk : chunks) {
+                    if (chunk != null && !chunk.isEmpty()) {
+                        int len = chunk.size();
+                        System.arraycopy(chunk.rawElements(), 0, arr, write, len);
+                        write += len;
+                        if (chunk.sawInventoryVariant()) {
+                            anyInv = true;
+                        }
+                        if (chunk.sawStandaloneVariant()) {
+                            anyStandalone = true;
+                        }
+                    }
+                }
+                this.size = write;
+                this.buckets = null;
+                this.blockDisjointActive = write > 0;
+                this.disjointFromInventory = !anyInv;
+                this.disjointFromStandalone = !anyStandalone;
+                return;
+            }
+            ObjectOpenHashSet<T> set = ensureLookup(this.size + totalCount);
+            ensureCapacity(this.size + totalCount);
+            Object[] arr = this.elements;
+            int write = this.size;
+            for (ChunkCollectorSet<T> chunk : chunks) {
+                if (chunk == null || chunk.isEmpty()) {
+                    continue;
+                }
+                Object[] raw = chunk.rawElements();
+                int len = chunk.size();
+                for (int i = 0; i < len; i++) {
+                    @SuppressWarnings("unchecked")
+                    T loc = (T) raw[i];
+                    if (set.add(loc)) {
+                        arr[write++] = loc;
+                    }
+                }
+            }
+            if (write != this.size) {
+                this.buckets = null;
+            }
+            this.size = write;
+        }
+
         public void appendArrayUnchecked(Object[] items, int count) {
             if (count <= 0) {
                 return;
             }
-            ObjectOpenHashSet<T> set = ensureLookup();
+            ObjectOpenHashSet<T> set = ensureLookup(Math.max(this.elements.length, this.size + count));
             ensureCapacity(size + count);
             Object[] arr = this.elements;
             int write = this.size;
@@ -174,6 +373,10 @@ public final class ModelLocationSets {
                 CompactArrayLocationSet<T> slice = currentBuckets.get(adapter.namespace(loc));
                 return slice != null && slice.contains(loc);
             }
+            if (this.lookup == null && isDisjointFromInitialBlocks(loc)) {
+                ObjectOpenHashSet<T> side = this.sideLookup;
+                return side != null && side.contains(loc);
+            }
             return ensureLookup().contains(o);
         }
 
@@ -199,6 +402,10 @@ public final class ModelLocationSets {
         @Override
         public void clear() {
             this.buckets = null;
+            this.blockDisjointActive = false;
+            this.disjointFromInventory = false;
+            this.disjointFromStandalone = false;
+            this.sideLookup = null;
             ObjectOpenHashSet<T> set = this.lookup;
             if (set != null) {
                 set.clear();

@@ -42,6 +42,26 @@ public final class ModelBakeHelperSupport {
         public String namespace(ModelResourceLocation element) {
             return element.id().getNamespace();
         }
+
+        @Override
+        public Object blockId(ModelResourceLocation element) {
+            return element.id();
+        }
+
+        @Override
+        public boolean isInventoryVariant(ModelResourceLocation element) {
+            return "inventory".equals(element.variant());
+        }
+
+        @Override
+        public boolean isStandaloneVariant(ModelResourceLocation element) {
+            return "standalone".equals(element.variant());
+        }
+
+        @Override
+        public boolean hasRegisteredBlockId(ModelResourceLocation element) {
+            return BuiltInRegistries.BLOCK.containsKey(element.id());
+        }
     };
 
     private static final MethodHandle MODEL_LOCATION_BUILDER_CTOR;
@@ -116,6 +136,7 @@ public final class ModelBakeHelperSupport {
                 for (int i = 0; i < total; i++) {
                     Map.Entry<ResourceKey<Block>, Block> entry = entries.get(i);
                     ResourceLocation id = entry.getKey().location();
+                    singleSet.beginBlock(id);
                     MODEL_LOCATION_BUILDER_GENERATE_BLOCK.invokeExact(builder, (Set<ModelResourceLocation>) singleSet, entry.getValue(), id);
                     String ns = id.getNamespace();
                     if (!ns.equals(lastNs)) {
@@ -124,7 +145,14 @@ public final class ModelBakeHelperSupport {
                     }
                 }
                 if (topLevelModelLocations instanceof IndexedLocationSet<?> raw) {
-                    ((IndexedLocationSet<ModelResourceLocation>) raw).appendArrayUnchecked(singleSet.rawElements(), singleSet.size());
+                    IndexedLocationSet<ModelResourceLocation> target = (IndexedLocationSet<ModelResourceLocation>) raw;
+                    if (singleSet.isDisjointByBlock()) {
+                        @SuppressWarnings("unchecked")
+                        ChunkCollectorSet<ModelResourceLocation>[] one = new ChunkCollectorSet[]{singleSet};
+                        target.appendDisjointChunks(one, singleSet.size());
+                    } else {
+                        target.appendArrayUnchecked(singleSet.rawElements(), singleSet.size());
+                    }
                 } else {
                     topLevelModelLocations.addAll(singleSet);
                 }
@@ -177,16 +205,33 @@ public final class ModelBakeHelperSupport {
         IndexedLocationSet<ModelResourceLocation> indexedTarget = topLevelModelLocations instanceof IndexedLocationSet<?> raw
                 ? (IndexedLocationSet<ModelResourceLocation>) raw
                 : null;
-        String lastNs = null;
+        boolean allDisjoint = indexedTarget != null;
+        int totalGenerated = 0;
         for (int c = 0; c < chunkCount; c++) {
             ChunkCollectorSet<ModelResourceLocation> locs = chunkLocs[c];
-            if (locs != null && !locs.isEmpty()) {
-                if (indexedTarget != null) {
-                    indexedTarget.appendArrayUnchecked(locs.rawElements(), locs.size());
-                } else {
-                    topLevelModelLocations.addAll(locs);
+            if (locs != null) {
+                totalGenerated += locs.size();
+                if (!locs.isDisjointByBlock()) {
+                    allDisjoint = false;
                 }
             }
+        }
+        if (allDisjoint && totalGenerated > 0) {
+            indexedTarget.appendDisjointChunks(chunkLocs, totalGenerated);
+        } else {
+            for (int c = 0; c < chunkCount; c++) {
+                ChunkCollectorSet<ModelResourceLocation> locs = chunkLocs[c];
+                if (locs != null && !locs.isEmpty()) {
+                    if (indexedTarget != null) {
+                        indexedTarget.appendArrayUnchecked(locs.rawElements(), locs.size());
+                    } else {
+                        topLevelModelLocations.addAll(locs);
+                    }
+                }
+            }
+        }
+        String lastNs = null;
+        for (int c = 0; c < chunkCount; c++) {
             String[] nss = chunkNamespaces[c];
             if (nss != null) {
                 for (String ns : nss) {
@@ -216,7 +261,12 @@ public final class ModelBakeHelperSupport {
                 }
                 int start = (int) ((long) chunk * total / chunkCount);
                 int end = (int) ((long) (chunk + 1) * total / chunkCount);
-            ChunkCollectorSet<ModelResourceLocation> localSet = new ChunkCollectorSet<>((end - start) * 2, MODEL_ADAPTER);
+            int estimatedStates = 0;
+            for (int i = start; i < end; i++) {
+                estimatedStates += entries.get(i).getValue().getStateDefinition().getPossibleStates().size();
+            }
+            ChunkCollectorSet<ModelResourceLocation> localSet = new ChunkCollectorSet<>(
+                    Math.max((end - start) * 2, estimatedStates), MODEL_ADAPTER);
             String[] localNs = new String[end - start];
             try {
                 if (builder == null) {
@@ -225,6 +275,7 @@ public final class ModelBakeHelperSupport {
                 for (int i = start; i < end; i++) {
                     Map.Entry<ResourceKey<Block>, Block> entry = entries.get(i);
                     ResourceLocation id = entry.getKey().location();
+                    localSet.beginBlock(id);
                     MODEL_LOCATION_BUILDER_GENERATE_BLOCK.invokeExact(builder, (Set<ModelResourceLocation>) localSet, entry.getValue(), id);
                     localNs[i - start] = id.getNamespace();
                 }

@@ -5,9 +5,14 @@ import net.minecraft.server.packs.PackResources;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.gen.Accessor;
 
-/** Direct accessor to {@link CompositePackResources#primaryPackResources} avoiding runtime reflection. */
+import java.util.List;
+
+/** Direct accessor to {@link CompositePackResources} packs avoiding runtime reflection. */
 @Mixin(CompositePackResources.class)
 public interface CompositePackResourcesAccessor {
     @Accessor("primaryPackResources")
     PackResources lightspeed$getPrimaryPackResources();
+
+    @Accessor("packResourcesStack")
+    List<PackResources> lightspeed$getPackResourcesStack();
 }

@@ -20,4 +20,12 @@ public final class ResourceOutputEmitter {
         output.accept(location, stream);
         return true;
     }
+
+    public static String namespace(Object id) {
+        return id instanceof ResourceLocation location ? location.getNamespace() : null;
+    }
+
+    public static String path(Object id) {
+        return id instanceof ResourceLocation location ? location.getPath() : null;
+    }
 }

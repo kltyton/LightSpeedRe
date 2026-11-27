@@ -144,16 +144,33 @@ public final class ModelBakeHelperSupport {
         }
 
         IndexedLocationSet indexedTarget = topLevelModelLocations instanceof IndexedLocationSet s ? s : null;
-        String lastNs = null;
+        boolean allDisjoint = indexedTarget != null;
+        int totalGenerated = 0;
         for (int c = 0; c < chunkCount; c++) {
             ChunkCollectorSet locs = chunkLocs[c];
-            if (locs != null && !locs.isEmpty()) {
-                if (indexedTarget != null) {
-                    indexedTarget.appendArrayUnchecked(locs.rawElements(), locs.size());
-                } else {
-                    topLevelModelLocations.addAll(locs);
+            if (locs != null) {
+                totalGenerated += locs.size();
+                if (!locs.isDisjointByBlock()) {
+                    allDisjoint = false;
                 }
             }
+        }
+        if (allDisjoint && totalGenerated > 0) {
+            indexedTarget.appendDisjointChunks(chunkLocs, totalGenerated);
+        } else {
+            for (int c = 0; c < chunkCount; c++) {
+                ChunkCollectorSet locs = chunkLocs[c];
+                if (locs != null && !locs.isEmpty()) {
+                    if (indexedTarget != null) {
+                        indexedTarget.appendArrayUnchecked(locs.rawElements(), locs.size());
+                    } else {
+                        topLevelModelLocations.addAll(locs);
+                    }
+                }
+            }
+        }
+        String lastNs = null;
+        for (int c = 0; c < chunkCount; c++) {
             String[] nss = chunkNamespaces[c];
             if (nss != null) {
                 for (String ns : nss) {
@@ -183,7 +200,11 @@ public final class ModelBakeHelperSupport {
                 }
                 int start = (int) ((long) chunk * total / chunkCount);
                 int end = (int) ((long) (chunk + 1) * total / chunkCount);
-            ChunkCollectorSet localSet = new ChunkCollectorSet((end - start) * 2);
+            int estimatedStates = 0;
+            for (int i = start; i < end; i++) {
+                estimatedStates += entries.get(i).getValue().getStateDefinition().getPossibleStates().size();
+            }
+            ChunkCollectorSet localSet = new ChunkCollectorSet(Math.max((end - start) * 2, estimatedStates));
             String[] localNs = new String[end - start];
             try {
                 if (builder == null) {
@@ -192,6 +213,7 @@ public final class ModelBakeHelperSupport {
                 for (int i = start; i < end; i++) {
                     Map.Entry<ResourceKey<Block>, Block> entry = entries.get(i);
                     ResourceLocation id = entry.getKey().location();
+                    localSet.beginBlock(id);
                     MODEL_LOCATION_BUILDER_GENERATE_BLOCK.invokeExact(builder, (Set<ResourceLocation>) localSet, entry.getValue(), id);
                     localNs[i - start] = id.getNamespace();
                 }
@@ -289,25 +311,110 @@ public final class ModelBakeHelperSupport {
     /** Append-only flat collector passed per worker chunk to {@code ModelLocationBuilder.generateForBlock}. */
     private static final class ChunkCollectorSet extends AbstractSet<ResourceLocation> {
         private final ObjectArrayList<ResourceLocation> list;
-        private final ObjectOpenHashSet<ResourceLocation> seen;
+        private ObjectOpenHashSet<ResourceLocation> blockSeen;
+        private ObjectOpenHashSet<ResourceLocation> chunkSeen;
+        private String currentBlockNs;
+        private String currentBlockPath;
+        private int currentBlockCount;
+        private ResourceLocation currentBlockFirst;
+        private boolean disjointByBlock = true;
+        private boolean sawInventoryVariant;
+        private boolean sawPlainLocation;
 
         private ChunkCollectorSet(int initialCapacity) {
             this.list = new ObjectArrayList<>(Math.max(16, initialCapacity));
-            this.seen = new ObjectOpenHashSet<>(Math.max(16, initialCapacity), 0.75f);
+        }
+
+        private void beginBlock(ResourceLocation id) {
+            this.currentBlockNs = id.getNamespace();
+            this.currentBlockPath = id.getPath();
+            this.currentBlockCount = 0;
+            this.currentBlockFirst = null;
+            if (blockSeen != null && !blockSeen.isEmpty()) {
+                blockSeen.clear();
+            }
+        }
+
+        private boolean isDisjointByBlock() {
+            return disjointByBlock;
+        }
+
+        private boolean sawInventoryVariant() {
+            return sawInventoryVariant;
+        }
+
+        private boolean sawPlainLocation() {
+            return sawPlainLocation;
         }
 
         @Override
         public boolean add(ResourceLocation loc) {
-            if (!seen.add(loc)) {
+            if (disjointByBlock) {
+                if (loc != null && currentBlockNs != null
+                        && currentBlockNs.equals(loc.getNamespace())
+                        && currentBlockPath.equals(loc.getPath())) {
+                    if (loc instanceof ModelResourceLocation mrl) {
+                        if (!sawInventoryVariant && "inventory".equals(mrl.getVariant())) {
+                            sawInventoryVariant = true;
+                        }
+                    } else {
+                        sawPlainLocation = true;
+                    }
+                    int count = currentBlockCount;
+                    if (count == 0) {
+                        currentBlockFirst = loc;
+                        currentBlockCount = 1;
+                        list.add(loc);
+                        return true;
+                    }
+                    if (count == 1) {
+                        if (currentBlockFirst.equals(loc)) {
+                            return false;
+                        }
+                        if (blockSeen == null) {
+                            blockSeen = new ObjectOpenHashSet<>(16, 0.75f);
+                        }
+                        blockSeen.add(currentBlockFirst);
+                        blockSeen.add(loc);
+                        currentBlockCount = 2;
+                        list.add(loc);
+                        return true;
+                    }
+                    if (!blockSeen.add(loc)) {
+                        return false;
+                    }
+                    currentBlockCount = count + 1;
+                    list.add(loc);
+                    return true;
+                }
+                promoteToChunkDedup();
+            }
+            if (!chunkSeen.add(loc)) {
                 return false;
             }
             list.add(loc);
             return true;
         }
 
+        private void promoteToChunkDedup() {
+            disjointByBlock = false;
+            int sz = list.size();
+            ObjectOpenHashSet<ResourceLocation> seen = new ObjectOpenHashSet<>(Math.max(16, sz + 16), 0.75f);
+            Object[] raw = list.elements();
+            for (int i = 0; i < sz; i++) {
+                seen.add((ResourceLocation) raw[i]);
+            }
+            chunkSeen = seen;
+            blockSeen = null;
+        }
+
         @Override
         public boolean contains(Object o) {
-            return seen.contains(o);
+            if (!disjointByBlock) {
+                return chunkSeen.contains(o);
+            }
+            promoteToChunkDedup();
+            return chunkSeen.contains(o);
         }
 
         @Override
@@ -331,6 +438,10 @@ public final class ModelBakeHelperSupport {
         private volatile Map<String, CompactArrayLocationSet> buckets;
         private Object[] elements;
         private int size;
+        private boolean blockDisjointActive;
+        private boolean disjointFromInventory;
+        private boolean disjointFromPlain;
+        private ObjectOpenHashSet<ResourceLocation> sideLookup;
 
         void attachBuckets(Map<String, CompactArrayLocationSet> buckets) {
             this.buckets = buckets;
@@ -341,27 +452,65 @@ public final class ModelBakeHelperSupport {
             this.elements = new Object[cap];
         }
 
-        private ObjectOpenHashSet<ResourceLocation> ensureLookup() {
+        private boolean isDisjointFromInitialBlocks(ResourceLocation loc) {
+            if (!blockDisjointActive || loc == null) {
+                return false;
+            }
+            if (loc instanceof ModelResourceLocation mrl) {
+                if (disjointFromInventory && "inventory".equals(mrl.getVariant())) {
+                    return true;
+                }
+                return !BuiltInRegistries.BLOCK.containsKey(new ResourceLocation(mrl.getNamespace(), mrl.getPath()));
+            }
+            if (disjointFromPlain) {
+                return true;
+            }
+            return !BuiltInRegistries.BLOCK.containsKey(loc);
+        }
+
+        private ObjectOpenHashSet<ResourceLocation> ensureLookup(int expectedSize) {
             ObjectOpenHashSet<ResourceLocation> set = this.lookup;
             if (set == null) {
                 synchronized (this) {
                     set = this.lookup;
                     if (set == null) {
-                        set = new ObjectOpenHashSet<>(Math.max(16, size), 0.75f);
+                        int cap = Math.max(16, Math.max(this.size, expectedSize));
+                        set = new ObjectOpenHashSet<>(cap, 0.75f);
                         Object[] arr = this.elements;
                         int limit = this.size;
                         for (int i = 0; i < limit; i++) {
                             set.add((ResourceLocation) arr[i]);
                         }
                         this.lookup = set;
+                        this.blockDisjointActive = false;
+                        this.disjointFromInventory = false;
+                        this.disjointFromPlain = false;
+                        this.sideLookup = null;
                     }
                 }
             }
             return set;
         }
 
+        private ObjectOpenHashSet<ResourceLocation> ensureLookup() {
+            return ensureLookup(Math.max(this.size, this.elements.length));
+        }
+
         @Override
         public boolean add(ResourceLocation loc) {
+            if (this.lookup == null && isDisjointFromInitialBlocks(loc)) {
+                ObjectOpenHashSet<ResourceLocation> side = this.sideLookup;
+                if (side == null) {
+                    side = new ObjectOpenHashSet<>(4_096, 0.75f);
+                    this.sideLookup = side;
+                }
+                if (!side.add(loc)) {
+                    return false;
+                }
+                this.buckets = null;
+                append(loc);
+                return true;
+            }
             if (!ensureLookup().add(loc)) {
                 return false;
             }
@@ -370,11 +519,64 @@ public final class ModelBakeHelperSupport {
             return true;
         }
 
+        void appendDisjointChunks(ChunkCollectorSet[] chunks, int totalCount) {
+            if (totalCount <= 0) {
+                return;
+            }
+            if (this.size == 0 && this.lookup == null && this.sideLookup == null) {
+                ensureCapacity(totalCount);
+                Object[] arr = this.elements;
+                int write = 0;
+                boolean anyInv = false;
+                boolean anyPlain = false;
+                for (ChunkCollectorSet chunk : chunks) {
+                    if (chunk != null && !chunk.isEmpty()) {
+                        int len = chunk.size();
+                        System.arraycopy(chunk.rawElements(), 0, arr, write, len);
+                        write += len;
+                        if (chunk.sawInventoryVariant()) {
+                            anyInv = true;
+                        }
+                        if (chunk.sawPlainLocation()) {
+                            anyPlain = true;
+                        }
+                    }
+                }
+                this.size = write;
+                this.buckets = null;
+                this.blockDisjointActive = write > 0;
+                this.disjointFromInventory = !anyInv;
+                this.disjointFromPlain = !anyPlain;
+                return;
+            }
+            ObjectOpenHashSet<ResourceLocation> set = ensureLookup(this.size + totalCount);
+            ensureCapacity(this.size + totalCount);
+            Object[] arr = this.elements;
+            int write = this.size;
+            for (ChunkCollectorSet chunk : chunks) {
+                if (chunk == null || chunk.isEmpty()) {
+                    continue;
+                }
+                Object[] raw = chunk.rawElements();
+                int len = chunk.size();
+                for (int i = 0; i < len; i++) {
+                    ResourceLocation loc = (ResourceLocation) raw[i];
+                    if (set.add(loc)) {
+                        arr[write++] = loc;
+                    }
+                }
+            }
+            if (write != this.size) {
+                this.buckets = null;
+            }
+            this.size = write;
+        }
+
         void appendArrayUnchecked(Object[] items, int count) {
             if (count <= 0) {
                 return;
             }
-            ObjectOpenHashSet<ResourceLocation> set = ensureLookup();
+            ObjectOpenHashSet<ResourceLocation> set = ensureLookup(Math.max(this.elements.length, this.size + count));
             ensureCapacity(size + count);
             Object[] arr = this.elements;
             int write = this.size;
@@ -415,6 +617,10 @@ public final class ModelBakeHelperSupport {
                 CompactArrayLocationSet slice = currentBuckets.get(loc.getNamespace());
                 return slice != null && slice.contains(loc);
             }
+            if (this.lookup == null && isDisjointFromInitialBlocks(loc)) {
+                ObjectOpenHashSet<ResourceLocation> side = this.sideLookup;
+                return side != null && side.contains(loc);
+            }
             return ensureLookup().contains(o);
         }
 
@@ -443,6 +649,10 @@ public final class ModelBakeHelperSupport {
         @Override
         public void clear() {
             this.buckets = null;
+            this.blockDisjointActive = false;
+            this.disjointFromInventory = false;
+            this.disjointFromPlain = false;
+            this.sideLookup = null;
             ObjectOpenHashSet<ResourceLocation> set = this.lookup;
             if (set != null) {
                 set.clear();

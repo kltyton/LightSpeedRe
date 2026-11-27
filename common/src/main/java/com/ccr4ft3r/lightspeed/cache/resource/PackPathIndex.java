@@ -160,6 +160,22 @@ public final class PackPathIndex implements ICache {
         return identity == null ? null : false;
     }
 
+    public Boolean hasAnyUnder(PackType type, String namespace, String path) {
+        if (type == null || path == null) {
+            return null;
+        }
+        for (int root = 0; root < roots.size(); root++) {
+            OrderedResourcePathIndex index = loadedIndex(type, namespace, root);
+            if (index == null) {
+                return null;
+            }
+            if (index.hasAtOrUnder(path)) {
+                return Boolean.TRUE;
+            }
+        }
+        return Boolean.FALSE;
+    }
+
     public boolean listResources(PackType type, String namespace, String directory,
             PackResources.ResourceOutput output, BiPredicate<Path, BasicFileAttributes> includeFile) {
         List<OrderedResourcePathIndex> selected = new ArrayList<>(roots.size());

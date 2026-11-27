@@ -3,7 +3,6 @@ package com.ccr4ft3r.lightspeed.startup.registry;
 import net.minecraft.resources.ResourceLocation;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.ConcurrentModificationException;
 import java.util.HashMap;
@@ -24,6 +23,7 @@ public final class ObjectHolderDispatch {
     private static final LongAdder NANOS = new LongAdder();
     private static volatile Routes routes;
     private static boolean needsFullRebuild = true;
+    private static final List<Object> ADDED_SINCE_BUILD = new ArrayList<>();
 
     private ObjectHolderDispatch() {
     }
@@ -31,6 +31,7 @@ public final class ObjectHolderDispatch {
     public static void invalidate() {
         synchronized (ObjectHolderDispatch.class) {
             needsFullRebuild = true;
+            ADDED_SINCE_BUILD.clear();
             VERSION.incrementAndGet();
         }
     }
@@ -38,7 +39,11 @@ public final class ObjectHolderDispatch {
     public static void onAdded(Object holder) {
         synchronized (ObjectHolderDispatch.class) {
             VERSION.incrementAndGet();
-            needsFullRebuild = true;
+            if (!needsFullRebuild && routes != null) {
+                ADDED_SINCE_BUILD.add(holder);
+            } else {
+                needsFullRebuild = true;
+            }
         }
     }
 
@@ -106,14 +111,26 @@ public final class ObjectHolderDispatch {
             version = VERSION.get();
             current = routes;
             if (current != null && !needsFullRebuild) {
-                if (current.pending().length != 0 && hasNewlyValidated(current.pending())) {
-                    current = promotePending(current, version);
-                } else if (current.version() != version) {
-                    current = current.withVersion(version);
+                if (!ADDED_SINCE_BUILD.isEmpty()) {
+                    if (current.count() + ADDED_SINCE_BUILD.size() == holders.size()) {
+                        current = appendAdded(current, ADDED_SINCE_BUILD, version);
+                        ADDED_SINCE_BUILD.clear();
+                    } else {
+                        ADDED_SINCE_BUILD.clear();
+                        needsFullRebuild = true;
+                    }
                 }
-                routes = current;
-                return current;
+                if (!needsFullRebuild) {
+                    if (current.pending().length != 0 && hasNewlyValidated(current.pending())) {
+                        current = promotePending(current, version);
+                    } else if (current.version() != version) {
+                        current = current.withVersion(version);
+                    }
+                    routes = current;
+                    return current;
+                }
             }
+            ADDED_SINCE_BUILD.clear();
             Object[] snapshot = holders.toArray();
             Map<ResourceLocation, List<OrderedHolder>> grouped = new HashMap<>(64);
             List<OrderedHolder> staticCustom = new ArrayList<>();
@@ -130,6 +147,38 @@ public final class ObjectHolderDispatch {
             routes = current;
             return current;
         }
+    }
+
+    private static Routes appendAdded(Routes current, List<Object> additions, long version) {
+        Object[] addedItems = additions.toArray();
+        Map<ResourceLocation, List<OrderedHolder>> grouped = new HashMap<>(Math.min(16, addedItems.length));
+        List<OrderedHolder> addedStatic = new ArrayList<>();
+        List<OrderedHolder> addedPending = new ArrayList<>();
+        classifyHolders(addedItems, addedItems.length, current.count(), grouped, addedStatic, addedPending);
+
+        Map<ResourceLocation, OrderedHolder[]> byRegistry;
+        if (grouped.isEmpty()) {
+            byRegistry = current.byRegistry();
+        } else {
+            Map<ResourceLocation, OrderedHolder[]> updated = new HashMap<>(current.byRegistry().size() * 2 + 4);
+            updated.putAll(current.byRegistry());
+            grouped.forEach((key, list) -> {
+                OrderedHolder[] addArr = list.toArray(EMPTY_HOLDERS);
+                OrderedHolder[] existing = updated.get(key);
+                updated.put(key, existing == null ? addArr : concatArrays(existing, addArr));
+            });
+            byRegistry = Collections.unmodifiableMap(updated);
+        }
+        OrderedHolder[] newStatic = addedStatic.isEmpty()
+                ? current.staticCustom()
+                : concatArrays(current.staticCustom(), addedStatic.toArray(EMPTY_HOLDERS));
+        OrderedHolder[] newPending = addedPending.isEmpty()
+                ? current.pending()
+                : concatArrays(current.pending(), addedPending.toArray(EMPTY_HOLDERS));
+        OrderedHolder[] newFallback = addedStatic.isEmpty() && addedPending.isEmpty()
+                ? current.fallbackCustom()
+                : mergeArrays(newStatic, newPending);
+        return new Routes(version, current.count() + addedItems.length, byRegistry, newStatic, newPending, newFallback);
     }
 
     @SuppressWarnings("unchecked")
@@ -203,6 +252,15 @@ public final class ObjectHolderDispatch {
         OrderedHolder[] newFallback = mergeArrays(current.staticCustom(), newPending);
         return new Routes(version, current.count(), Collections.unmodifiableMap(updatedByRegistry),
                 current.staticCustom(), newPending, newFallback);
+    }
+
+    private static OrderedHolder[] concatArrays(OrderedHolder[] first, OrderedHolder[] second) {
+        if (first.length == 0) return second;
+        if (second.length == 0) return first;
+        OrderedHolder[] merged = new OrderedHolder[first.length + second.length];
+        System.arraycopy(first, 0, merged, 0, first.length);
+        System.arraycopy(second, 0, merged, first.length, second.length);
+        return merged;
     }
 
     private static OrderedHolder[] mergeArrays(OrderedHolder[] first, OrderedHolder[] second) {

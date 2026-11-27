@@ -189,7 +189,9 @@ public final class LauncherTransformer implements ClassFileTransformer {
                             UnionFsLockPatch::apply))),
             Map.entry(SECURE_JAR_MODULE_READER, List.of(
                     targetWithLoader("045c87e04bf053c21da1cd06ea9d3a2426eed5bdc3464069d0191e1758401ab0",
-                            (loader, bytes) -> JarModuleReaderPatch.apply(bytes, loader)))),
+                            (loader, bytes) -> JarModuleReaderPatch.apply(bytes, loader)),
+                    targetWithoutAgentRead("1ea2f296173865dceceba5a30172a0ae1c9633627ef2a6c5869bd5fa18b8c688",
+                            JarModuleReaderPatch::applyV3))),
             Map.entry(MODULE_CLASS_LOADER, List.of(
                     target("62e3eaa069098d55f5da70e6dbc2a35a1e622d68804b2af6049583151bcb6f16", ClassBytesPatch::apply),
                     target("1ea195fe3b32c95e7232f49c14750b9245a664e3b66c89e298c31371d8b36376", ClassBytesPatch::apply))),
