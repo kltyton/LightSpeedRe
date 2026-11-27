@@ -17,16 +17,14 @@ public final class ClientSnapshotCoordinator {
             ModelInputSnapshot.persist();
             NativeImageSnapshot.persist();
             ShaderProgramSnapshot.persist();
-            FontWarmupSnapshot.persist();
             LogUtils.getLogger().info(
-                    "Lightspeed client snapshots: modelHits={} modelMisses={} nativeHits={} nativeMisses={} nativeRestores={} nativeRestoreFailures={} shaderHits={} shaderMisses={} fontHits={} fontMisses={} failures={}",
+                    "Lightspeed client snapshots: modelHits={} modelMisses={} nativeHits={} nativeMisses={} nativeRestores={} nativeRestoreFailures={} shaderHits={} shaderMisses={} failures={}",
                     ModelInputSnapshot.hits(), ModelInputSnapshot.misses(),
                     NativeImageSnapshot.hits(), NativeImageSnapshot.misses(),
                     NativeImageSnapshot.restores(), NativeImageSnapshot.restoreFailures(),
                     ShaderProgramSnapshot.hits(), ShaderProgramSnapshot.misses(),
-                    FontWarmupSnapshot.hits(), FontWarmupSnapshot.misses(),
                     ModelInputSnapshot.failures() + NativeImageSnapshot.failures()
-                            + ShaderProgramSnapshot.failures() + FontWarmupSnapshot.failures());
+                            + ShaderProgramSnapshot.failures());
         });
     }
 }

@@ -5,6 +5,7 @@ import java.io.BufferedOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -50,6 +51,27 @@ public final class SnapshotFileStore {
         }
         hits.increment();
         return value.clone();
+    }
+
+    /** Returns a zero-copy read-only view over the stored immutable bytes. */
+    public ByteBuffer getReadOnly(String key) {
+        ensureLoaded();
+        byte[] value = entries.get(key);
+        if (value == null) {
+            misses.increment();
+            return null;
+        }
+        hits.increment();
+        return ByteBuffer.wrap(value).asReadOnlyBuffer();
+    }
+
+    /** Releases heap-resident entries after startup persistence while allowing lazy reload if queried again. */
+    public synchronized void clearInMemory() {
+        synchronized (entries) {
+            entries.clear();
+            totalBytes = 0;
+            loaded = false;
+        }
     }
 
     public boolean put(String key, byte[] value) {

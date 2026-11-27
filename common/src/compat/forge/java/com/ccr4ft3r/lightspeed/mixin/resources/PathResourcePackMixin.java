@@ -304,6 +304,7 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
         lightspeed$directoryScans.clear();
         ModPackIndex earlyIndex = lightspeed$earlyModIndex;
         if (earlyIndex != null) {
+            lightspeed$earlyModIndex = null;
             earlyIndex.closeArchive();
         }
     }
@@ -326,7 +327,8 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
             lightspeed$earlyModIndex = com.ccr4ft3r.lightspeed.startup.compat.PackResourcesCacheSupport
                     .tryGetModPackIndex(modFile);
         }
-        this.lightspeed$id = PackResourcesCacheSupport.hasSingleJarModRoot(modFile)
+        boolean usesEarlyIndex = lightspeed$earlyModIndex != null && !FusionPackCompat.hasOverrides(this);
+        this.lightspeed$id = !usesEarlyIndex && PackResourcesCacheSupport.hasSingleJarModRoot(modFile)
                 ? ResourcePackCacheKey.from(modFile, GlobalCache.shouldVerifyJarHash) : null;
         lightspeed$setExistenceByResource(lightspeed$id == null
                 ? new java.util.concurrent.ConcurrentHashMap<>(64)
@@ -336,10 +338,12 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
         for (PackType packType : PackType.values()) {
             lightspeed$paths.lists().put(packType, new java.util.concurrent.ConcurrentHashMap<>(64));
         }
-        lightspeed$persistedCacheLoad = CompletableFuture.allOf(
-                GlobalCache.loadPersistedCacheAsync(NAMESPACE_CACHE_DIR, lightspeed$id, lightspeed$paths.namespaces()),
-                GlobalCache.loadPersistedCacheAsync(RESOURCE_LIST_CACHE_DIR, lightspeed$id,
-                        lightspeed$paths.lists()));
+        lightspeed$persistedCacheLoad = lightspeed$id == null
+                ? CompletableFuture.completedFuture(null)
+                : CompletableFuture.allOf(
+                        GlobalCache.loadPersistedCacheAsync(NAMESPACE_CACHE_DIR, lightspeed$id, lightspeed$paths.namespaces()),
+                        GlobalCache.loadPersistedCacheAsync(RESOURCE_LIST_CACHE_DIR, lightspeed$id,
+                                lightspeed$paths.lists()));
     }
 
     @Override

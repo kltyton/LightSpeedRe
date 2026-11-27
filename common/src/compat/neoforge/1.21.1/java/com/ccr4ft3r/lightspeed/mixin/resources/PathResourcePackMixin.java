@@ -125,16 +125,16 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
 
     @Inject(method = "getNamespaces", at = @At("HEAD"), cancellable = true)
     public void getNamespacesHeadInjected(PackType type, CallbackInfoReturnable<Set<String>> cir) {
+        if (!GlobalCache.isEnabled || FusionPackCompat.hasOverrides(this)) {
+            return;
+        }
         ModPackIndex modIndex = lightspeed$earlyModIndex;
-        if (modIndex != null && !FusionPackCompat.hasOverrides(this)) {
+        if (modIndex != null) {
             Set<String> indexedNs = modIndex.namespaces(type);
             if (indexedNs != null) {
                 cir.setReturnValue(indexedNs);
                 return;
             }
-        }
-        if (!GlobalCache.isEnabled || FusionPackCompat.hasOverrides(this)) {
-            return;
         }
         Set<String> namespaces = lightspeed$getCachedNamespaces(type);
         if (namespaces != null) {
@@ -154,6 +154,9 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
 
     @Inject(method = "getRootResource", at = @At("HEAD"), cancellable = true)
     public void getRootResourceHeadInjected(String[] paths, CallbackInfoReturnable<IoSupplier<InputStream>> cir) {
+        if (!GlobalCache.isEnabled) {
+            return;
+        }
         ModPackIndex modIndex = lightspeed$earlyModIndex;
         if (modIndex != null && !FusionPackCompat.hasOverrides(this)) {
             int probe = modIndex.checkRoot(paths);
@@ -167,7 +170,7 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
                 return;
             }
         }
-        if (!GlobalCache.isEnabled || !GlobalCache.shouldCacheResourceExistence) {
+        if (!GlobalCache.shouldCacheResourceExistence) {
             return;
         }
 
@@ -189,8 +192,11 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
 
     @Inject(method = "getResource", at = @At("HEAD"), cancellable = true)
     public void getResourceHeadInjected(PackType type, ResourceLocation location, CallbackInfoReturnable<IoSupplier<InputStream>> cir) {
+        if (!GlobalCache.isEnabled || FusionPackCompat.hasOverrides(this)) {
+            return;
+        }
         ModPackIndex modIndex = lightspeed$earlyModIndex;
-        if (modIndex != null && !FusionPackCompat.hasOverrides(this)) {
+        if (modIndex != null) {
             if (!modIndex.contains(type, location.getNamespace(), location.getPath())) {
                 cir.setReturnValue(null);
                 return;
@@ -198,7 +204,7 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
             cir.setReturnValue(lightspeed$openResourceFromModIndex(modIndex, type, location));
             return;
         }
-        if (!GlobalCache.isEnabled || !GlobalCache.shouldCacheWalkedPaths || FusionPackCompat.hasOverrides(this)) {
+        if (!GlobalCache.shouldCacheWalkedPaths) {
             return;
         }
         Boolean indexed = lightspeed$hasIndexedResource(type, location);
@@ -209,9 +215,11 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
 
     @Inject(method = "listResources", at = @At("HEAD"), cancellable = true)
     public void listResourcesHeadInjected(PackType type, String namespace, String path, PackResources.ResourceOutput resourceOutput, CallbackInfo ci) {
+        if (!GlobalCache.isEnabled || FusionPackCompat.hasOverrides(this)) {
+            return;
+        }
         ModPackIndex modIndex = lightspeed$earlyModIndex;
-        if ((modIndex == null && (!GlobalCache.isEnabled || !GlobalCache.shouldCacheWalkedPaths))
-                || FusionPackCompat.hasOverrides(this)) {
+        if (modIndex == null && !GlobalCache.shouldCacheWalkedPaths) {
             return;
         }
 
@@ -307,6 +315,11 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
         lightspeed$cache().orderedIndexes().clear();
         lightspeed$scanFutures().clear();
         lightspeed$scans().clear();
+        ModPackIndex earlyIndex = lightspeed$earlyModIndex;
+        if (earlyIndex != null) {
+            lightspeed$earlyModIndex = null;
+            earlyIndex.closeArchive();
+        }
     }
 
     @WrapOperation(method = "listPath", at = @At(value = "INVOKE",
@@ -340,7 +353,8 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
         if (sameFilesystem && this.lightspeed$earlyModIndex == null && this.root.toAbsolutePath().normalize().getNameCount() == 0) {
             this.lightspeed$earlyModIndex = PackResourcesCacheSupport.tryGetModPackIndex(modFile);
         }
-        this.lightspeed$id = sameFilesystem && PackResourcesCacheSupport.hasSingleJarModRoot(modFile)
+        boolean usesEarlyIndex = this.lightspeed$earlyModIndex != null && !FusionPackCompat.hasOverrides(this);
+        this.lightspeed$id = !usesEarlyIndex && sameFilesystem && PackResourcesCacheSupport.hasSingleJarModRoot(modFile)
                 ? ResourcePackCacheKey.from(modFile, GlobalCache.shouldVerifyJarHash) : null;
         lightspeed$persistedCacheLoad = CompletableFuture.completedFuture(null);
         if (lightspeed$id == null) {
@@ -362,6 +376,10 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
 
     @Override
     public Boolean lightspeed$hasIndexedResource(PackType type, ResourceLocation location) {
+        ModPackIndex earlyIndex = lightspeed$earlyModIndex;
+        if (GlobalCache.isEnabled && earlyIndex != null) {
+            return earlyIndex.contains(type, location.getNamespace(), location.getPath());
+        }
         List<String> cachedPaths = lightspeed$getCachedFilePaths(type, location.getNamespace());
         if (cachedPaths == null) {
             return null;
@@ -515,10 +533,12 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
 
     @Unique
     private InputStream lightspeed$openRootFromModIndex(ModPackIndex index, String[] paths) throws java.io.IOException {
-        String entryName = String.join("/", paths);
-        InputStream direct = index.openEntryStream(entryName);
-        if (direct != null) {
-            return direct;
+        if (GlobalCache.isEnabled) {
+            String entryName = String.join("/", paths);
+            InputStream direct = index.openEntryStream(entryName);
+            if (direct != null) {
+                return direct;
+            }
         }
         return Files.newInputStream(lightspeed$resolveUncached(paths));
     }
@@ -530,10 +550,12 @@ public abstract class PathResourcePackMixin implements IPathResourcePack, IPackR
             ResourceLocation location
     ) {
         return () -> {
-            String entryName = type.getDirectory() + '/' + location.getNamespace() + '/' + location.getPath();
-            InputStream direct = index.openEntryStream(entryName);
-            if (direct != null) {
-                return direct;
+            if (GlobalCache.isEnabled) {
+                String entryName = type.getDirectory() + '/' + location.getNamespace() + '/' + location.getPath();
+                InputStream direct = index.openEntryStream(entryName);
+                if (direct != null) {
+                    return direct;
+                }
             }
             Path path = lightspeed$resolveUncached(lightspeed$getPathParts(type, location));
             if (!Files.exists(path)) {

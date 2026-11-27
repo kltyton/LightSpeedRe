@@ -582,6 +582,11 @@ public final class EarlyModPackIndexEngine {
         ModPackIndexStore.flushAsync();
     }
 
+    public static void finishStartup() {
+        EarlyZipResourceIndex.clearSharedRegistry();
+        ModPackIndexStore.flushAndReleaseAsync();
+    }
+
     public static ModPackIndex buildFromUnionRoot(Path diskPath, Predicate<String> fsFilter) {
         if (diskPath == null) {
             return null;
@@ -818,6 +823,7 @@ public final class EarlyModPackIndexEngine {
         if (verifiedModJar != null) {
             return verifiedModJar;
         }
+        awaitEarlyIndexReady();
         ConcurrentHashMap<String, CompletableFuture<String[]>> preindexed = sharedRegistry();
         if (preindexed != null) {
             String key = EarlyZipResourceIndex.normalizeKey(primary);
@@ -829,6 +835,7 @@ public final class EarlyModPackIndexEngine {
     }
 
     private static String[] lookupOrReadEntries(Path jarPath) {
+        awaitEarlyIndexReady();
         ConcurrentHashMap<String, CompletableFuture<String[]>> preindexed = sharedRegistry();
         if (preindexed != null) {
             CompletableFuture<String[]> future = preindexed.get(EarlyZipResourceIndex.normalizeKey(jarPath));
@@ -840,6 +847,16 @@ public final class EarlyModPackIndexEngine {
             return EarlyZipResourceIndex.readNonClassEntries(jarPath);
         } catch (Throwable ignored) {
             return null;
+        }
+    }
+
+    private static void awaitEarlyIndexReady() {
+        Object ready = System.getProperties().get(EarlyZipResourceIndex.READY_PROPERTY_KEY);
+        if (ready instanceof CompletableFuture<?> future && !future.isDone()) {
+            try {
+                future.join();
+            } catch (RuntimeException ignored) {
+            }
         }
     }
 

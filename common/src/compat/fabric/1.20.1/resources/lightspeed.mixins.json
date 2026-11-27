@@ -9,7 +9,6 @@
     "compat.SodiumSpriteOpaqueFastPathMixin",
     "resources.MinecraftReloadExecutorMixin",
     "misc.KeyValueConditionMixin",
-    "misc.MaterialMixin",
     "misc.SelectorMixin",
     "model.BlockModelMixin",
     "model.MultiPartMixin",
@@ -32,7 +31,6 @@
     "renderer.BlockEntityRenderDispatcherAccessor"
   ],
   "mixins": [
-    "misc.ResourceLocationMixin",
     "misc.StateDefinitonMixin",
     "resources.AbstractPackResourcesMixin",
     "resources.FallbackResourceManagerMixin",

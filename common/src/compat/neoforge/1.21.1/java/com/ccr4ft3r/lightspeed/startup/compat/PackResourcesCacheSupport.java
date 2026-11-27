@@ -6,7 +6,9 @@ import cpw.mods.niofs.union.UnionFileSystem;
 import cpw.mods.niofs.union.UnionPathFilter;
 import net.minecraft.server.packs.PackType;
 import net.neoforged.fml.ModList;
+import net.neoforged.fml.loading.moddiscovery.locators.ModsFolderLocator;
 import net.neoforged.neoforgespi.locating.IModFile;
+import net.neoforged.neoforgespi.locating.ModFileDiscoveryAttributes;
 
 import java.nio.file.FileSystem;
 import java.nio.file.FileSystems;
@@ -113,13 +115,49 @@ public final class PackResourcesCacheSupport {
         if (path == null || !(path.getFileSystem() instanceof UnionFileSystem ufs)) {
             return false;
         }
-        // The Agent's existing getPath hook records Union's native basepaths before this query.
-        ufs.getPath("/");
-        return BootstrapAgentBridge.resourceRootSourceCount(path) == 1;
+        if (Boolean.getBoolean("lightspeed.bootstrapAgent.active")) {
+            // The Agent's existing getPath hook records Union's native basepaths before this query.
+            ufs.getPath("/");
+            int agentSources = BootstrapAgentBridge.resourceRootSourceCount(path);
+            if (agentSources != BootstrapAgentBridge.UNKNOWN) {
+                return agentSources == 1;
+            }
+        }
+        return getSingleJarModFilesystems().containsKey(ufs);
+    }
+
+    private static boolean isSingleSourceModFile(IModFile modFile, Path root) {
+        if (Boolean.getBoolean("lightspeed.bootstrapAgent.active")
+                && root.getFileSystem() instanceof UnionFileSystem ufs) {
+            ufs.getPath("/");
+            int agentSources = BootstrapAgentBridge.resourceRootSourceCount(root);
+            if (agentSources != BootstrapAgentBridge.UNKNOWN) {
+                return agentSources == 1;
+            }
+        }
+        ModFileDiscoveryAttributes attrs = modFile.getDiscoveryAttributes();
+        if (attrs == null || attrs.parent() != null || attrs.locator() == null) {
+            return false;
+        }
+        Class<?> locatorClass = attrs.locator().getClass();
+        return locatorClass == ModsFolderLocator.class
+                || "net.neoforged.fml.loading.moddiscovery.locators.MavenDirectoryLocator".equals(locatorClass.getName());
     }
 
     public static boolean hasSingleJarModRoot(IModFile modFile) {
         return resolveSingleJarArchive(modFile) != null;
+    }
+
+    public static void clearStartupCaches() {
+        synchronized (MOD_PACK_INDEX_CACHE) {
+            for (Object value : MOD_PACK_INDEX_CACHE.values()) {
+                if (value instanceof ModPackIndex index) {
+                    index.closeArchive();
+                }
+            }
+            MOD_PACK_INDEX_CACHE.clear();
+        }
+        singleJarModFilesystems = null;
     }
 
     private static Predicate<String> createEntryFilter(UnionFileSystem ufs, Path basePath) {
@@ -153,7 +191,7 @@ public final class PackResourcesCacheSupport {
         if (root != null
                 && diskPath != null
                 && root.getFileSystem() instanceof UnionFileSystem ufs
-                && isSingleSource(root)
+                && isSingleSourceModFile(modFile, root)
                 && diskPath.getFileSystem() == FileSystems.getDefault()
                 && Files.isRegularFile(diskPath)
                 && diskPath.toAbsolutePath().normalize().equals(ufs.getPrimaryPath().toAbsolutePath().normalize())) {

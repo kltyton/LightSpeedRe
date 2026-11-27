@@ -6,6 +6,7 @@ import com.ccr4ft3r.lightspeed.client.advice.StartupAdvice;
 import com.ccr4ft3r.lightspeed.client.screen.StartupAdviceScreen;
 import com.ccr4ft3r.lightspeed.client.startup.ImmediateOverlayClose;
 import com.ccr4ft3r.lightspeed.startup.compat.EarlyModPackIndexEngine;
+import com.ccr4ft3r.lightspeed.startup.compat.PackResourcesCacheSupport;
 import com.ccr4ft3r.lightspeed.startup.installation.BootstrapAgentInstaller;
 import com.ccr4ft3r.lightspeed.client.cache.assets.ClientSnapshotCoordinator;
 import com.ccr4ft3r.lightspeed.compat.bootstrap.BootstrapAgentBridge;
@@ -93,7 +94,8 @@ public class TitleScreenInjector {
         ClientSnapshotCoordinator.persistAndLog();
         GlobalCache.persistCacheAsync("bootstrap startup image", BootstrapAgentBridge::persistResourceImage);
         GlobalCache.finishStartupCaches();
-        EarlyModPackIndexEngine.flushCacheAsync();
+        EarlyModPackIndexEngine.finishStartup();
+        PackResourcesCacheSupport.clearStartupCaches();
         if (LightspeedConfig.COMMON.installBootstrapAgent.get()) {
             BootstrapAgentInstaller.startPackCompilerAfterTitle();
         }

@@ -7,6 +7,7 @@ import com.ccr4ft3r.lightspeed.client.cache.assets.ShaderProgramSnapshot;
 import com.ccr4ft3r.lightspeed.client.screen.StartupAdviceScreen;
 import com.ccr4ft3r.lightspeed.client.startup.ImmediateOverlayClose;
 import com.ccr4ft3r.lightspeed.startup.compat.EarlyModPackIndexEngine;
+import com.ccr4ft3r.lightspeed.startup.compat.PackResourcesCacheSupport;
 import com.ccr4ft3r.lightspeed.startup.installation.BootstrapAgentInstaller;
 import com.ccr4ft3r.lightspeed.compat.bootstrap.BootstrapAgentBridge;
 import com.ccr4ft3r.lightspeed.config.LightspeedConfig;
@@ -82,7 +83,8 @@ public class TitleScreenInjector {
                         ShaderProgramSnapshot.hits(), ShaderProgramSnapshot.misses(), ShaderProgramSnapshot.failures());
             });
             GlobalCache.finishStartupCaches();
-            EarlyModPackIndexEngine.flushCacheAsync();
+            EarlyModPackIndexEngine.finishStartup();
+            PackResourcesCacheSupport.clearStartupCaches();
             boolean installEnabled = LightspeedConfig.COMMON.installBootstrapAgent.get();
             if (StartupAdvice.shouldShowPrompt(
                     Runtime.version().feature(),

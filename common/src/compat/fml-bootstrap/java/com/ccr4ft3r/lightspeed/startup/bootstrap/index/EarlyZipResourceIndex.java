@@ -30,6 +30,7 @@ import java.util.zip.ZipFile;
  */
 public final class EarlyZipResourceIndex {
     public static final String PROPERTY_KEY = "lightspeed.earlyZipEntries.v1";
+    public static final String READY_PROPERTY_KEY = "lightspeed.earlyZipEntries.ready.v1";
 
     private static final int EOCD_SIG = 0x06054b50;
     private static final int ZIP64_LOCATOR_SIG = 0x07064b50;
@@ -40,6 +41,7 @@ public final class EarlyZipResourceIndex {
     private static final int MAX_CD_BYTES = 128 * 1024 * 1024;
     private static final String[] EMPTY = new String[0];
     private static volatile Path instanceDirectory;
+    private static volatile boolean released;
 
     private EarlyZipResourceIndex() {
     }
@@ -48,81 +50,126 @@ public final class EarlyZipResourceIndex {
         return instanceDirectory;
     }
 
+    public static void clearSharedRegistry() {
+        released = true;
+        Object ready = System.getProperties().remove(READY_PROPERTY_KEY);
+        if (ready instanceof CompletableFuture<?> future && !future.isDone()) {
+            future.complete(null);
+        }
+        Object existing = System.getProperties().remove(PROPERTY_KEY);
+        if (existing instanceof ConcurrentHashMap<?, ?> map) {
+            map.clear();
+        }
+    }
+
     public static void preindexInstance(Path instanceDirectory) {
         if (instanceDirectory == null) {
             return;
         }
+        released = false;
         EarlyZipResourceIndex.instanceDirectory = instanceDirectory;
         ConcurrentHashMap<String, CompletableFuture<String[]>> registry = sharedRegistry();
-        List<Path> candidates = new ArrayList<>();
-        collectArchives(instanceDirectory.resolve("mods"), true, candidates);
-        collectArchives(instanceDirectory.resolve("resourcepacks"), false, candidates);
-        if (candidates.isEmpty()) {
-            return;
-        }
+        CompletableFuture<Void> readyFuture = new CompletableFuture<>();
+        System.getProperties().put(READY_PROPERTY_KEY, readyFuture);
+        Thread initThread = new Thread(() -> runPreindex(instanceDirectory, registry, readyFuture),
+                "Lightspeed-EarlyZipInit");
+        initThread.setDaemon(true);
+        initThread.start();
+    }
 
-        Map<String, EarlyZipIndexStore.CachedArchive> persisted = EarlyZipIndexStore.load(instanceDirectory);
-        ConcurrentHashMap<String, EarlyZipIndexStore.CachedArchive> nextSnapshot = new ConcurrentHashMap<>(persisted);
-        AtomicBoolean dirty = new AtomicBoolean(false);
-        List<CompletableFuture<Void>> pending = new ArrayList<>();
+    private static void runPreindex(
+            Path instanceDirectory,
+            ConcurrentHashMap<String, CompletableFuture<String[]>> registry,
+            CompletableFuture<Void> readyFuture
+    ) {
         ExecutorService executor = null;
-        AtomicInteger threadId = null;
+        List<CompletableFuture<Void>> pending = new ArrayList<>();
+        ConcurrentHashMap<String, EarlyZipIndexStore.CachedArchive> nextSnapshot = null;
+        AtomicBoolean dirty = new AtomicBoolean(false);
+        try {
+            if (released) {
+                return;
+            }
+            List<Path> candidates = new ArrayList<>();
+            collectArchives(instanceDirectory.resolve("mods"), true, candidates);
+            collectArchives(instanceDirectory.resolve("resourcepacks"), false, candidates);
+            if (candidates.isEmpty() || released) {
+                return;
+            }
 
-        for (Path archive : candidates) {
-            String key = normalizeKey(archive);
-            CompletableFuture<String[]> entryFuture = new CompletableFuture<>();
-            if (registry.putIfAbsent(key, entryFuture) != null) {
-                continue;
+            Map<String, EarlyZipIndexStore.CachedArchive> persisted = EarlyZipIndexStore.load(instanceDirectory);
+            if (released) {
+                return;
             }
-            long fileSize = -1L;
-            long mtimeMillis = 0L;
-            try {
-                BasicFileAttributes attrs = Files.readAttributes(archive, BasicFileAttributes.class);
-                fileSize = attrs.size();
-                mtimeMillis = attrs.lastModifiedTime().toMillis();
-            } catch (IOException ignored) {
-            }
-            EarlyZipIndexStore.CachedArchive cached = persisted.get(key);
-            if (cached != null && fileSize >= 0L && cached.size() == fileSize && cached.mtimeMillis() == mtimeMillis) {
-                entryFuture.complete(cached.entries());
-                continue;
-            }
-            if (executor == null) {
-                int threads = Math.min(12, Math.max(4, Runtime.getRuntime().availableProcessors()));
-                threadId = new AtomicInteger(1);
-                AtomicInteger ids = threadId;
-                executor = Executors.newFixedThreadPool(threads, runnable -> {
-                    Thread thread = new Thread(runnable, "Lightspeed-EarlyZip-" + ids.getAndIncrement());
-                    thread.setDaemon(true);
-                    return thread;
-                });
-            }
-            long capturedSize = fileSize;
-            long capturedMtime = mtimeMillis;
-            CompletableFuture<Void> work = CompletableFuture.runAsync(() -> {
-                try {
-                    String[] entries = readNonClassEntries(archive);
-                    entryFuture.complete(entries);
-                    if (entries != null && capturedSize >= 0L) {
-                        nextSnapshot.put(key, new EarlyZipIndexStore.CachedArchive(capturedSize, capturedMtime, entries));
-                        dirty.set(true);
-                    }
-                } catch (Throwable ignored) {
-                    entryFuture.complete(null);
+            nextSnapshot = new ConcurrentHashMap<>(persisted);
+            AtomicInteger threadId = null;
+
+            for (Path archive : candidates) {
+                if (released) {
+                    break;
                 }
-            }, executor);
-            pending.add(work);
+                String key = normalizeKey(archive);
+                CompletableFuture<String[]> entryFuture = new CompletableFuture<>();
+                if (registry.putIfAbsent(key, entryFuture) != null) {
+                    continue;
+                }
+                long fileSize = -1L;
+                long mtimeMillis = 0L;
+                try {
+                    BasicFileAttributes attrs = Files.readAttributes(archive, BasicFileAttributes.class);
+                    fileSize = attrs.size();
+                    mtimeMillis = attrs.lastModifiedTime().toMillis();
+                } catch (IOException ignored) {
+                }
+                EarlyZipIndexStore.CachedArchive cached = persisted.get(key);
+                if (cached != null && fileSize >= 0L && cached.size() == fileSize && cached.mtimeMillis() == mtimeMillis) {
+                    entryFuture.complete(cached.entries());
+                    continue;
+                }
+                if (executor == null) {
+                    int threads = Math.min(12, Math.max(4, Runtime.getRuntime().availableProcessors()));
+                    threadId = new AtomicInteger(1);
+                    AtomicInteger ids = threadId;
+                    executor = Executors.newFixedThreadPool(threads, runnable -> {
+                        Thread thread = new Thread(runnable, "Lightspeed-EarlyZip-" + ids.getAndIncrement());
+                        thread.setDaemon(true);
+                        return thread;
+                    });
+                }
+                long capturedSize = fileSize;
+                long capturedMtime = mtimeMillis;
+                ConcurrentHashMap<String, EarlyZipIndexStore.CachedArchive> snapshotRef = nextSnapshot;
+                CompletableFuture<Void> work = CompletableFuture.runAsync(() -> {
+                    try {
+                        String[] entries = readNonClassEntries(archive);
+                        entryFuture.complete(entries);
+                        if (entries != null && capturedSize >= 0L) {
+                            snapshotRef.put(key, new EarlyZipIndexStore.CachedArchive(capturedSize, capturedMtime, entries));
+                            dirty.set(true);
+                        }
+                    } catch (Throwable ignored) {
+                        entryFuture.complete(null);
+                    }
+                }, executor);
+                pending.add(work);
+            }
+        } finally {
+            readyFuture.complete(null);
         }
 
         if (pending.isEmpty()) {
+            if (executor != null) {
+                executor.shutdown();
+            }
             return;
         }
         ExecutorService activeExecutor = executor;
+        ConcurrentHashMap<String, EarlyZipIndexStore.CachedArchive> snapshotToSave = nextSnapshot;
         CompletableFuture.allOf(pending.toArray(CompletableFuture[]::new))
                 .whenComplete((ignored, error) -> {
                     try {
-                        if (dirty.get()) {
-                            EarlyZipIndexStore.save(instanceDirectory, nextSnapshot);
+                        if (dirty.get() && snapshotToSave != null) {
+                            EarlyZipIndexStore.save(instanceDirectory, snapshotToSave);
                         }
                     } finally {
                         activeExecutor.shutdown();

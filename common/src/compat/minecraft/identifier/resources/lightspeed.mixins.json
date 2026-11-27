@@ -5,11 +5,9 @@
   "client": [
     "MinecraftMainMixin",
     "client.LoadingOverlayMixin",
-    "resources.MinecraftReloadExecutorMixin",
-    "misc.MaterialMixin"
+    "resources.MinecraftReloadExecutorMixin"
   ],
   "mixins": [
-    "misc.ResourceLocationMixin",
     "misc.StateDefinitonMixin",
     "resources.AbstractPackResourcesMixin",
     "resources.FallbackResourceManagerMixin",

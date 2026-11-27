@@ -18,6 +18,7 @@ import org.slf4j.Logger;
 
 public final class NativeImageSnapshot {
     private static final int MAX_IMAGE_BYTES = 256 * 1024 * 1024;
+    private static final int MIN_ENCODED_PNG_BYTES = 2048;
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final String ENVIRONMENT_PROPERTY = "lightspeed.nativeImageSnapshot.environment";
     private static final String ENVIRONMENT = System.getProperty(ENVIRONMENT_PROPERTY, "");
@@ -33,7 +34,7 @@ public final class NativeImageSnapshot {
     private static final LongAdder RESTORES = new LongAdder();
     private static final LongAdder RESTORE_FAILURES = new LongAdder();
     private static final SnapshotFileStore STORE = ENABLED ? new SnapshotFileStore(
-            assetDirectory().resolve("native-images-v3-" + ENVIRONMENT.toLowerCase(java.util.Locale.ROOT) + ".bin"),
+            assetDirectory().resolve("native-images-v4-" + ENVIRONMENT.toLowerCase(java.util.Locale.ROOT) + ".bin"),
             0x4c534e49, PixelSnapshotCodec.VERSION,
             100_000, MAX_IMAGE_BYTES + PixelSnapshotCodec.HEADER_BYTES, 1024L * 1024L * 1024L) : null;
 
@@ -46,10 +47,11 @@ public final class NativeImageSnapshot {
 
     public static NativeImage read(InputStream input) throws IOException {
         byte[] encoded = NativeImageSnapshotInput.readAllBytesQuietly(input);
+        boolean eligible = ENABLED && encoded.length >= MIN_ENCODED_PNG_BYTES;
         String key = null;
-        if (ENABLED) {
+        if (eligible) {
             key = PixelSnapshotCodec.key(encoded, ENVIRONMENT);
-            byte[] snapshot = STORE.get(key);
+            ByteBuffer snapshot = STORE.getReadOnly(key);
             if (snapshot != null) {
                 NativeImage restored = restore(snapshot);
                 if (restored != null) {
@@ -67,7 +69,7 @@ public final class NativeImageSnapshot {
         } finally {
             MemoryUtil.memFree(compressed);
         }
-        if (ENABLED) {
+        if (eligible) {
             try {
                 record(key, decoded);
             } catch (RuntimeException exception) {
@@ -80,6 +82,7 @@ public final class NativeImageSnapshot {
     public static void persist() {
         if (ENABLED) {
             STORE.persist();
+            STORE.clearInMemory();
         }
     }
 
@@ -127,7 +130,7 @@ public final class NativeImageSnapshot {
         }
     }
 
-    private static NativeImage restore(byte[] snapshot) {
+    private static NativeImage restore(ByteBuffer snapshot) {
         try {
             PixelSnapshotCodec.Decoded decoded = PixelSnapshotCodec.decode(snapshot, MAX_IMAGE_BYTES);
             if (decoded == null) return null;

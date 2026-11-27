@@ -1,16 +1,17 @@
 package com.ccr4ft3r.lightspeed.client.cache.assets;
 
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.nio.charset.StandardCharsets;
 import java.util.HexFormat;
+import java.util.zip.CRC32C;
 
 /** Pure Java wire codec for native pixel snapshots; it does not allocate NativeImage objects. */
 public final class PixelSnapshotCodec {
-    public static final int VERSION = 3;
-    public static final int DIGEST_BYTES = 32;
-    public static final int HEADER_BYTES = Integer.BYTES * 4 + DIGEST_BYTES;
+    public static final int VERSION = 4;
+    public static final int CHECKSUM_BYTES = Integer.BYTES;
+    public static final int HEADER_BYTES = Integer.BYTES * 4 + CHECKSUM_BYTES;
 
     private PixelSnapshotCodec() {
     }
@@ -23,25 +24,28 @@ public final class PixelSnapshotCodec {
         }
         ByteBuffer output = ByteBuffer.allocate(HEADER_BYTES + (int) size);
         output.putInt(VERSION).putInt(format).putInt(width).putInt(height);
-        output.put(digest(output.duplicate().flip(), pixels.duplicate()));
+        output.putInt(checksum(output.duplicate().flip(), pixels.duplicate()));
         output.put(pixels.duplicate());
         return output.array();
     }
 
     public static Decoded decode(byte[] snapshot, int maxBytes) {
-        if (snapshot == null || snapshot.length < HEADER_BYTES) {
+        return snapshot == null ? null : decode(ByteBuffer.wrap(snapshot), maxBytes);
+    }
+
+    public static Decoded decode(ByteBuffer snapshot, int maxBytes) {
+        if (snapshot == null || snapshot.remaining() < HEADER_BYTES) {
             return null;
         }
-        ByteBuffer input = ByteBuffer.wrap(snapshot);
+        ByteBuffer input = snapshot.slice();
         int version = input.getInt();
         int format = input.getInt();
         int width = input.getInt();
         int height = input.getInt();
-        byte[] expected = new byte[DIGEST_BYTES];
-        input.get(expected);
+        int expectedChecksum = input.getInt();
         long size = pixelBytes(width, height, componentsForFormat(format));
         if (version != VERSION || size <= 0 || size > maxBytes || size != input.remaining()
-                || !MessageDigest.isEqual(expected, digest(metadata(input), input.duplicate()))) {
+                || expectedChecksum != checksum(metadata(input), input.duplicate())) {
             return null;
         }
         return new Decoded(format, width, height, input.slice());
@@ -84,6 +88,13 @@ public final class PixelSnapshotCodec {
         ByteBuffer metadata = input.duplicate();
         metadata.position(0).limit(Integer.BYTES * 4);
         return metadata;
+    }
+
+    private static int checksum(ByteBuffer metadata, ByteBuffer pixels) {
+        CRC32C crc = new CRC32C();
+        crc.update(metadata);
+        crc.update(pixels);
+        return (int) crc.getValue();
     }
 
     private static byte[] digest(ByteBuffer metadata, ByteBuffer pixels) {

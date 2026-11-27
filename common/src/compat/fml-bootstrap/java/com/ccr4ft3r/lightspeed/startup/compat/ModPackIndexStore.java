@@ -48,6 +48,8 @@ final class ModPackIndexStore {
     private static final AtomicBoolean PRELOAD_STARTED = new AtomicBoolean(false);
     private static final AtomicBoolean DIRTY = new AtomicBoolean(false);
     private static final AtomicBoolean FLUSHING = new AtomicBoolean(false);
+    private static final AtomicBoolean RELEASED = new AtomicBoolean(false);
+    private static final Object LIFECYCLE_LOCK = new Object();
 
     private record StoredPack(
             long size,
@@ -62,40 +64,51 @@ final class ModPackIndexStore {
     }
 
     static void preloadAsync() {
-        if (LOADED.get() || !PRELOAD_STARTED.compareAndSet(false, true)) {
+        if (RELEASED.get() || LOADED.get() || !PRELOAD_STARTED.compareAndSet(false, true)) {
             return;
         }
         CompletableFuture.runAsync(() -> {
+            if (RELEASED.get()) {
+                return;
+            }
             ensureLoaded();
-            prewarmArchivesAsync();
+            if (!RELEASED.get()) {
+                prewarmArchivesAsync();
+            }
         });
     }
 
     private static void prewarmArchivesAsync() {
-        if (ENTRIES.isEmpty()) {
+        if (RELEASED.get() || ENTRIES.isEmpty()) {
             return;
         }
         Set<Path> seen = new HashSet<>(ENTRIES.size() * 2);
         List<ModPackIndex> targets = new ArrayList<>(ENTRIES.size());
         for (StoredPack stored : ENTRIES.values()) {
             ModPackIndex idx = stored.index();
-            if (idx != null && idx.archivePath != null && seen.add(idx.archivePath)) {
+            if (idx != null && idx.archivePath != null && seen.add(idx.archivePath)
+                    && Files.isRegularFile(idx.archivePath)) {
                 targets.add(idx);
             }
         }
-        if (targets.isEmpty()) {
+        if (targets.isEmpty() || RELEASED.get()) {
             return;
         }
         int threads = Math.min(targets.size(), Math.min(8, Math.max(2, Runtime.getRuntime().availableProcessors())));
         AtomicInteger cursor = new AtomicInteger(0);
         for (int i = 0; i < threads; i++) {
             Thread worker = new Thread(() -> {
-                while (true) {
+                while (!RELEASED.get()) {
                     int index = cursor.getAndIncrement();
                     if (index >= targets.size()) {
                         return;
                     }
-                    targets.get(index).prewarmArchive();
+                    ModPackIndex target = targets.get(index);
+                    target.prewarmArchive();
+                    if (RELEASED.get()) {
+                        target.closeArchive();
+                        return;
+                    }
                 }
             }, "Lightspeed-PackArchivePrewarm-" + (i + 1));
             worker.setDaemon(true);
@@ -104,17 +117,23 @@ final class ModPackIndexStore {
     }
 
     static ModPackIndex tryGetUnfiltered(Path diskPath) {
+        if (RELEASED.get()) {
+            return null;
+        }
         StoredPack stored = validPack(diskPath, false);
         return stored == null ? null : stored.index();
     }
 
     static String[] rawEntries(Path diskPath) {
+        if (RELEASED.get()) {
+            return null;
+        }
         StoredPack stored = validPack(diskPath, true);
         return stored == null ? null : stored.rawEntries();
     }
 
     private static StoredPack validPack(Path diskPath, boolean hasFilter) {
-        if (diskPath == null) {
+        if (diskPath == null || RELEASED.get()) {
             return null;
         }
         ensureLoaded();
@@ -132,7 +151,7 @@ final class ModPackIndexStore {
     }
 
     static void record(Path diskPath, boolean hasFilter, ModPackIndex index, String[] rawEntries) {
-        if (diskPath == null || index == null) {
+        if (diskPath == null || index == null || RELEASED.get()) {
             return;
         }
         ensureLoaded();
@@ -153,12 +172,36 @@ final class ModPackIndexStore {
         }
         Path instanceDir = resolveInstanceDirectory();
         CompletableFuture.runAsync(() -> {
-            try {
-                if (DIRTY.compareAndSet(true, false)) {
-                    save(instanceDir);
+            synchronized (LIFECYCLE_LOCK) {
+                try {
+                    if (DIRTY.compareAndSet(true, false)) {
+                        save(instanceDir);
+                    }
+                } finally {
+                    FLUSHING.set(false);
                 }
-            } finally {
-                FLUSHING.set(false);
+            }
+        });
+    }
+
+    static void flushAndReleaseAsync() {
+        RELEASED.set(true);
+        Path instanceDir = resolveInstanceDirectory();
+        CompletableFuture.runAsync(() -> {
+            synchronized (LIFECYCLE_LOCK) {
+                try {
+                    if (DIRTY.compareAndSet(true, false)) {
+                        save(instanceDir);
+                    }
+                } finally {
+                    for (StoredPack stored : ENTRIES.values()) {
+                        ModPackIndex idx = stored.index();
+                        if (idx != null) {
+                            idx.closeArchive();
+                        }
+                    }
+                    ENTRIES.clear();
+                }
             }
         });
     }

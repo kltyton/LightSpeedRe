@@ -5,7 +5,9 @@ import com.ccr4ft3r.lightspeed.compat.bootstrap.BootstrapAgentBridge;
 import cpw.mods.niofs.union.UnionFileSystem;
 import net.minecraft.server.packs.PackType;
 import net.minecraftforge.fml.ModList;
+import net.minecraftforge.fml.loading.moddiscovery.ModsFolderLocator;
 import net.minecraftforge.forgespi.locating.IModFile;
+import net.minecraftforge.forgespi.locating.IModProvider;
 
 import java.nio.file.FileSystem;
 import java.nio.file.FileSystems;
@@ -113,12 +115,52 @@ public final class PackResourcesCacheSupport {
     }
 
     private static boolean isSingleSource(Path path) {
-        return path != null && path.getFileSystem() instanceof UnionFileSystem
-                && BootstrapAgentBridge.resourceRootSourceCount(path) == 1;
+        if (path == null || !(path.getFileSystem() instanceof UnionFileSystem ufs)) {
+            return false;
+        }
+        int agentSources = BootstrapAgentBridge.resourceRootSourceCount(path);
+        if (agentSources != BootstrapAgentBridge.UNKNOWN) {
+            return agentSources == 1;
+        }
+        return getSingleJarModFilesystems().containsKey(ufs);
+    }
+
+    private static boolean isSingleSourceModFile(IModFile modFile, Path root) {
+        int agentSources = BootstrapAgentBridge.resourceRootSourceCount(root);
+        if (agentSources != BootstrapAgentBridge.UNKNOWN) {
+            return agentSources == 1;
+        }
+        IModProvider provider = modFile.getProvider();
+        if (provider == null) {
+            return false;
+        }
+        Class<?> providerClass = provider.getClass();
+        return providerClass == ModsFolderLocator.class
+                || "net.minecraftforge.fml.loading.moddiscovery.MavenDirectoryLocator".equals(providerClass.getName());
     }
 
     public static boolean hasSingleJarModRoot(IModFile modFile) {
         return resolveSingleJarArchive(modFile) != null;
+    }
+
+    public static void clearStartupCaches() {
+        synchronized (MOD_PACK_INDEX_CACHE) {
+            for (Object value : MOD_PACK_INDEX_CACHE.values()) {
+                if (value instanceof ModPackIndex index) {
+                    index.closeArchive();
+                }
+            }
+            MOD_PACK_INDEX_CACHE.clear();
+        }
+        synchronized (PATH_PACK_INDEX_CACHE) {
+            for (Object value : PATH_PACK_INDEX_CACHE.values()) {
+                if (value instanceof ModPackIndex index) {
+                    index.closeArchive();
+                }
+            }
+            PATH_PACK_INDEX_CACHE.clear();
+        }
+        singleJarModFilesystems = null;
     }
 
     private static Path resolveSingleJarArchive(IModFile modFile) {
@@ -130,7 +172,7 @@ public final class PackResourcesCacheSupport {
         if (root != null
                 && diskPath != null
                 && root.getFileSystem() instanceof UnionFileSystem ufs
-                && isSingleSource(root)
+                && isSingleSourceModFile(modFile, root)
                 && diskPath.getFileSystem() == FileSystems.getDefault()
                 && Files.isRegularFile(diskPath)
                 && diskPath.toAbsolutePath().normalize().equals(ufs.getPrimaryPath().toAbsolutePath().normalize())) {

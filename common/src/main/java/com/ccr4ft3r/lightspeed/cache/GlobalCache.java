@@ -13,6 +13,7 @@ import org.slf4j.Logger;
 
 import java.io.File;
 import java.io.InputStream;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -75,9 +76,17 @@ public final class GlobalCache {
     private GlobalCache() {
     }
 
-    public static synchronized void add(ICache cache) {
-        if (isEnabled) {
-            CACHES.add(cache);
+    public static void add(ICache cache) {
+        if (cache == null || !isEnabled) {
+            return;
+        }
+        CACHES.add(cache);
+        if (!isEnabled && CACHES.remove(cache)) {
+            try {
+                cache.lightspeed$persistAndClearCache();
+            } catch (Exception exception) {
+                LOGGER.error("Lightspeed late cache clear failed: {}", cache.getClass().getName(), exception);
+            }
         }
     }
 
@@ -233,22 +242,35 @@ public final class GlobalCache {
             awaitPersistedCachesLoaded();
         }
         awaitBackgroundCacheTasks();
-        List<CompletableFuture<Void>> deleteTasks = new ArrayList<>();
-        CacheFiles.getCacheFiles(HAS_RESOURCE_CACHE_DIR).forEach(file -> deleteTasks.add(deleteAsync(file)));
-        CacheFiles.getCacheFiles(NAMESPACE_CACHE_DIR).forEach(file -> deleteTasks.add(deleteAsync(file)));
-        CacheFiles.getCacheFiles(RESOURCE_LIST_CACHE_DIR).forEach(file -> deleteTasks.add(deleteAsync(file)));
-        CompletableFuture.allOf(deleteTasks.toArray(new CompletableFuture[0])).join();
-        if (StartupCachePlatform.SHARED_PERSISTENCE) {
-            List<CompletableFuture<Void>> sharedTasks = new ArrayList<>();
-            PERSISTED_EXISTENCES_BY_MOD.forEach((id, cache) -> sharedTasks.add(
-                    CompletableFuture.runAsync(() -> CacheFiles.persist(cache, CacheFiles.cacheFile(HAS_RESOURCE_CACHE_DIR, id)), CACHE_EXECUTOR)));
-            PERSISTED_NAMESPACES_BY_MOD.forEach((id, cache) -> sharedTasks.add(
-                    CompletableFuture.runAsync(() -> CacheFiles.persist(cache, CacheFiles.cacheFile(NAMESPACE_CACHE_DIR, id)), CACHE_EXECUTOR)));
-            PERSISTED_RESOURCE_LISTS_BY_MOD.forEach((id, cache) -> sharedTasks.add(
-                    CompletableFuture.runAsync(() -> CacheFiles.persist(cache, CacheFiles.cacheFile(RESOURCE_LIST_CACHE_DIR, id)), CACHE_EXECUTOR)));
-            CompletableFuture.allOf(sharedTasks.toArray(new CompletableFuture[0])).join();
-            CompletableFuture.allOf(CACHES.stream().map(GlobalCache::runPersistTask).toArray(CompletableFuture[]::new)).join();
-        } else {
+        Set<Path> keptFiles = CacheFiles.beginPersistTracking();
+        try {
+            if (StartupCachePlatform.SHARED_PERSISTENCE) {
+                List<CompletableFuture<Void>> sharedTasks = new ArrayList<>();
+                PERSISTED_EXISTENCES_BY_MOD.forEach((id, cache) -> {
+                    if (cache != null && !cache.isEmpty()) {
+                        sharedTasks.add(CompletableFuture.runAsync(
+                                () -> CacheFiles.persist(cache, CacheFiles.cacheFile(HAS_RESOURCE_CACHE_DIR, id)),
+                                CACHE_EXECUTOR));
+                    }
+                });
+                PERSISTED_NAMESPACES_BY_MOD.forEach((id, cache) -> {
+                    if (cache != null && !cache.isEmpty()) {
+                        sharedTasks.add(CompletableFuture.runAsync(
+                                () -> CacheFiles.persist(cache, CacheFiles.cacheFile(NAMESPACE_CACHE_DIR, id)),
+                                CACHE_EXECUTOR));
+                    }
+                });
+                PERSISTED_RESOURCE_LISTS_BY_MOD.forEach((id, cache) -> {
+                    if (cache != null && !cache.isEmpty()) {
+                        sharedTasks.add(CompletableFuture.runAsync(
+                                () -> CacheFiles.persist(cache, CacheFiles.cacheFile(RESOURCE_LIST_CACHE_DIR, id)),
+                                CACHE_EXECUTOR));
+                    }
+                });
+                if (!sharedTasks.isEmpty()) {
+                    CompletableFuture.allOf(sharedTasks.toArray(new CompletableFuture[0])).join();
+                }
+            }
             for (ICache cache : CACHES) {
                 try {
                     cache.lightspeed$persistAndClearCache();
@@ -256,6 +278,12 @@ public final class GlobalCache {
                     LOGGER.error("Lightspeed cache persist failed: {}", cache.getClass().getName(), exception);
                 }
             }
+            CacheFiles.pruneStaleCacheFiles(HAS_RESOURCE_CACHE_DIR, keptFiles);
+            CacheFiles.pruneStaleCacheFiles(NAMESPACE_CACHE_DIR, keptFiles);
+            CacheFiles.pruneStaleCacheFiles(RESOURCE_LIST_CACHE_DIR, keptFiles);
+        } finally {
+            CacheFiles.endPersistTracking();
+            CacheFiles.clearLoadedDigests();
         }
         SPLITTED_STRINGS_BY_SEQUENCE.clear();
         CANONICAL_PATH_PER_FILE.clear();
@@ -285,14 +313,6 @@ public final class GlobalCache {
         thread.setDaemon(true);
         thread.setPriority(priority);
         return thread;
-    }
-
-    private static CompletableFuture<Void> deleteAsync(File file) {
-        return CompletableFuture.runAsync(() -> {
-            if (!file.delete() && file.exists()) {
-                LOGGER.warn("Lightspeed could not delete old cache file {}", file);
-            }
-        }, CACHE_EXECUTOR);
     }
 
     private static void awaitBackgroundCacheTasks() {
@@ -376,16 +396,6 @@ public final class GlobalCache {
                 })
                 .toArray(CompletableFuture[]::new);
         return CompletableFuture.allOf(futures);
-    }
-
-    private static CompletableFuture<Void> runPersistTask(ICache cache) {
-        return CompletableFuture.runAsync(() -> {
-            try {
-                cache.lightspeed$persistAndClearCache();
-            } catch (Exception e) {
-                LOGGER.error("Lightspeed cache persist failed: {}", cache.getClass().getName(), e);
-            }
-        }, CACHE_EXECUTOR);
     }
 
     /** One file load can be shared only when it publishes into the same map instance. */

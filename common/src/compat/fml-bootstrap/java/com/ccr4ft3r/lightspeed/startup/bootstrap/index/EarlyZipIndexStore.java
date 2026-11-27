@@ -47,8 +47,9 @@ final class EarlyZipIndexStore {
                 return Map.of();
             }
             Map<String, CachedArchive> result = new HashMap<>(archiveCount * 4 / 3 + 1);
+            byte[] scratch = new byte[4096];
             for (int i = 0; i < archiveCount; i++) {
-                String key = readString(in);
+                String key = readString(in, scratch);
                 long size = in.readLong();
                 long mtimeMillis = in.readLong();
                 int entryCount = in.readInt();
@@ -57,7 +58,7 @@ final class EarlyZipIndexStore {
                 }
                 String[] entries = entryCount == 0 ? new String[0] : new String[entryCount];
                 for (int j = 0; j < entryCount; j++) {
-                    entries[j] = readString(in);
+                    entries[j] = readString(in, scratch);
                 }
                 result.put(key, new CachedArchive(size, mtimeMillis, entries));
             }
@@ -107,13 +108,17 @@ final class EarlyZipIndexStore {
         }
     }
 
-    private static String readString(DataInputStream in) throws IOException {
+    private static String readString(DataInputStream in, byte[] scratch) throws IOException {
         int len = in.readInt();
         if (len == 0) {
             return "";
         }
         if (len < 0 || len > 1_048_576) {
             throw new IOException("Corrupt string length in early-zip index: " + len);
+        }
+        if (len <= scratch.length) {
+            in.readFully(scratch, 0, len);
+            return new String(scratch, 0, len, StandardCharsets.UTF_8);
         }
         byte[] bytes = in.readNBytes(len);
         if (bytes.length != len) {
