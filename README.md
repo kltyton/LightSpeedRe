@@ -64,3 +64,12 @@ See [docs/development/build.md](docs/development/build.md) for multi-version bui
 LightSpeedRe is maintained by kltyton and builds on [Lightspeed by CCr4ft3r](https://github.com/CCr4ft3r/lightspeed). Licensed under [LGPL-3.0-or-later](LICENSE).
 
 Report issues with your Minecraft version, loader, launcher, and relevant startup log on the [Issue Tracker](https://github.com/kltyton/LightSpeedRe/issues).
+## Project Origins and AI Use
+
+As I said in my reply to Alextwicle, I want to be explicit about how I use AI in this project. [Issue #34](https://github.com/kltyton/LightSpeedRe/issues/34)
+
+LightSpeedRe is based on CCr4ft3r’s LightSpeed. Before version 1.2.0, I ported and maintained the project by hand, keeping its features and code in line with upstream.
+
+I started using AI tools in development with version 1.2.0 and completely refactored the project for version 2.0.0. I’ll continue using AI tools in future development. If AI use is a major concern for you, or if you prefer to use only software developed without AI, you may want to use a version earlier than 1.2.0 or choose another project.
+
+This project retains the original commit history, author credits, and applicable licenses. Thanks to CCr4ft3r for creating LightSpeed and laying the groundwork for this project.

@@ -64,3 +64,13 @@ pwsh -NoProfile -File ./repair-launcher.ps1 -GameDirectory "<实例的游戏目�
 LightSpeedRe 由 kltyton 维护，源自 [CCr4ft3r 的 Lightspeed](https://github.com/CCr4ft3r/lightspeed)，采用 [LGPL-3.0-or-later](LICENSE) 许可证。
 
 反馈问题时请附上 Minecraft 版本、加载器、启动器与相关启动日志：[问题追踪](https://github.com/kltyton/LightSpeedRe/issues)。
+
+## 项目来源与 AI 使用
+
+正如我在回复 Alextwicle 时所说，我希望明确说明本项目如何使用 AI。 [Issue #34](https://github.com/kltyton/LightSpeedRe/issues/34)
+
+LightSpeedRe 源自 CCr4ft3r 的 LightSpeed。在 1.2.0 之前，我手工完成了移植和维护，功能与代码保持与上游一致。
+
+从 1.2.0 起，我开始在项目开发中使用 AI 工具，并在 2.0.0 版本对项目进行了全面重构。后续开发中，我也会继续使用 AI 工具。如果你很介意开发中使用 AI，或只愿意使用未借助 AI 开发的软件，可以考虑使用 1.2.0 之前的版本，或者选择其他项目。
+
+本项目保留了原项目的提交历史、作者署名和相关许可证。感谢 CCr4ft3r 创建了 LightSpeed，为本项目打下基础。
