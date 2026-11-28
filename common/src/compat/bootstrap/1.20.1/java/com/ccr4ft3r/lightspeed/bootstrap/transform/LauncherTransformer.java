@@ -188,7 +188,9 @@ public final class LauncherTransformer implements ClassFileTransformer {
                     target("85c5db423fac7eb69107993923aa8a1967d21916fd5c9b32d36332700e31e3d0", EventBusPatch::apply))),
             Map.entry(EVENT_LISTENER_LIST, List.of(
                     target("e80d8842d05039cb6965c4acad102a879f6a3268a103f794a630c501d0f1a9de",
-                            bytes -> ListenerPresencePatch.applyToList(ListenerListGrowthPatch.apply(bytes))))),
+                            bytes -> ListenerPresencePatch.applyToList(ListenerListGrowthPatch.apply(bytes))),
+                    target("9fc04451e516ee7e579b56e44303d97f788f00939b36a88a071c74100d153129",
+                            ListenerListGrowthPatch::apply))),
             Map.entry(EVENT_LISTENER_LIST_INST, List.of(
                     target("6e487408ade21fc340cd66ed413e9abdd750373021569f819621a9a1950b5605",
                             ListenerPresencePatch::apply))),

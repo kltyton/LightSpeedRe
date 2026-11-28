@@ -12,8 +12,10 @@ import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL20;
+import org.lwjgl.opengl.GL30;
 import org.lwjgl.opengl.GL41;
 import org.lwjgl.opengl.GLCapabilities;
+import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 
 import java.nio.ByteBuffer;
@@ -24,15 +26,18 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 import java.util.HexFormat;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class ShaderProgramSnapshot {
     private static final int MAX_BINARY_BYTES = 64 * 1024 * 1024;
-    private static final String RAW_SCHEMA = "lightspeed-shader-program-raw-v1";
+    private static final int MAX_ERROR_DRAIN = 32;
+    private static final String RAW_SCHEMA = "lightspeed-shader-program-raw-v2";
     private static final boolean ENABLED = SnapshotMode.shaderProgramsEnabled(
             System.getProperty("lightspeed.shaderProgramSnapshot"));
     private static final SnapshotFileStore STORE = ENABLED ? new SnapshotFileStore(
-            assetDirectory().resolve("shader-programs-v2.bin"), 0x4c535348, 2,
+            assetDirectory().resolve("shader-programs-v3.bin"), 0x4c535348, 3,
             16_384, MAX_BINARY_BYTES + Integer.BYTES, 512L * 1024L * 1024L) : null;
+    private static final AtomicBoolean SHUTDOWN_HOOK_REGISTERED = new AtomicBoolean();
     private static volatile DriverProfile cachedDriverProfile;
 
     private ShaderProgramSnapshot() {
@@ -72,9 +77,7 @@ public final class ShaderProgramSnapshot {
             GL41.glProgramBinary(shader.getId(), format, data);
             boolean linked = GL20.glGetProgrami(shader.getId(), GL20.GL_LINK_STATUS) != 0;
             if (!linked) {
-                while (GL11.glGetError() != GL11.GL_NO_ERROR) {
-                    // Drain driver binary rejection errors before falling back to full compilation.
-                }
+                drainGlErrors();
             }
             return linked;
         } finally {
@@ -94,21 +97,25 @@ public final class ShaderProgramSnapshot {
             String fragmentDigest,
             VertexFormat vertexFormat) {
         DriverProfile profile = driverProfile();
-        if (profile == null || vertexDigest == null || fragmentDigest == null
-                || GL20.glGetProgrami(shader.getId(), GL20.GL_LINK_STATUS) == 0) {
+        if (profile == null || vertexDigest == null || fragmentDigest == null) {
             return;
         }
-        int capacity = GL20.glGetProgrami(shader.getId(), GL41.GL_PROGRAM_BINARY_LENGTH);
+        int programId = shader.getId();
+        if (!isSimpleTwoStageProgram(programId, profile.capabilities())) {
+            return;
+        }
+        int capacity = GL20.glGetProgrami(programId, GL41.GL_PROGRAM_BINARY_LENGTH);
         if (capacity <= 0 || capacity > MAX_BINARY_BYTES) {
             return;
         }
         ByteBuffer binary = MemoryUtil.memAlloc(capacity);
-        IntBuffer length = BufferUtils.createIntBuffer(1);
-        IntBuffer format = BufferUtils.createIntBuffer(1);
-        try {
-            GL41.glGetProgramBinary(shader.getId(), length, format, binary);
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            IntBuffer length = stack.mallocInt(1);
+            IntBuffer format = stack.mallocInt(1);
+            GL41.glGetProgramBinary(programId, length, format, binary);
             int actual = length.get(0);
             if (actual <= 0 || actual > capacity) {
+                drainGlErrors();
                 return;
             }
             byte[] encoded = new byte[Integer.BYTES + actual];
@@ -116,9 +123,44 @@ public final class ShaderProgramSnapshot {
             output.putInt(format.get(0));
             binary.limit(actual).position(0);
             output.put(binary);
-            STORE.put(contentKey(profile, vertexDigest, fragmentDigest, vertexFormat), encoded);
+            if (STORE.put(contentKey(profile, vertexDigest, fragmentDigest, vertexFormat), encoded)) {
+                registerShutdownPersistHook();
+            }
         } finally {
             MemoryUtil.memFree(binary);
+        }
+    }
+
+    private static boolean isSimpleTwoStageProgram(int programId, GLCapabilities capabilities) {
+        if (GL20.glGetProgrami(programId, GL20.GL_LINK_STATUS) == 0) {
+            return false;
+        }
+        if (GL20.glGetProgrami(programId, GL20.GL_ATTACHED_SHADERS) != 2) {
+            return false;
+        }
+        if (capabilities.OpenGL30
+                && GL20.glGetProgrami(programId, GL30.GL_TRANSFORM_FEEDBACK_VARYINGS) != 0) {
+            return false;
+        }
+        return !(capabilities.OpenGL41
+                && GL20.glGetProgrami(programId, GL41.GL_PROGRAM_SEPARABLE) != 0);
+    }
+
+    private static void registerShutdownPersistHook() {
+        if (!SHUTDOWN_HOOK_REGISTERED.compareAndSet(false, true)) {
+            return;
+        }
+        try {
+            Runtime.getRuntime().addShutdownHook(
+                    new Thread(ShaderProgramSnapshot::persist, "Lightspeed-ShaderProgramSnapshot-Persist"));
+        } catch (IllegalStateException | SecurityException ignored) {
+            // Ignore if JVM shutdown is already in progress or hooks are disallowed.
+        }
+    }
+
+    private static void drainGlErrors() {
+        for (int index = 0; index < MAX_ERROR_DRAIN && GL11.glGetError() != GL11.GL_NO_ERROR; index++) {
+            // Drain driver binary rejection errors before falling back to full compilation.
         }
     }
 

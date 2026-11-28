@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.0.13
+
+### English
+
+- Fix shader binary cache collisions on multi-stage programs (including Oculus/Iris geometry and tessellation shaders): preserve `Shader#attachToProgram()` for non-deferred shaders, hook at `GlStateManager#glLinkProgram` to key cached binaries by all attached OpenGL shader stage types and sources, explicit attribute bindings, separable state, vertex format, shader class, and driver profile, bump the shader snapshot schema to v3, and persist post-title compiled shaders cleanly on shutdown.
+- Enable single-JAR mod pack indexing and prewarming for custom mod locators (such as AutoModpack and other `AbstractJarFileModLocator` / `IModLocator` providers) on Forge 1.20.1 and NeoForge 1.21.1, and implement `IndexedPackResources` on Forge `FilePackResources` so empty directory listings across external ZIP resource packs short-circuit immediately.
+- Harden Forge 47.4.16+ compatibility by qualifying `ObjectHolderRegistryMixin` handler descriptors and adding EventBus 6.2.33 `ListenerList` capacity growth support in the 1.20.1 Bootstrap Agent.
+
+### 中文
+
+- 修复多阶段着色器（含 Oculus/Iris 几何着色器与曲面细分着色器）的二进制缓存键串用问题：对非延迟着色器完整保留 `Shader#attachToProgram()`，在 `GlStateManager#glLinkProgram` 边界直接采集全部已挂接阶段的 OpenGL 类型与源码、显式属性绑定、可分离状态、顶点格式、着色器实现类及驱动信息生成 v3 缓存键，并在客户端退出时自动持久化标题界面后编译的着色器。
+- 为 Forge 1.20.1 与 NeoForge 1.21.1 扩展单 JAR 模组资源索引与预热范围，支持 `AbstractJarFileModLocator` 及第三方单 JAR 模组定位器（如 AutoModpack 等）；同时为 Forge 端 `FilePackResources` 接入 `IndexedPackResources`，跳过外置 `.zip` 资源包的空目录查询。
+- 加固 Forge 47.4.16+ 兼容：为 `ObjectHolderRegistryMixin` 指定精确方法描述符，并在 1.20.1 Bootstrap Agent 中补充 EventBus 6.2.33 的 `ListenerList` 扩容补丁。
+
 ## 2.0.12
 
 ### English

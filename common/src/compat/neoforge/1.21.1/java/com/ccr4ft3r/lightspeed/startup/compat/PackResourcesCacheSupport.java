@@ -17,6 +17,7 @@ import java.nio.file.Path;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.function.Predicate;
 
@@ -140,8 +141,20 @@ public final class PackResourcesCacheSupport {
             return false;
         }
         Class<?> locatorClass = attrs.locator().getClass();
-        return locatorClass == ModsFolderLocator.class
-                || "net.neoforged.fml.loading.moddiscovery.locators.MavenDirectoryLocator".equals(locatorClass.getName());
+        String locatorName = locatorClass.getName();
+        if (locatorName.startsWith("net.neoforged.fml.loading.")) {
+            return locatorClass == ModsFolderLocator.class
+                    || "net.neoforged.fml.loading.moddiscovery.locators.MavenDirectoryLocator".equals(locatorName);
+        }
+        return hasJarExtension(modFile.getFilePath());
+    }
+
+    private static boolean hasJarExtension(Path path) {
+        if (path == null || path.getFileName() == null) {
+            return false;
+        }
+        String name = path.getFileName().toString().toLowerCase(Locale.ROOT);
+        return name.endsWith(".jar") || name.endsWith(".zip");
     }
 
     public static boolean hasSingleJarModRoot(IModFile modFile) {

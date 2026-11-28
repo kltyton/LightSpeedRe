@@ -22,7 +22,7 @@ import java.util.function.Predicate;
 public abstract class ObjectHolderRegistryMixin {
     @Shadow @Final private static Set<Consumer<Predicate<ResourceLocation>>> objectHolders;
 
-    @WrapOperation(method = "addHandler", at = @At(value = "INVOKE", target = "Ljava/util/Set;add(Ljava/lang/Object;)Z"))
+    @WrapOperation(method = "addHandler(Ljava/util/function/Consumer;)V", at = @At(value = "INVOKE", target = "Ljava/util/Set;add(Ljava/lang/Object;)Z"))
     private static boolean lightspeed$added(Set<Consumer<Predicate<ResourceLocation>>> holders,
                                             Object holder, Operation<Boolean> original) {
         boolean added = original.call(holders, holder);
@@ -30,7 +30,7 @@ public abstract class ObjectHolderRegistryMixin {
         return added;
     }
 
-    @Inject(method = "removeHandler", at = @At("RETURN"))
+    @Inject(method = "removeHandler(Ljava/util/function/Consumer;)Z", at = @At("RETURN"))
     private static void lightspeed$removed(Consumer<Predicate<ResourceLocation>> holder,
                                           CallbackInfoReturnable<Boolean> callback) {
         if (callback.getReturnValue()) ObjectHolderDispatch.invalidate();

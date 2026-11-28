@@ -40,6 +40,14 @@ public final class OrderedZipEntryIndex {
         return zip == candidate;
     }
 
+    public Boolean contains(String name) {
+        return duplicateNames ? null : paths.contains(name);
+    }
+
+    public Boolean hasAnyUnder(String path) {
+        return duplicateNames ? null : paths.hasAtOrUnder(path);
+    }
+
     public static boolean supports(ZipFile zip, Enumeration<? extends ZipEntry> original) {
         return zip.getClass() == ZipFile.class && original != null
                 && original.getClass().getName().equals(NATIVE_ITERATOR);

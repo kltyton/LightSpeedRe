@@ -4,6 +4,7 @@ import com.ccr4ft3r.lightspeed.cache.GlobalCache;
 import com.ccr4ft3r.lightspeed.cache.resource.OrderedZipEntryIndex;
 import com.ccr4ft3r.lightspeed.compat.FusionPackCompat;
 import com.ccr4ft3r.lightspeed.interfaces.IPackResources;
+import com.ccr4ft3r.lightspeed.interfaces.IndexedPackResources;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import com.llamalad7.mixinextras.sugar.Share;
@@ -29,7 +30,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 @Mixin(FilePackResources.class)
-public abstract class ForgeFilePackResourcesMixin implements IPackResources {
+public abstract class ForgeFilePackResourcesMixin implements IPackResources, IndexedPackResources {
     @Shadow
     @Nullable
     protected abstract ZipFile getOrCreateZipFile();
@@ -154,6 +155,30 @@ public abstract class ForgeFilePackResourcesMixin implements IPackResources {
         int second = name.indexOf('/', first + 1);
         ResourceLocation location = ResourceLocation.tryBuild(name.substring(first + 1, second), name.substring(second + 1));
         return new FileNotFoundException(location.toString());
+    }
+
+    @Override
+    public Boolean lightspeed$containsIndexed(String type, String namespace, String path) {
+        if (!GlobalCache.isEnabled || FusionPackCompat.hasOverrides(this)) {
+            return null;
+        }
+        OrderedZipEntryIndex entries = lightspeed$entries;
+        return entries == null ? null : entries.contains(type + "/" + namespace + "/" + path);
+    }
+
+    @Override
+    public Boolean lightspeed$hasAnyUnder(PackType type, String namespace, String path) {
+        if (!GlobalCache.isEnabled || FusionPackCompat.hasOverrides(this)) {
+            return null;
+        }
+        OrderedZipEntryIndex entries = lightspeed$entries;
+        if (entries == null) {
+            return null;
+        }
+        String sub = path == null || path.isEmpty()
+                ? type.getDirectory() + "/" + namespace
+                : type.getDirectory() + "/" + namespace + "/" + path;
+        return entries.hasAnyUnder(sub);
     }
 
     @Override

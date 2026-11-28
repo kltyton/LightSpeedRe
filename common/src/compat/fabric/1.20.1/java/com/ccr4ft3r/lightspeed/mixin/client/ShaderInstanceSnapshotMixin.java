@@ -76,6 +76,17 @@ public abstract class ShaderInstanceSnapshotMixin {
     @WrapOperation(
             method = "<init>(Lnet/minecraft/server/packs/resources/ResourceProvider;Ljava/lang/String;Lcom/mojang/blaze3d/vertex/VertexFormat;)V",
             at = @At(value = "INVOKE",
+                    target = "Lcom/mojang/blaze3d/shaders/ProgramManager;createProgram()I")
+    )
+    private int lightspeed$trackProgramCreation(Operation<Integer> original) {
+        int programId = original.call();
+        ShaderProgramSnapshot.beginTrackingProgram(programId);
+        return programId;
+    }
+
+    @WrapOperation(
+            method = "<init>(Lnet/minecraft/server/packs/resources/ResourceProvider;Ljava/lang/String;Lcom/mojang/blaze3d/vertex/VertexFormat;)V",
+            at = @At(value = "INVOKE",
                     target = "Lcom/mojang/blaze3d/shaders/ProgramManager;linkShader(Lcom/mojang/blaze3d/shaders/Shader;)V")
     )
     private void lightspeed$restoreProgramBinary(Shader shader, Operation<Void> original) {
@@ -89,27 +100,36 @@ public abstract class ShaderInstanceSnapshotMixin {
             Operation<Program> vertexOp = this.lightspeed$vertexOp;
             Operation<Program> fragmentOp = this.lightspeed$fragmentOp;
             lightspeed$clearDeferred();
-            if (ShaderProgramSnapshot.restoreRaw(shader, vertexDigest, fragmentDigest, this.vertexFormat, bindAttributes)) {
+            if (ShaderProgramSnapshot.matchesDefaultAttributeBindings(
+                    shader.getId(), this.vertexFormat, bindAttributes)) {
+                if (ShaderProgramSnapshot.restoreRaw(
+                        shader, vertexDigest, fragmentDigest, this.vertexFormat, bindAttributes)) {
+                    ShaderProgramSnapshot.forgetProgram(shader.getId());
+                    return;
+                }
+                this.vertexProgram = vertexOp.call(provider, Program.Type.VERTEX, vertexName);
+                this.fragmentProgram = fragmentOp.call(provider, Program.Type.FRAGMENT, fragmentName);
+                try {
+                    ShaderProgramSnapshot.prepareCapture(shader);
+                    original.call(shader);
+                    ShaderProgramSnapshot.captureRaw(
+                            shader, vertexDigest, fragmentDigest, this.vertexFormat, bindAttributes);
+                } finally {
+                    ShaderProgramSnapshot.forgetProgram(shader.getId());
+                }
                 return;
             }
             this.vertexProgram = vertexOp.call(provider, Program.Type.VERTEX, vertexName);
             this.fragmentProgram = fragmentOp.call(provider, Program.Type.FRAGMENT, fragmentName);
-            ShaderProgramSnapshot.prepareCapture(shader);
-            original.call(shader);
-            ShaderProgramSnapshot.captureRaw(shader, vertexDigest, fragmentDigest, this.vertexFormat, bindAttributes);
-            return;
         }
         lightspeed$clearDeferred();
         if (!ShaderProgramSnapshot.enabled()) {
+            ShaderProgramSnapshot.forgetProgram(shader.getId());
             original.call(shader);
             return;
         }
-        if (ShaderProgramSnapshot.restore(shader, this.vertexFormat, bindAttributes)) {
-            return;
-        }
-        ShaderProgramSnapshot.prepareCapture(shader);
-        original.call(shader);
-        ShaderProgramSnapshot.capture(shader, this.vertexFormat, bindAttributes);
+        ShaderProgramSnapshot.withLinkContext(
+                shader, this.vertexFormat, bindAttributes, () -> original.call(shader));
     }
 
     @Unique

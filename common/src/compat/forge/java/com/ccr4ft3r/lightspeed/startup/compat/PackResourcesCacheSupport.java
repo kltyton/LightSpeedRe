@@ -5,8 +5,9 @@ import com.ccr4ft3r.lightspeed.compat.bootstrap.BootstrapAgentBridge;
 import cpw.mods.niofs.union.UnionFileSystem;
 import net.minecraft.server.packs.PackType;
 import net.minecraftforge.fml.ModList;
-import net.minecraftforge.fml.loading.moddiscovery.ModsFolderLocator;
+import net.minecraftforge.fml.loading.moddiscovery.AbstractJarFileModLocator;
 import net.minecraftforge.forgespi.locating.IModFile;
+import net.minecraftforge.forgespi.locating.IModLocator;
 import net.minecraftforge.forgespi.locating.IModProvider;
 
 import java.nio.file.FileSystem;
@@ -16,6 +17,7 @@ import java.nio.file.Path;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.function.BiPredicate;
 import java.util.function.Predicate;
@@ -134,9 +136,22 @@ public final class PackResourcesCacheSupport {
         if (provider == null) {
             return false;
         }
-        Class<?> providerClass = provider.getClass();
-        return providerClass == ModsFolderLocator.class
-                || "net.minecraftforge.fml.loading.moddiscovery.MavenDirectoryLocator".equals(providerClass.getName());
+        if (provider instanceof AbstractJarFileModLocator) {
+            return true;
+        }
+        String providerName = provider.getClass().getName();
+        if (providerName.startsWith("net.minecraftforge.fml.loading.")) {
+            return "net.minecraftforge.fml.loading.moddiscovery.MavenDirectoryLocator".equals(providerName);
+        }
+        return provider instanceof IModLocator && hasJarExtension(modFile.getFilePath());
+    }
+
+    private static boolean hasJarExtension(Path path) {
+        if (path == null || path.getFileName() == null) {
+            return false;
+        }
+        String name = path.getFileName().toString().toLowerCase(Locale.ROOT);
+        return name.endsWith(".jar") || name.endsWith(".zip");
     }
 
     public static boolean hasSingleJarModRoot(IModFile modFile) {
